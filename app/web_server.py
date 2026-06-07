@@ -62,10 +62,13 @@ class ExportRequest(BaseModel):
 
 
 class Job:
-    def __init__(self, name: str):
+    def __init__(self, name: str, *, kind: str = "", asset_id: str = ""):
         self.id = uuid.uuid4().hex
         self.name = name
+        self.kind = kind
+        self.asset_id = asset_id
         self.status = "queued"
+        self.queue_position = 0
         self.progress = 0
         self.determinate = False
         self.completed_units = 0
@@ -87,7 +90,10 @@ class Job:
         return {
             "id": self.id,
             "name": self.name,
+            "kind": self.kind,
+            "asset_id": self.asset_id,
             "status": self.status,
+            "queue_position": self.queue_position,
             "progress": self.progress,
             "determinate": self.determinate,
             "completed_units": self.completed_units,
@@ -106,6 +112,7 @@ class RuntimeState:
         self.lock = threading.RLock()
         self.jobs: dict[str, Job] = {}
         self.active_job_id: str | None = None
+        self.pending_jobs: list[tuple[Job, Callable[[Job], Any]]] = []
         self.current_project = self._load_current_project()
 
     def _load_current_project(self) -> Path | None:
@@ -128,15 +135,14 @@ class RuntimeState:
             raise HTTPException(status_code=400, detail="Chua chon project. Hay tao hoac mo project truoc.")
         return project
 
-    def start_job(self, name: str, callback: Callable[[Job], Any]) -> Job:
-        with self.lock:
-            if self.active_job_id:
-                active = self.jobs.get(self.active_job_id)
-                if active and active.status in {"queued", "running"}:
-                    raise HTTPException(status_code=409, detail=f"Tac vu '{active.name}' dang chay.")
-            job = Job(name)
-            self.jobs[job.id] = job
-            self.active_job_id = job.id
+    def _refresh_queue_positions(self) -> None:
+        for index, (job, _callback) in enumerate(self.pending_jobs, start=1):
+            job.queue_position = index
+            job.updated_at = time.time()
+
+    def _launch_job(self, job: Job, callback: Callable[[Job], Any]) -> None:
+        self.active_job_id = job.id
+        job.queue_position = 0
 
         def runner() -> None:
             job.status = "running"
@@ -151,11 +157,50 @@ class RuntimeState:
                 job.status = "failed"
             finally:
                 job.updated_at = time.time()
+                next_job: tuple[Job, Callable[[Job], Any]] | None = None
                 with self.lock:
                     if self.active_job_id == job.id:
                         self.active_job_id = None
+                    if self.pending_jobs:
+                        next_job = self.pending_jobs.pop(0)
+                        self._refresh_queue_positions()
+                    if next_job:
+                        self._launch_job(*next_job)
 
         threading.Thread(target=runner, name=f"visual-job-{job.id[:8]}", daemon=True).start()
+
+    def start_job(
+        self,
+        name: str,
+        callback: Callable[[Job], Any],
+        *,
+        allow_queue: bool = False,
+        kind: str = "",
+        asset_id: str = "",
+    ) -> Job:
+        with self.lock:
+            if self.active_job_id:
+                active = self.jobs.get(self.active_job_id)
+                if active and active.status in {"queued", "running"} and not allow_queue:
+                    raise HTTPException(status_code=409, detail=f"Tac vu '{active.name}' dang chay.")
+            if asset_id:
+                duplicate = next(
+                    (
+                        job
+                        for job in self.jobs.values()
+                        if job.asset_id == asset_id and job.status in {"queued", "running"}
+                    ),
+                    None,
+                )
+                if duplicate:
+                    return duplicate
+            job = Job(name, kind=kind, asset_id=asset_id)
+            self.jobs[job.id] = job
+            if self.active_job_id:
+                self.pending_jobs.append((job, callback))
+                self._refresh_queue_positions()
+            else:
+                self._launch_job(job, callback)
         return job
 
 
@@ -183,6 +228,9 @@ def _project_payload(project: Path | None) -> dict[str, Any] | None:
             if concise:
                 item["keyword"] = concise
                 item["ai_search_keyword"] = concise
+        local_path = Path(str(item.get("local_path") or ""))
+        if local_path.is_file():
+            item["media_version"] = f"{item.get('sha256') or ''}-{local_path.stat().st_mtime_ns}"
     voice_path = project / "voices" / "voice.wav"
     manifest_path = project / "assets" / "asset_manifest.json"
     script_mtime = script_path.stat().st_mtime
@@ -297,11 +345,15 @@ def state() -> dict[str, Any]:
                     }
                 )
     active = runtime.jobs.get(runtime.active_job_id or "")
+    queued = [job.payload() for job, _callback in runtime.pending_jobs]
+    live_jobs = ([active.payload()] if active else []) + queued
     return {
         "settings": settings,
         "project": _project_payload(runtime.current_project),
         "projects": projects[:100],
         "active_job": active.payload() if active else None,
+        "queued_jobs": queued,
+        "jobs": live_jobs,
     }
 
 
@@ -465,7 +517,15 @@ def retry_asset(asset_id: str) -> dict[str, Any]:
         job.progress = 100
         return {"item": items[index], "project": _project_payload(project)}
 
-    return {"job": runtime.start_job(f"Tim lai {asset_id}", task).payload()}
+    return {
+        "job": runtime.start_job(
+            f"Tim lai {asset_id}",
+            task,
+            allow_queue=True,
+            kind="asset_retry",
+            asset_id=asset_id,
+        ).payload()
+    }
 
 
 @app.post("/api/assets/{asset_id}/approve")
@@ -521,7 +581,14 @@ def media(path: str) -> FileResponse:
         raise HTTPException(status_code=403, detail="Duong dan media khong hop le.") from exc
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="Khong tim thay media.")
-    return FileResponse(file_path)
+    return FileResponse(
+        file_path,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 if WEB_DIST.exists():

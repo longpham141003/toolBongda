@@ -101,7 +101,8 @@ function App() {
       setScript(data.project?.script || "")
       setTitle(data.project?.name || "")
     }
-    if (data.active_job) setActiveJob(data.active_job)
+    setActiveJob(data.active_job || null)
+    if (data.active_job) setLogs(data.active_job.logs || [])
     return data
   }, [])
 
@@ -153,7 +154,19 @@ function App() {
 
   const project = state?.project
   const assets = project?.assets || []
+  const liveJobs = state?.jobs || []
+  const assetJobs = useMemo(
+    () => new Map(
+      liveJobs
+        .filter((job) => job.asset_id && ["queued", "running"].includes(job.status))
+        .map((job) => [job.asset_id, job]),
+    ),
+    [liveJobs],
+  )
   const isBusy = activeJob && ["queued", "running"].includes(activeJob.status)
+  const lightboxAsset = lightbox
+    ? assets.find((asset) => asset.asset_id === lightbox.asset_id) || lightbox
+    : null
   const scriptSaved = Boolean(project) && script.trim() === String(project?.script || "").trim()
   const completedSteps = useMemo(() => {
     return [
@@ -167,18 +180,25 @@ function App() {
 
   async function startJob(path, body, action) {
     setError("")
-    setBusyAction(action)
+    const isAssetRetry = action.startsWith("retry-")
+    if (!isAssetRetry) setBusyAction(action)
     try {
       const data = await api(path, {
         method: "POST",
         body: body === undefined ? undefined : JSON.stringify(body),
       })
-      setActiveJob(data.job)
-      setLogs(data.job?.logs || [])
+      const latest = await loadState(true)
+      if (!latest.active_job) {
+        setActiveJob(data.job)
+        setLogs(data.job?.logs || [])
+      }
       setFollowLogs(true)
+      if (isAssetRetry && data.job?.status === "queued") {
+        setToast(`${data.job.asset_id} da vao hang doi so ${data.job.queue_position}`)
+      }
     } catch (err) {
       setError(err.message)
-      setBusyAction("")
+      if (!isAssetRetry) setBusyAction("")
     }
   }
 
@@ -430,19 +450,27 @@ function App() {
                 <div className="grid gap-4 p-5 md:grid-cols-2 2xl:grid-cols-3">
                   {assets.map((asset) => {
                     const badge = statusBadge(asset.status)
-                    const isProcessingAsset = Boolean(
-                      isBusy && String(activeJob?.current_label || "").includes(asset.asset_id),
-                    )
+                    const assetJob = assetJobs.get(asset.asset_id)
+                    const isProcessingAsset = assetJob?.status === "running"
+                    const isQueuedAsset = assetJob?.status === "queued"
+                    const imageVersion = asset.media_version || asset.sha256 || asset.search_attempt
                     return (
                       <article key={asset.asset_id} className={cn("group overflow-hidden rounded-2xl border bg-black/20 transition hover:-translate-y-0.5 hover:shadow-xl", isProcessingAsset ? "border-violet-400/50 shadow-glow" : "border-white/[0.08] hover:border-white/15")}>
                         <button className="relative block aspect-video w-full overflow-hidden bg-zinc-900" onClick={() => asset.local_path && setLightbox(asset)}>
-                          {asset.local_path ? <img key={`${asset.asset_id}-${asset.sha256 || asset.search_attempt}`} src={mediaUrl(asset.local_path, asset.sha256 || asset.search_attempt)} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" /> : <div className="flex h-full items-center justify-center"><Image className="h-8 w-8 text-zinc-700" /></div>}
+                          {asset.local_path ? <img key={`${asset.asset_id}-${imageVersion}`} src={mediaUrl(asset.local_path, imageVersion)} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" /> : <div className="flex h-full items-center justify-center"><Image className="h-8 w-8 text-zinc-700" /></div>}
                           <div className="absolute left-3 top-3"><Badge variant={badge.variant}>{badge.label}</Badge></div>
                           <div className="absolute bottom-3 right-3 rounded-lg bg-black/70 px-2 py-1 text-[10px] text-white backdrop-blur">{formatTime(asset.start)} - {formatTime(asset.end)}</div>
                           {isProcessingAsset && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/65 backdrop-blur-[2px]">
                               <LoaderCircle className="h-7 w-7 animate-spin text-violet-300" />
                               <span className="mt-2 text-xs font-medium text-white">Dang lay anh goc tu Google</span>
+                            </div>
+                          )}
+                          {isQueuedAsset && (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-[2px]">
+                              <Clock3 className="h-7 w-7 text-amber-300" />
+                              <span className="mt-2 text-xs font-medium text-white">Dang cho trong hang doi</span>
+                              <span className="mt-1 text-[10px] text-zinc-400">Vi tri {assetJob.queue_position}</span>
                             </div>
                           )}
                         </button>
@@ -459,8 +487,9 @@ function App() {
                             <p className="text-xs leading-5 text-zinc-400">{asset.keyword || "Chua co keyword"}</p>
                           </div>
                           <div className="mt-3 flex gap-2">
-                            <Button className="flex-1" variant="secondary" size="sm" disabled={isBusy} onClick={() => startJob(`/api/assets/${asset.asset_id}/retry`, undefined, `retry-${asset.asset_id}`)}>
-                              <RefreshCw className={cn("h-3.5 w-3.5", busyAction === `retry-${asset.asset_id}` && "animate-spin")} /> Tim lai
+                            <Button className="flex-1" variant="secondary" size="sm" disabled={Boolean(assetJob)} onClick={() => startJob(`/api/assets/${asset.asset_id}/retry`, undefined, `retry-${asset.asset_id}`)}>
+                              {isQueuedAsset ? <Clock3 className="h-3.5 w-3.5" /> : <RefreshCw className={cn("h-3.5 w-3.5", isProcessingAsset && "animate-spin")} />}
+                              {isProcessingAsset ? "Dang tim" : isQueuedAsset ? `Cho #${assetJob.queue_position}` : "Tim lai"}
                             </Button>
                             <Button className="flex-1" variant={asset.status === "approved" ? "success" : "ghost"} size="sm" onClick={() => approveAsset(asset.asset_id)}>
                               <CheckCircle2 className="h-3.5 w-3.5" /> {asset.status === "approved" ? "Da duyet" : "Duyet"}
@@ -617,9 +646,9 @@ function App() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(lightbox)} onOpenChange={(open) => !open && setLightbox(null)}>
+      <Dialog open={Boolean(lightboxAsset)} onOpenChange={(open) => !open && setLightbox(null)}>
         <DialogContent className="max-w-6xl border-0 bg-black/95 p-3">
-          {lightbox && <><img src={mediaUrl(lightbox.local_path, lightbox.sha256 || lightbox.search_attempt)} className="max-h-[82vh] w-full rounded-xl object-contain" /><div className="px-2 pb-1 pt-3"><div className="text-sm font-medium">{lightbox.asset_id}</div><p className="mt-1 text-xs text-zinc-500">{lightbox.keyword}</p></div></>}
+          {lightboxAsset && <><img key={`${lightboxAsset.asset_id}-${lightboxAsset.media_version || lightboxAsset.sha256 || lightboxAsset.search_attempt}`} src={mediaUrl(lightboxAsset.local_path, lightboxAsset.media_version || lightboxAsset.sha256 || lightboxAsset.search_attempt)} className="max-h-[82vh] w-full rounded-xl object-contain" /><div className="px-2 pb-1 pt-3"><div className="text-sm font-medium">{lightboxAsset.asset_id}</div><p className="mt-1 text-xs text-zinc-500">{lightboxAsset.keyword}</p></div></>}
         </DialogContent>
       </Dialog>
 
