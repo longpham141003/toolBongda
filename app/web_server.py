@@ -61,6 +61,10 @@ class ExportRequest(BaseModel):
     title: str = ""
 
 
+class KeywordRequest(BaseModel):
+    keyword: str
+
+
 class Job:
     def __init__(self, name: str, *, kind: str = "", asset_id: str = ""):
         self.id = uuid.uuid4().hex
@@ -539,6 +543,19 @@ def approve_asset(asset_id: str) -> dict[str, Any]:
     if not item:
         raise HTTPException(status_code=404, detail=f"Không tìm thấy {asset_id}.")
     item["status"] = "downloaded" if item.get("status") == "approved" else "approved"
+    save_manifest(project, items)
+    return {"project": _project_payload(project)}
+
+
+@app.post("/api/assets/{asset_id}/keyword")
+def update_asset_keyword(asset_id: str, request: KeywordRequest) -> dict[str, Any]:
+    project = runtime.require_project()
+    items = load_manifest(project)
+    item = next((value for value in items if value.get("asset_id") == asset_id), None)
+    if not item:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy {asset_id}.")
+    item["keyword"] = request.keyword.strip()
+    item["ai_search_keyword"] = item["keyword"]
     save_manifest(project, items)
     return {"project": _project_payload(project)}
 
