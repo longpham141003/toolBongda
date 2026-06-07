@@ -1,0 +1,538 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import threading
+import time
+import uuid
+from pathlib import Path
+from typing import Any, Callable
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from .config import APP_DIR, load_settings, save_settings
+from .script_workflow import default_workflow_steps, normalize_workflow_steps, run_script_workflow
+from .text_to_voice_queue import chatterbox_voice_choices
+from .visual_pipeline import (
+    _concise_match_query,
+    build_asset_manifest,
+    create_visual_project,
+    export_capcut_project,
+    generate_voice,
+    load_manifest,
+    optimize_asset_keywords_with_ai,
+    save_manifest,
+    search_and_download_asset,
+)
+
+
+WEB_DIST = APP_DIR / "webui" / "dist"
+STATE_PATH = APP_DIR / ".webui_state"
+
+
+class ProjectCreateRequest(BaseModel):
+    title: str = ""
+    script: str
+
+
+class ProjectOpenRequest(BaseModel):
+    path: str
+
+
+class SettingsRequest(BaseModel):
+    settings: dict[str, Any]
+
+
+class ScriptRequest(BaseModel):
+    script: str
+
+
+class WorkflowRequest(BaseModel):
+    source_input: str
+    steps: list[dict[str, Any]]
+    settings: dict[str, Any] | None = None
+
+
+class ExportRequest(BaseModel):
+    title: str = ""
+
+
+class Job:
+    def __init__(self, name: str):
+        self.id = uuid.uuid4().hex
+        self.name = name
+        self.status = "queued"
+        self.progress = 0
+        self.determinate = False
+        self.completed_units = 0
+        self.total_units = 0
+        self.current_label = ""
+        self.logs: list[str] = []
+        self.result: Any = None
+        self.error = ""
+        self.created_at = time.time()
+        self.updated_at = self.created_at
+
+    def log(self, message: str) -> None:
+        text = str(message)
+        self.logs.append(text)
+        self.logs = self.logs[-500:]
+        self.updated_at = time.time()
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "status": self.status,
+            "progress": self.progress,
+            "determinate": self.determinate,
+            "completed_units": self.completed_units,
+            "total_units": self.total_units,
+            "current_label": self.current_label,
+            "logs": self.logs,
+            "result": self.result,
+            "error": self.error,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+class RuntimeState:
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+        self.jobs: dict[str, Job] = {}
+        self.active_job_id: str | None = None
+        self.current_project = self._load_current_project()
+
+    def _load_current_project(self) -> Path | None:
+        try:
+            path = Path(STATE_PATH.read_text(encoding="utf-8").strip())
+            if (path / "scripts" / "script_final.txt").exists():
+                return path
+        except Exception:
+            pass
+        return None
+
+    def set_project(self, project: Path) -> None:
+        project = project.resolve()
+        self.current_project = project
+        STATE_PATH.write_text(str(project), encoding="utf-8")
+
+    def require_project(self) -> Path:
+        project = self.current_project
+        if not project or not (project / "scripts" / "script_final.txt").exists():
+            raise HTTPException(status_code=400, detail="Chua chon project. Hay tao hoac mo project truoc.")
+        return project
+
+    def start_job(self, name: str, callback: Callable[[Job], Any]) -> Job:
+        with self.lock:
+            if self.active_job_id:
+                active = self.jobs.get(self.active_job_id)
+                if active and active.status in {"queued", "running"}:
+                    raise HTTPException(status_code=409, detail=f"Tac vu '{active.name}' dang chay.")
+            job = Job(name)
+            self.jobs[job.id] = job
+            self.active_job_id = job.id
+
+        def runner() -> None:
+            job.status = "running"
+            job.updated_at = time.time()
+            try:
+                job.result = callback(job)
+                job.progress = 100
+                job.status = "done"
+            except Exception as exc:
+                job.error = str(exc)
+                job.log(f"LOI: {exc}")
+                job.status = "failed"
+            finally:
+                job.updated_at = time.time()
+                with self.lock:
+                    if self.active_job_id == job.id:
+                        self.active_job_id = None
+
+        threading.Thread(target=runner, name=f"visual-job-{job.id[:8]}", daemon=True).start()
+        return job
+
+
+runtime = RuntimeState()
+app = FastAPI(title="Visual CapCut Studio API", version="2.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def _project_payload(project: Path | None) -> dict[str, Any] | None:
+    if not project:
+        return None
+    script_path = project / "scripts" / "script_final.txt"
+    if not script_path.exists():
+        return None
+    manifest = load_manifest(project)
+    for item in manifest:
+        if str(item.get("visual_source_type") or "").lower() == "match_photography":
+            concise = _concise_match_query(str(item.get("keyword") or ""), item)
+            if concise:
+                item["keyword"] = concise
+                item["ai_search_keyword"] = concise
+    voice_path = project / "voices" / "voice.wav"
+    manifest_path = project / "assets" / "asset_manifest.json"
+    script_mtime = script_path.stat().st_mtime
+    voice_mtime = voice_path.stat().st_mtime if voice_path.exists() else 0
+    manifest_mtime = manifest_path.stat().st_mtime if manifest_path.exists() else 0
+    has_voice = voice_path.exists() and voice_mtime >= script_mtime
+    has_scenes = bool(manifest) and manifest_mtime >= voice_mtime and has_voice
+    capcut_dir = project / "capcut"
+    capcut_files = [path for path in capcut_dir.rglob("*") if path.is_file()] if capcut_dir.exists() else []
+    capcut_mtime = max((path.stat().st_mtime for path in capcut_files), default=0)
+    has_capcut_export = bool(capcut_files) and capcut_mtime >= manifest_mtime and has_scenes
+    return {
+        "path": str(project),
+        "name": project.name,
+        "script": script_path.read_text(encoding="utf-8", errors="replace"),
+        "has_voice": has_voice,
+        "voice_path": str(voice_path) if has_voice else "",
+        "has_scenes": has_scenes,
+        "asset_count": len(manifest),
+        "downloaded_count": sum(1 for item in manifest if item.get("local_path")),
+        "approved_count": sum(1 for item in manifest if item.get("status") == "approved"),
+        "has_capcut_export": has_capcut_export,
+        "assets": manifest,
+    }
+
+
+def _public_settings() -> dict[str, Any]:
+    settings = load_settings()
+    steps = normalize_workflow_steps(settings.get("script_workflow_steps"))
+    settings["script_workflow_steps"] = steps or default_workflow_steps()
+    return settings
+
+
+def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "projects_dir",
+        "text_to_voice_language",
+        "text_to_voice_voice",
+        "text_to_voice_delivery",
+        "text_to_voice_speed",
+        "openai_api_key",
+        "keyword_ai_model",
+        "keyword_ai_provider",
+        "gemini_api_key",
+        "gemini_keyword_model",
+        "script_workflow_input",
+        "script_workflow_steps",
+        "whisper_timing_enabled",
+        "whisper_timing_model",
+        "scene_ai_enabled",
+        "scene_min_seconds",
+        "scene_target_max_seconds",
+        "capcut_exe_path",
+        "image_min_width",
+        "image_min_height",
+        "image_enhance_enabled",
+        "image_target_width",
+        "image_target_height",
+    }
+    settings = load_settings()
+    for key, value in values.items():
+        if key in allowed:
+            settings[key] = value
+    if "script_workflow_steps" in values:
+        settings["script_workflow_steps"] = normalize_workflow_steps(values["script_workflow_steps"])
+    save_settings(settings)
+    return settings
+
+
+def _sync_script(project: Path, script: str) -> None:
+    value = script.strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="Script dang rong.")
+    (project / "scripts").mkdir(parents=True, exist_ok=True)
+    script_path = project / "scripts" / "script_final.txt"
+    current = script_path.read_text(encoding="utf-8", errors="replace").strip() if script_path.exists() else ""
+    if current != value:
+        script_path.write_text(value + "\n", encoding="utf-8")
+
+
+def _open_capcut(settings: dict[str, Any]) -> bool:
+    configured = str(settings.get("capcut_exe_path") or "").strip()
+    candidates = [Path(configured)] if configured else []
+    appdata = Path(os.environ.get("APPDATA") or "")
+    if appdata:
+        candidates.append(appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "CapCut" / "CapCut.lnk")
+    for candidate in candidates:
+        if candidate.exists():
+            os.startfile(str(candidate))
+            return True
+    return False
+
+
+@app.get("/api/health")
+def health() -> dict[str, Any]:
+    return {"ok": True, "active_job_id": runtime.active_job_id}
+
+
+@app.get("/api/state")
+def state() -> dict[str, Any]:
+    settings = _public_settings()
+    projects_dir = Path(str(settings.get("projects_dir") or APP_DIR / "Projects"))
+    projects = []
+    if projects_dir.exists():
+        for path in sorted(projects_dir.iterdir(), key=lambda value: value.stat().st_mtime, reverse=True):
+            if path.is_dir() and (path / "scripts" / "script_final.txt").exists():
+                projects.append(
+                    {
+                        "path": str(path),
+                        "name": path.name,
+                        "updated_at": path.stat().st_mtime,
+                    }
+                )
+    active = runtime.jobs.get(runtime.active_job_id or "")
+    return {
+        "settings": settings,
+        "project": _project_payload(runtime.current_project),
+        "projects": projects[:100],
+        "active_job": active.payload() if active else None,
+    }
+
+
+@app.get("/api/voices")
+def voices(language: str = "en") -> dict[str, Any]:
+    settings = load_settings()
+    return {"items": chatterbox_voice_choices(settings, language)}
+
+
+@app.post("/api/settings")
+def update_settings(request: SettingsRequest) -> dict[str, Any]:
+    return {"settings": _save_partial_settings(request.settings)}
+
+
+@app.post("/api/projects")
+def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
+    settings = load_settings()
+    projects_dir = Path(str(settings.get("projects_dir") or APP_DIR / "Projects"))
+    project = create_visual_project(projects_dir, request.title, request.script.strip())
+    runtime.set_project(project)
+    return {"project": _project_payload(project)}
+
+
+@app.post("/api/projects/open")
+def open_project(request: ProjectOpenRequest) -> dict[str, Any]:
+    project = Path(request.path)
+    if not (project / "scripts" / "script_final.txt").exists():
+        raise HTTPException(status_code=404, detail="Khong tim thay project hop le.")
+    runtime.set_project(project)
+    return {"project": _project_payload(project)}
+
+
+@app.post("/api/projects/script")
+def save_project_script(request: ScriptRequest) -> dict[str, Any]:
+    project = runtime.require_project()
+    _sync_script(project, request.script)
+    return {"project": _project_payload(project)}
+
+
+@app.post("/api/workflow")
+def run_workflow(request: WorkflowRequest) -> dict[str, Any]:
+    settings = load_settings()
+    if request.settings:
+        settings = _save_partial_settings(request.settings)
+    settings["script_workflow_input"] = request.source_input
+    settings["script_workflow_steps"] = normalize_workflow_steps(request.steps)
+    save_settings(settings)
+
+    def task(job: Job) -> dict[str, Any]:
+        active_steps = [step for step in normalize_workflow_steps(request.steps) if step.get("enabled")]
+        job.determinate = True
+        job.total_units = len(active_steps)
+
+        def workflow_log(message: str) -> None:
+            job.log(message)
+            if "Workflow AI: dang chay" in str(message):
+                text = str(message)
+                job.current_label = text.split(" - ", 1)[-1]
+                try:
+                    fraction = text.split("dang chay ", 1)[1].split(" - ", 1)[0]
+                    current = int(fraction.split("/", 1)[0])
+                    job.completed_units = max(0, current - 1)
+                    job.progress = round((job.completed_units / max(1, job.total_units)) * 100)
+                except (IndexError, ValueError):
+                    pass
+            elif "Workflow AI: hoan tat" in str(message):
+                job.completed_units = job.total_units
+                job.progress = 100
+
+        script = run_script_workflow(request.source_input, request.steps, settings, log=workflow_log)
+        job.completed_units = job.total_units
+        job.progress = 100
+        return {"script": script}
+
+    return {"job": runtime.start_job("AI Workflow", task).payload()}
+
+
+@app.post("/api/voice")
+def create_voice(request: ScriptRequest) -> dict[str, Any]:
+    project = runtime.require_project()
+    _sync_script(project, request.script)
+    settings = load_settings()
+
+    def task(job: Job) -> dict[str, Any]:
+        job.current_label = "Dang tao voice va timing"
+        path = generate_voice(project, settings, job.log)
+        return {"voice_path": str(path), "project": _project_payload(project)}
+
+    return {"job": runtime.start_job("B1 Magic Voice", task).payload()}
+
+
+@app.post("/api/analyze")
+def analyze() -> dict[str, Any]:
+    project = runtime.require_project()
+    settings = load_settings()
+
+    def task(job: Job) -> dict[str, Any]:
+        job.current_label = "Dang can timing va chia canh"
+        items = build_asset_manifest(project, settings, log=job.log)
+        job.log(f"Da chia {len(items)} canh theo Whisper SRT + ngu canh.")
+        job.current_label = "Dang toi uu keyword bang AI"
+        items = optimize_asset_keywords_with_ai(project, settings, log=job.log)
+        return {"items": items, "project": _project_payload(project)}
+
+    return {"job": runtime.start_job("B2 Phan tich canh", task).payload()}
+
+
+@app.post("/api/search")
+def search_all() -> dict[str, Any]:
+    project = runtime.require_project()
+    settings = load_settings()
+
+    def task(job: Job) -> dict[str, Any]:
+        items = load_manifest(project)
+        total = max(1, len(items))
+        job.determinate = True
+        job.total_units = len(items)
+        for index, item in enumerate(items):
+            job.completed_units = index
+            job.progress = round((index / total) * 100)
+            job.current_label = f"Dang xu ly {item.get('asset_id') or f'asset {index + 1}'}"
+            if item.get("status") != "approved":
+                items[index] = search_and_download_asset(project, item, job.log, settings=settings)
+                save_manifest(project, items)
+            job.completed_units = index + 1
+            job.progress = round(((index + 1) / total) * 100)
+            job.result = {
+                "items": items,
+                "project": _project_payload(project),
+                "last_asset_id": items[index].get("asset_id"),
+            }
+        job.current_label = "Da xu ly xong tat ca asset"
+        return {"items": items, "project": _project_payload(project)}
+
+    return {"job": runtime.start_job("B3 Tim anh", task).payload()}
+
+
+@app.post("/api/assets/{asset_id}/retry")
+def retry_asset(asset_id: str) -> dict[str, Any]:
+    project = runtime.require_project()
+    settings = load_settings()
+
+    def task(job: Job) -> dict[str, Any]:
+        items = load_manifest(project)
+        index = next((i for i, item in enumerate(items) if item.get("asset_id") == asset_id), -1)
+        if index < 0:
+            raise RuntimeError(f"Khong tim thay {asset_id}.")
+        job.determinate = True
+        job.total_units = 1
+        job.current_label = f"Dang tim lai {asset_id}"
+        items[index]["status"] = "pending"
+        items[index] = search_and_download_asset(
+            project,
+            items[index],
+            job.log,
+            settings=settings,
+            reject_current=True,
+        )
+        save_manifest(project, items)
+        job.completed_units = 1
+        job.progress = 100
+        return {"item": items[index], "project": _project_payload(project)}
+
+    return {"job": runtime.start_job(f"Tim lai {asset_id}", task).payload()}
+
+
+@app.post("/api/assets/{asset_id}/approve")
+def approve_asset(asset_id: str) -> dict[str, Any]:
+    project = runtime.require_project()
+    items = load_manifest(project)
+    item = next((value for value in items if value.get("asset_id") == asset_id), None)
+    if not item:
+        raise HTTPException(status_code=404, detail=f"Khong tim thay {asset_id}.")
+    item["status"] = "downloaded" if item.get("status") == "approved" else "approved"
+    save_manifest(project, items)
+    return {"project": _project_payload(project)}
+
+
+@app.post("/api/export")
+def export_project(request: ExportRequest) -> dict[str, Any]:
+    project = runtime.require_project()
+    title = request.title.strip() or project.name
+
+    def task(job: Job) -> dict[str, Any]:
+        job.current_label = "Dang tao va cai dat draft CapCut"
+        job.log("Dang tao project CapCut...")
+        path = export_capcut_project(project, title, install_to_capcut=True)
+        opened = _open_capcut(load_settings())
+        job.log("Da mo CapCut." if opened else "Khong tu mo duoc CapCut.")
+        return {"capcut_path": str(path), "opened": opened}
+
+    return {"job": runtime.start_job("B4 Xuat CapCut", task).payload()}
+
+
+@app.post("/api/project/open-folder")
+def open_project_folder() -> dict[str, Any]:
+    project = runtime.require_project()
+    os.startfile(str(project))
+    return {"ok": True}
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str) -> dict[str, Any]:
+    job = runtime.jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Khong tim thay tac vu.")
+    return {"job": job.payload()}
+
+
+@app.get("/api/media")
+def media(path: str) -> FileResponse:
+    file_path = Path(path).resolve()
+    projects_dir = Path(str(load_settings().get("projects_dir") or APP_DIR / "Projects")).resolve()
+    try:
+        file_path.relative_to(projects_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Duong dan media khong hop le.") from exc
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Khong tim thay media.")
+    return FileResponse(file_path)
+
+
+if WEB_DIST.exists():
+    app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="webui")
+
+
+def main() -> None:
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
+
+
+if __name__ == "__main__":
+    main()

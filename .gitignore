@@ -1,0 +1,34 @@
+# Local configuration and secrets
+settings.json
+.env
+.env.*
+
+# Generated projects and runtime state
+Projects/
+.webui_state
+tmp_*/
+*.log
+
+# Browser profiles
+chrome_*_profile/
+
+# Models, caches, and local environments
+.hf-cache/
+.kokoro_espeakng_loader/
+kokoro-tts-local/
+chatterbox-venv/
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Frontend dependencies
+webui/node_modules/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
