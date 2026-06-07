@@ -224,6 +224,19 @@ function App() {
     }
   }
 
+  async function bulkRetryAssets(assetIds) {
+    if (!assetIds.length) return
+    setError("")
+    try {
+      await Promise.all(assetIds.map(id => api(`/api/assets/${id}/retry`, { method: "POST" })))
+      const latest = await loadState(true)
+      if (!latest.active_job) setFollowLogs(true)
+      setToast(`Đã đưa ${assetIds.length} asset vào hàng đợi`)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
   async function saveSettings(close = true) {
     try {
       const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: { ...settings, script_workflow_input: workflowInput, script_workflow_steps: workflowSteps } }) })
@@ -483,7 +496,7 @@ function App() {
                       }}>
                         <CheckCircle2 className="h-3.5 w-3.5" /> Duyệt tất cả
                       </Button>
-                      <Button variant="ghost" size="sm" disabled={isBusy} onClick={() => assets.filter(a => !a.local_path).forEach(a => startJob(`/api/assets/${a.asset_id}/retry`, undefined, `retry-${a.asset_id}`))}>
+                      <Button variant="ghost" size="sm" disabled={isBusy} onClick={() => bulkRetryAssets(assets.filter(a => !a.local_path).map(a => a.asset_id))}>
                         <RefreshCw className="h-3.5 w-3.5" /> Tìm lại lỗi
                       </Button>
                     </>
