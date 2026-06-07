@@ -474,7 +474,13 @@ function App() {
                 <div className="ml-auto flex items-center gap-2">
                   {assets.length > 0 && (
                     <>
-                      <Button variant="ghost" size="sm" disabled={isBusy} onClick={() => assets.filter(a => a.status !== "approved").forEach(a => approveAsset(a.asset_id))}>
+                      <Button variant="ghost" size="sm" disabled={isBusy} onClick={async () => {
+                        try {
+                          const data = await api("/api/assets/approve-all", { method: "POST" })
+                          setState((current) => ({ ...current, project: data.project }))
+                          setToast("Đã duyệt tất cả")
+                        } catch (err) { setError(err.message) }
+                      }}>
                         <CheckCircle2 className="h-3.5 w-3.5" /> Duyệt tất cả
                       </Button>
                       <Button variant="ghost" size="sm" disabled={isBusy} onClick={() => assets.filter(a => !a.local_path).forEach(a => startJob(`/api/assets/${a.asset_id}/retry`, undefined, `retry-${a.asset_id}`))}>

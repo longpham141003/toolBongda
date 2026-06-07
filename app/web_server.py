@@ -132,7 +132,7 @@ class RuntimeState:
     def require_project(self) -> Path:
         project = self.current_project
         if not project or not (project / "scripts" / "script_final.txt").exists():
-            raise HTTPException(status_code=400, detail="Chua chon project. Hay tao hoac mo project truoc.")
+            raise HTTPException(status_code=400, detail="Chưa chọn project. Hãy tạo hoặc mở project trước.")
         return project
 
     def _refresh_queue_positions(self) -> None:
@@ -153,7 +153,7 @@ class RuntimeState:
                 job.status = "done"
             except Exception as exc:
                 job.error = str(exc)
-                job.log(f"LOI: {exc}")
+                job.log(f"LỖI: {exc}")
                 job.status = "failed"
             finally:
                 job.updated_at = time.time()
@@ -182,7 +182,7 @@ class RuntimeState:
             if self.active_job_id:
                 active = self.jobs.get(self.active_job_id)
                 if active and active.status in {"queued", "running"} and not allow_queue:
-                    raise HTTPException(status_code=409, detail=f"Tac vu '{active.name}' dang chay.")
+                    raise HTTPException(status_code=409, detail=f"Tác vụ '{active.name}' đang chạy.")
             if asset_id:
                 duplicate = next(
                     (
@@ -306,7 +306,7 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
 def _sync_script(project: Path, script: str) -> None:
     value = script.strip()
     if not value:
-        raise HTTPException(status_code=400, detail="Script dang rong.")
+        raise HTTPException(status_code=400, detail="Script đang rỗng.")
     (project / "scripts").mkdir(parents=True, exist_ok=True)
     script_path = project / "scripts" / "script_final.txt"
     current = script_path.read_text(encoding="utf-8", errors="replace").strip() if script_path.exists() else ""
@@ -384,7 +384,7 @@ def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
 def open_project(request: ProjectOpenRequest) -> dict[str, Any]:
     project = Path(request.path)
     if not (project / "scripts" / "script_final.txt").exists():
-        raise HTTPException(status_code=404, detail="Khong tim thay project hop le.")
+        raise HTTPException(status_code=404, detail="Không tìm thấy project hợp lệ.")
     runtime.set_project(project)
     return {"project": _project_payload(project)}
 
@@ -412,17 +412,17 @@ def run_workflow(request: WorkflowRequest) -> dict[str, Any]:
 
         def workflow_log(message: str) -> None:
             job.log(message)
-            if "Workflow AI: dang chay" in str(message):
+            if "Workflow AI: đang chạy" in str(message):
                 text = str(message)
                 job.current_label = text.split(" - ", 1)[-1]
                 try:
-                    fraction = text.split("dang chay ", 1)[1].split(" - ", 1)[0]
+                    fraction = text.split("đang chạy ", 1)[1].split(" - ", 1)[0]
                     current = int(fraction.split("/", 1)[0])
                     job.completed_units = max(0, current - 1)
                     job.progress = round((job.completed_units / max(1, job.total_units)) * 100)
                 except (IndexError, ValueError):
                     pass
-            elif "Workflow AI: hoan tat" in str(message):
+            elif "Workflow AI: hoàn tất" in str(message):
                 job.completed_units = job.total_units
                 job.progress = 100
 
@@ -441,7 +441,7 @@ def create_voice(request: ScriptRequest) -> dict[str, Any]:
     settings = load_settings()
 
     def task(job: Job) -> dict[str, Any]:
-        job.current_label = "Dang tao voice va timing"
+        job.current_label = "Đang tạo voice và timing"
         path = generate_voice(project, settings, job.log)
         return {"voice_path": str(path), "project": _project_payload(project)}
 
@@ -454,10 +454,10 @@ def analyze() -> dict[str, Any]:
     settings = load_settings()
 
     def task(job: Job) -> dict[str, Any]:
-        job.current_label = "Dang can timing va chia canh"
+        job.current_label = "Đang căn timing và chia cảnh"
         items = build_asset_manifest(project, settings, log=job.log)
-        job.log(f"Da chia {len(items)} canh theo Whisper SRT + ngu canh.")
-        job.current_label = "Dang toi uu keyword bang AI"
+        job.log(f"Đã chia {len(items)} cảnh theo Whisper SRT + ngữ cảnh.")
+        job.current_label = "Đang tối ưu keyword bằng AI"
         items = optimize_asset_keywords_with_ai(project, settings, log=job.log)
         return {"items": items, "project": _project_payload(project)}
 
@@ -477,7 +477,7 @@ def search_all() -> dict[str, Any]:
         for index, item in enumerate(items):
             job.completed_units = index
             job.progress = round((index / total) * 100)
-            job.current_label = f"Dang xu ly {item.get('asset_id') or f'asset {index + 1}'}"
+            job.current_label = f"Đang xử lý {item.get('asset_id') or f'asset {index + 1}'}"
             if item.get("status") != "approved":
                 items[index] = search_and_download_asset(project, item, job.log, settings=settings)
                 save_manifest(project, items)
@@ -488,7 +488,7 @@ def search_all() -> dict[str, Any]:
                 "project": _project_payload(project),
                 "last_asset_id": items[index].get("asset_id"),
             }
-        job.current_label = "Da xu ly xong tat ca asset"
+        job.current_label = "Đã xử lý xong tất cả asset"
         return {"items": items, "project": _project_payload(project)}
 
     return {"job": runtime.start_job("B3 Tim anh", task).payload()}
@@ -503,10 +503,10 @@ def retry_asset(asset_id: str) -> dict[str, Any]:
         items = load_manifest(project)
         index = next((i for i, item in enumerate(items) if item.get("asset_id") == asset_id), -1)
         if index < 0:
-            raise RuntimeError(f"Khong tim thay {asset_id}.")
+            raise RuntimeError(f"Không tìm thấy {asset_id}.")
         job.determinate = True
         job.total_units = 1
-        job.current_label = f"Dang tim lai {asset_id}"
+        job.current_label = f"Đang tìm lại {asset_id}"
         items[index]["status"] = "pending"
         items[index] = search_and_download_asset(
             project,
@@ -522,7 +522,7 @@ def retry_asset(asset_id: str) -> dict[str, Any]:
 
     return {
         "job": runtime.start_job(
-            f"Tim lai {asset_id}",
+            f"Tìm lại {asset_id}",
             task,
             allow_queue=True,
             kind="asset_retry",
@@ -537,8 +537,19 @@ def approve_asset(asset_id: str) -> dict[str, Any]:
     items = load_manifest(project)
     item = next((value for value in items if value.get("asset_id") == asset_id), None)
     if not item:
-        raise HTTPException(status_code=404, detail=f"Khong tim thay {asset_id}.")
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy {asset_id}.")
     item["status"] = "downloaded" if item.get("status") == "approved" else "approved"
+    save_manifest(project, items)
+    return {"project": _project_payload(project)}
+
+
+@app.post("/api/assets/approve-all")
+def approve_all_assets() -> dict[str, Any]:
+    project = runtime.require_project()
+    items = load_manifest(project)
+    for item in items:
+        if item.get("status") != "approved" and item.get("local_path"):
+            item["status"] = "approved"
     save_manifest(project, items)
     return {"project": _project_payload(project)}
 
@@ -549,14 +560,14 @@ def export_project(request: ExportRequest) -> dict[str, Any]:
     title = request.title.strip() or project.name
 
     def task(job: Job) -> dict[str, Any]:
-        job.current_label = "Dang tao va cai dat draft CapCut"
-        job.log("Dang tao project CapCut...")
+        job.current_label = "Đang tạo và cài đặt draft CapCut"
+        job.log("Đang tạo project CapCut...")
         path = export_capcut_project(project, title, install_to_capcut=True)
         opened = _open_capcut(load_settings())
-        job.log("Da mo CapCut." if opened else "Khong tu mo duoc CapCut.")
+        job.log("Đã mở CapCut." if opened else "Không tự mở được CapCut.")
         return {"capcut_path": str(path), "opened": opened}
 
-    return {"job": runtime.start_job("B4 Xuat CapCut", task).payload()}
+    return {"job": runtime.start_job("B4 Xuất CapCut", task).payload()}
 
 
 @app.post("/api/project/open-folder")
@@ -570,7 +581,7 @@ def open_project_folder() -> dict[str, Any]:
 def get_job(job_id: str) -> dict[str, Any]:
     job = runtime.jobs.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Khong tim thay tac vu.")
+        raise HTTPException(status_code=404, detail="Không tìm thấy tác vụ.")
     return {"job": job.payload()}
 
 
@@ -581,9 +592,9 @@ def media(path: str) -> FileResponse:
     try:
         file_path.relative_to(projects_dir)
     except ValueError as exc:
-        raise HTTPException(status_code=403, detail="Duong dan media khong hop le.") from exc
+        raise HTTPException(status_code=403, detail="Đường dẫn media không hợp lệ.") from exc
     if not file_path.is_file():
-        raise HTTPException(status_code=404, detail="Khong tim thay media.")
+        raise HTTPException(status_code=404, detail="Không tìm thấy media.")
     return FileResponse(
         file_path,
         headers={
