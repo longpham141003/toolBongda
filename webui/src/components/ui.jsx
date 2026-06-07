@@ -81,7 +81,7 @@ export function DialogContent({ className, children, ...props }) {
 export const DialogTitle = ({ className, ...props }) => <DialogPrimitive.Title className={cn("text-lg font-semibold", className)} {...props} />
 export const DialogDescription = ({ className, ...props }) => <DialogPrimitive.Description className={cn("mt-1 text-sm text-zinc-500", className)} {...props} />
 
-export function Select({ value, onValueChange, options, placeholder = "Chon" }) {
+export function Select({ value, onValueChange, options, placeholder = "Chọn" }) {
   return (
     <SelectPrimitive.Root value={value} onValueChange={onValueChange}>
       <SelectPrimitive.Trigger className="flex h-10 w-full items-center justify-between rounded-xl border border-white/10 bg-black/20 px-3 text-sm text-zinc-200 outline-none focus:border-violet-400/60">
