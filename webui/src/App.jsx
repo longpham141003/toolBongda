@@ -157,6 +157,10 @@ function App() {
     return () => clearTimeout(timer)
   }, [toast])
 
+  const project = state?.project
+  const assets = useMemo(() => project?.assets || [], [project])
+  const liveJobs = state?.jobs || []
+
   useEffect(() => {
     if (lightboxIndex === null) return
     const onKey = (e) => {
@@ -175,10 +179,6 @@ function App() {
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [lightboxIndex, assets])
-
-  const project = state?.project
-  const assets = project?.assets || []
-  const liveJobs = state?.jobs || []
   const assetJobs = useMemo(
     () => new Map(
       liveJobs
@@ -493,7 +493,7 @@ function App() {
                 </div>
               ) : (
                 <div className="grid gap-4 p-5 md:grid-cols-2 2xl:grid-cols-3">
-                  {assets.map((asset) => {
+                  {assets.map((asset, assetIndex) => {
                     const badge = statusBadge(asset.status)
                     const assetJob = assetJobs.get(asset.asset_id)
                     const isProcessingAsset = assetJob?.status === "running"
@@ -501,7 +501,7 @@ function App() {
                     const imageVersion = asset.media_version || asset.sha256 || asset.search_attempt
                     return (
                       <article key={asset.asset_id} className={cn("group overflow-hidden rounded-2xl border bg-black/20 transition hover:-translate-y-0.5 hover:shadow-xl", isProcessingAsset ? "border-violet-400/50 shadow-glow" : "border-white/[0.08] hover:border-white/15")}>
-                        <button className="relative block aspect-video w-full overflow-hidden bg-zinc-900" onClick={() => { if (asset.local_path) { const idx = assets.findIndex(a => a.asset_id === asset.asset_id); setLightboxIndex(idx) } }}>
+                        <button className="relative block aspect-video w-full overflow-hidden bg-zinc-900" onClick={() => asset.local_path && setLightboxIndex(assetIndex)}>
                           {asset.local_path ? <img key={`${asset.asset_id}-${imageVersion}`} src={mediaUrl(asset.local_path, imageVersion)} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" /> : <div className="flex h-full items-center justify-center"><Image className="h-8 w-8 text-zinc-700" /></div>}
                           <div className="absolute left-3 top-3"><Badge variant={badge.variant}>{badge.label}</Badge></div>
                           <div className="absolute bottom-3 right-3 rounded-lg bg-black/70 px-2 py-1 text-[10px] text-white backdrop-blur">{formatTime(asset.start)} - {formatTime(asset.end)}</div>
