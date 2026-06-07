@@ -35,6 +35,9 @@ DEFAULT_SETTINGS = {
     "keyword_ai_provider": "auto",
     "gemini_api_key": "",
     "gemini_keyword_model": "gemini-2.5-flash",
+    "gemini_vision_model": "gemini-2.5-flash",
+    "image_ai_validation_enabled": True,
+    "image_ai_min_score": 72,
     "script_workflow_input": "",
     "script_workflow_steps": [
         {

@@ -485,6 +485,13 @@ function App() {
                           <div className="mt-3 rounded-xl border border-white/[0.06] bg-black/20 p-3">
                             <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-zinc-600"><KeyRound className="h-3 w-3" /> Keyword</div>
                             <p className="text-xs leading-5 text-zinc-400">{asset.keyword || "Chua co keyword"}</p>
+                            {asset.image_ai_validation?.score != null && (
+                              <div className="mt-2 flex items-center gap-2 border-t border-white/[0.06] pt-2 text-[10px] text-zinc-500">
+                                <Sparkles className="h-3 w-3 text-violet-400" />
+                                Gemini Vision {asset.image_ai_validation.score}/100
+                                <span className="truncate">{asset.image_ai_validation.visible_subject}</span>
+                              </div>
+                            )}
                           </div>
                           <div className="mt-3 flex gap-2">
                             <Button className="flex-1" variant="secondary" size="sm" disabled={Boolean(assetJob)} onClick={() => startJob(`/api/assets/${asset.asset_id}/retry`, undefined, `retry-${asset.asset_id}`)}>
@@ -618,11 +625,14 @@ function App() {
             </SettingSection>
             <SettingSection title="Image quality" icon={Image}>
               <Switch checked={Boolean(settings.image_enhance_enabled)} onCheckedChange={(value) => setSettings({ ...settings, image_enhance_enabled: value })} label="Lam net anh sau khi tai" />
+              <Switch checked={settings.image_ai_validation_enabled !== false} onCheckedChange={(value) => setSettings({ ...settings, image_ai_validation_enabled: value })} label="Gemini Vision kiem tra anh that" />
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Min width"><Input type="number" value={settings.image_min_width || 600} onChange={(e) => setSettings({ ...settings, image_min_width: Number(e.target.value) })} /></Field>
                 <Field label="Min height"><Input type="number" value={settings.image_min_height || 330} onChange={(e) => setSettings({ ...settings, image_min_height: Number(e.target.value) })} /></Field>
                 <Field label="Output width"><Input type="number" value={settings.image_target_width || 1920} onChange={(e) => setSettings({ ...settings, image_target_width: Number(e.target.value) })} /></Field>
                 <Field label="Output height"><Input type="number" value={settings.image_target_height || 1080} onChange={(e) => setSettings({ ...settings, image_target_height: Number(e.target.value) })} /></Field>
+                <Field label="AI min score"><Input type="number" min="1" max="100" value={settings.image_ai_min_score || 72} onChange={(e) => setSettings({ ...settings, image_ai_min_score: Number(e.target.value) })} /></Field>
+                <Field label="Vision model"><Input value={settings.gemini_vision_model || "gemini-2.5-flash"} onChange={(e) => setSettings({ ...settings, gemini_vision_model: e.target.value })} /></Field>
               </div>
             </SettingSection>
           </div>

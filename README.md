@@ -6,8 +6,9 @@ Tool doc lap theo pipeline:
 2. Tao voice bang Chatterbox TTS, ho tro voice sample/clone, chia chunk va Whisper QA.
 3. Doc timing that tu `voice.segments.json`, noi cac segment bi cat, tu chia canh theo noi dung/chuyen y.
 4. Tao keyword cho tung canh. Neu co Gemini API key hoac OpenAI API key, tool se hieu noi dung canh va toi uu keyword + fallback keyword truoc khi tim anh.
-5. Tim va tai anh theo 2 tang: TheSportsDB truoc, sau do Google Images bang Playwright. Preview, duyet va tim lai tung asset.
-6. Xuat draft CapCut gom voice va asset dung timing.
+5. Tim anh goc 16:9 tu Google Images bang Playwright, lay nhieu ung vien va dung Gemini Vision de kiem tra dung nguoi, doi, tran dau va hanh dong truoc khi nhan.
+6. Preview, duyet va tim lai tung asset. Nhieu yeu cau tim lai se vao hang doi va chay lan luot.
+7. Xuat draft CapCut gom voice va asset dung timing. Tool co template CapCut noi bo va tu fallback sang draft portable hop le neu can.
 
 Chay `run_visual_capcut.bat`.
 

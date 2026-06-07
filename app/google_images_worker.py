@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import mimetypes
 import re
@@ -12,7 +13,7 @@ from playwright.sync_api import sync_playwright
 from PIL import Image
 
 
-BAD_HOST_PARTS = ("google.", "gstatic.", "googleusercontent.com")
+BAD_HOST_PARTS = ("google.", "gstatic.", "googleusercontent.com", "ytimg.com")
 CAPTCHA_TEXT = ("our systems have detected unusual traffic", "not a robot", "recaptcha", "sorry")
 BAD_PAGE_HOST_PARTS = (
     "youtube.com", "youtu.be", "dailymotion.com", "vimeo.com", "tiktok.com",
@@ -79,7 +80,8 @@ def _candidate_urls(page, query: str, previous_urls: set[str] | None = None) -> 
         src = str(row.get("src") or "")
         if not src.startswith("http"):
             continue
-        if src in previous_urls:
+        panel_score = 3 if float(row.get("x") or 0) > 620 else 0
+        if src in previous_urls and not panel_score:
             continue
         host = urlparse(src).netloc.lower()
         if any(part in host for part in BAD_HOST_PARTS):
@@ -106,7 +108,6 @@ def _candidate_urls(page, query: str, previous_urls: set[str] | None = None) -> 
         keyword_score = len(query_words & metadata_tokens)
         if query_words and keyword_score < 1:
             continue
-        panel_score = 3 if float(row.get("x") or 0) > 620 else 0
         scored.append(
             (
                 panel_score,
@@ -156,6 +157,52 @@ def _download(candidate: dict, output_dir: Path, index: int) -> Path | None:
         return path
     except Exception:
         return None
+
+
+def _embedded_candidates(page, query: str) -> list[dict]:
+    source = html.unescape(page.content())
+    source = source.replace("\\u003d", "=").replace("\\u0026", "&").replace("\\/", "/")
+    urls = re.findall(
+        r"https?://[^\"'<> ]+?\.(?:jpg|jpeg|png|webp)(?:\?[^\"'<> ]*)?",
+        source,
+        flags=re.I,
+    )
+    results = []
+    seen = set()
+    for url in urls:
+        url = url.rstrip("\\,)]}")
+        if url in seen:
+            continue
+        seen.add(url)
+        host = urlparse(url).netloc.lower()
+        lowered = url.lower()
+        if any(part in host for part in BAD_HOST_PARTS):
+            continue
+        if any(term in lowered for term in BAD_TITLE_TERMS):
+            continue
+        results.append(
+            {
+                "url": url,
+                "title": Path(urlparse(url).path).stem.replace("-", " ").replace("_", " "),
+                "page": url,
+                "width": 0,
+                "height": 0,
+            }
+        )
+    return results
+
+
+def _valid_download_shape(path: Path) -> bool:
+    try:
+        with Image.open(path) as image:
+            width, height = image.size
+        return (
+            width >= 900
+            and height >= 480
+            and abs((width / max(1, height)) - (16 / 9)) <= 0.04
+        )
+    except Exception:
+        return False
 
 
 def _image_dhash(path: Path) -> int | None:
@@ -236,6 +283,32 @@ def download_google_images(
             if browser:
                 browser.close()
             return {"ok": False, "captcha": True, "message": "Google captcha/unusual traffic", "downloaded": []}
+        for candidate in _embedded_candidates(page, query):
+            if len(downloaded) >= count:
+                break
+            url = str(candidate.get("url") or "")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            file_counter["value"] += 1
+            path = _download(candidate, output, file_counter["value"])
+            if not path:
+                continue
+            if not _valid_download_shape(path):
+                path.unlink(missing_ok=True)
+                path.with_suffix(path.suffix + ".json").unlink(missing_ok=True)
+                continue
+            perceptual = _image_dhash(path)
+            if perceptual is not None and any(
+                (perceptual ^ old).bit_count() <= 6
+                for old in rejected_dhashes | accepted_dhashes
+            ):
+                path.unlink(missing_ok=True)
+                path.with_suffix(path.suffix + ".json").unlink(missing_ok=True)
+                continue
+            if perceptual is not None:
+                accepted_dhashes.add(perceptual)
+            downloaded.append(str(path))
         thumbnails = page.locator("img")
         max_clicks = min(thumbnails.count(), max(40, count * 8))
         eligible_seen = 0

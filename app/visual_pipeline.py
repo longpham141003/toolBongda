@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import copy
+import base64
 import difflib
 import hashlib
+import io
 import json
 import os
 import re
@@ -618,6 +620,7 @@ def _infer_match_teams(script: str) -> list[str]:
     text = re.sub(r"\s+", " ", str(script or "")).strip()
     patterns = (
         r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\s+(?:vs\.?|versus)\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
+        r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\s+faced\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
         r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b[^.!?]{0,100}\bmatch against\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
         r"^([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,2})\b[^.!?]{0,140}\bagainst\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
     )
@@ -905,21 +908,23 @@ def _call_scene_ai_gemini(
         },
     }
     response = None
-    for attempt in range(3):
+    errors = []
+    for candidate_model in dict.fromkeys([model, "gemini-2.5-flash-lite", "gemini-2.0-flash-lite"]):
         response = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{candidate_model}:generateContent",
             headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
             json=payload,
             timeout=120,
         )
+        if response.status_code < 400:
+            break
+        errors.append(f"{candidate_model}: HTTP {response.status_code}")
         if response.status_code not in {429, 500, 502, 503, 504}:
             break
-        if attempt < 2:
-            time.sleep(2.5 * (attempt + 1))
     if response is None:
         raise RuntimeError("Gemini scene API khong phan hoi.")
     if response.status_code >= 400:
-        raise RuntimeError(f"Gemini scene API loi {response.status_code}: {response.text[-600:]}")
+        raise RuntimeError(f"Gemini scene API loi ({', '.join(errors)}): {response.text[-600:]}")
     data = response.json()
     candidates = data.get("candidates") or []
     if not candidates:
@@ -1181,21 +1186,23 @@ def _call_keyword_ai_gemini(api_key: str, model: str, scenes: list[dict]) -> lis
         },
     }
     response = None
-    for attempt in range(3):
+    errors = []
+    for candidate_model in dict.fromkeys([model, "gemini-2.5-flash-lite", "gemini-2.0-flash-lite"]):
         response = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{candidate_model}:generateContent",
             headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
             json=payload,
             timeout=90,
         )
+        if response.status_code < 400:
+            break
+        errors.append(f"{candidate_model}: HTTP {response.status_code}")
         if response.status_code not in {429, 500, 502, 503, 504}:
             break
-        if attempt < 2:
-            time.sleep(2.5 * (attempt + 1))
     if response is None:
         raise RuntimeError("Gemini keyword API khong phan hoi.")
     if response.status_code >= 400:
-        raise RuntimeError(f"Gemini keyword API loi {response.status_code}: {response.text[-600:]}")
+        raise RuntimeError(f"Gemini keyword API loi ({', '.join(errors)}): {response.text[-600:]}")
     data = response.json()
     candidates = data.get("candidates") or []
     if not candidates:
@@ -1284,6 +1291,175 @@ def _valid_crawled_images(
             continue
     candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
     return [path for _score, _ratio, _area, path in candidates]
+
+
+def _gemini_image_payload(path: Path) -> tuple[str, str]:
+    from PIL import Image
+
+    with Image.open(path) as source:
+        image = source.convert("RGB")
+        image.thumbnail((1280, 1280), getattr(Image, "Resampling", Image).LANCZOS)
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=86, optimize=True)
+    return "image/jpeg", base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def _vision_sidecar(path: Path) -> Path:
+    digest = hashlib.sha1(path.name.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    return path.parent / f"_vision_{digest}.json"
+
+
+def _rank_images_with_gemini(
+    candidates: list[Path],
+    item: dict,
+    settings: dict | None,
+    log: Callable[[str], None] | None = None,
+) -> list[tuple[Path, dict]]:
+    import requests
+
+    settings = settings or {}
+    api_key = str(settings.get("gemini_api_key") or "").strip()
+    enabled = bool(settings.get("image_ai_validation_enabled", True))
+    if not enabled or not api_key:
+        if enabled and log:
+            log(f"{item.get('asset_id')}: chua co Gemini API key, chi cham theo metadata.")
+        return [(path, {"accepted": True, "score": 0, "reason": "metadata-only"}) for path in candidates]
+
+    primary_model = str(settings.get("gemini_vision_model") or settings.get("gemini_keyword_model") or "gemini-2.5-flash")
+    models = list(
+        dict.fromkeys(
+            [
+                primary_model,
+                "gemini-2.5-flash-lite",
+                "gemini-2.0-flash-lite",
+            ]
+        )
+    )
+    minimum_score = max(1, min(100, int(settings.get("image_ai_min_score") or 72)))
+    teams = [str(value) for value in item.get("match_teams") or [] if str(value).strip()]
+    inferred_subject, _inferred_action = _scene_match_action(item, teams)
+    subject = str(item.get("main_subject") or inferred_subject or "").strip()
+    sentence = str(item.get("sentence_text") or "").strip()
+    keyword = str(item.get("keyword") or "").strip()
+    action = str(item.get("action_context") or "").strip()
+    required_person = (
+        subject
+        if len(subject.split()) >= 2
+        and " and " not in subject.lower()
+        and not subject.lower().endswith((" players", " team", " squad"))
+        and not any(subject.lower() == team.lower() for team in teams)
+        else ""
+    )
+    parts: list[dict] = [
+        {
+            "text": (
+                "You are a strict visual editor selecting real sports photography for one narration scene. "
+                "Evaluate every candidate image itself, not just its filename. Reject an image when the requested "
+                "named person is absent or a different player is shown, when it is a different match/team/event, "
+                "or when it is a thumbnail, poster, graphic, collage, scoreboard, logo, or low-information image. "
+                "For a coach/touchline scene, the named coach must be visibly present. If a required named person "
+                "is absent, accepted MUST be false even if the image broadly supports another sentence. "
+                "For an action/celebration "
+                "scene, the requested player or clearly relevant teams/action must be visible. Do not infer identity "
+                "only from shirt color. When required teams/event are provided, reject club kits, other national "
+                "teams, old tournaments, or unrelated matches even when the named player is correct. "
+                "Return JSON only: {\"items\":[{\"index\":1,\"accepted\":true,"
+                "\"score\":0-100,\"visible_subject\":\"...\",\"reason\":\"...\"}]}. "
+                f"Accept only scores >= {minimum_score}.\n"
+                f"Scene narration: {sentence}\n"
+                f"Required main subject: {subject or 'no single named person'}\n"
+                f"Required teams/event: {', '.join(teams) or 'use narration and keyword'}\n"
+                f"Required action/context: {action}\n"
+                f"Search keyword: {keyword}"
+            )
+        }
+    ]
+    included: list[Path] = []
+    for index, path in enumerate(candidates[:6], start=1):
+        metadata = read_json(path.with_suffix(path.suffix + ".json"), {})
+        parts.append(
+            {
+                "text": (
+                    f"Candidate {index}. Source title: {metadata.get('title') or path.stem}. "
+                    f"Source page: {metadata.get('page') or ''}"
+                )
+            }
+        )
+        mime_type, encoded = _gemini_image_payload(path)
+        parts.append({"inline_data": {"mime_type": mime_type, "data": encoded}})
+        included.append(path)
+    payload = {
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {
+            "temperature": 0.0,
+            "responseMimeType": "application/json",
+        },
+    }
+    response = None
+    model = primary_model
+    errors = []
+    for candidate_model in models:
+        model = candidate_model
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=120,
+        )
+        if response.status_code < 400:
+            break
+        errors.append(f"{model}: HTTP {response.status_code}")
+        if response.status_code not in {429, 500, 502, 503, 504}:
+            break
+    if response is None or response.status_code >= 400:
+        detail = response.text[-500:] if response is not None else "khong co response"
+        raise RuntimeError(f"Gemini Vision khong kha dung ({', '.join(errors)}): {detail}")
+    data = response.json()
+    response_parts = ((((data.get("candidates") or [{}])[0].get("content") or {}).get("parts")) or [])
+    content = "".join(str(part.get("text") or "") for part in response_parts)
+    parsed = json.loads(content)
+    rows = parsed.get("items") if isinstance(parsed, dict) else parsed
+    rows = rows if isinstance(rows, list) else []
+    decisions: list[tuple[Path, dict]] = []
+    for index, path in enumerate(included, start=1):
+        row = next((value for value in rows if int(value.get("index") or 0) == index), {})
+        score = max(0, min(100, int(row.get("score") or 0)))
+        accepted = bool(row.get("accepted")) and score >= minimum_score
+        visible_subject = str(row.get("visible_subject") or "")
+        metadata = read_json(path.with_suffix(path.suffix + ".json"), {})
+        metadata_text = f"{metadata.get('url') or ''} {metadata.get('page') or ''} {metadata.get('title') or ''}".lower()
+        if "ytimg.com" in metadata_text or "youtube" in metadata_text:
+            accepted = False
+            score = min(score, 20)
+            row["reason"] = "YouTube thumbnail/graphic bi cam."
+        if required_person:
+            required_tokens = [
+                token for token in _ascii_words(required_person)
+                if len(token) > 2 and token not in STOP_WORDS
+            ]
+            visible_tokens = set(_ascii_words(f"{visible_subject} {row.get('reason') or ''}"))
+            surname = required_tokens[-1] if required_tokens else ""
+            if surname and surname not in visible_tokens:
+                accepted = False
+                score = min(score, 40)
+                row["reason"] = (
+                    f"Khong nhin thay dung nguoi bat buoc {required_person}. "
+                    f"{row.get('reason') or ''}"
+                ).strip()
+        decision = {
+            "accepted": accepted,
+            "score": score,
+            "visible_subject": visible_subject,
+            "reason": str(row.get("reason") or ""),
+            "model": model,
+        }
+        write_json(_vision_sidecar(path), decision)
+        if log:
+            state = "dat" if accepted else "loai"
+            log(f"{item.get('asset_id')}: Gemini Vision {state} anh {index} ({score}/100) - {decision['reason']}")
+        decisions.append((path, decision))
+    decisions.sort(key=lambda value: int(value[1].get("score") or 0), reverse=True)
+    return [value for value in decisions if value[1].get("accepted")]
 
 
 def _image_dhash(path: Path) -> int | None:
@@ -1609,10 +1785,11 @@ def _fetch_google_images(
 ) -> int:
     worker_path = Path(__file__).with_name("google_images_worker.py")
     downloaded = 0
-    target_count = 1
-    for query_index, query in enumerate(queries[:2], start=1):
+    target_count = max(1, min(6, int(count)))
+    for query_index, query in enumerate(queries[:4], start=1):
         if downloaded >= target_count:
             break
+        query_target = min(2, target_count - downloaded)
         query_dir = folder / f"google_{query_index:02d}"
         query_dir.mkdir(parents=True, exist_ok=True)
         run_logs = []
@@ -1628,7 +1805,7 @@ def _fetch_google_images(
                 {
                     "query": query,
                     "output": str(query_dir),
-                    "count": target_count,
+                    "count": query_target,
                     "profile": profile_path,
                     "headed": True,
                     "exclude_urls": sorted(excluded_urls or set()),
@@ -1662,7 +1839,7 @@ def _fetch_google_images(
                 for path in query_dir.glob("*")
                 if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
             ]
-            if image_files:
+            if len(image_files) >= query_target:
                 break
             time.sleep(0.7)
         (query_dir / "_worker.log").write_text("\n\n".join(run_logs), encoding="utf-8")
@@ -1682,6 +1859,7 @@ def crawl_image_candidates(
     attempt: int,
     count: int = 6,
     settings: dict | None = None,
+    log: Callable[[str], None] | None = None,
 ) -> tuple[Path, int, str, dict]:
     attempt_dir = project / "assets" / "candidates" / str(item["asset_id"]) / f"attempt_{attempt:02d}"
     attempt_dir.mkdir(parents=True, exist_ok=True)
@@ -1695,7 +1873,6 @@ def crawl_image_candidates(
         for value in item.get("rejected_dhashes") or []
         if str(value).strip()
     }
-    retry_skip_count = len(excluded_dhashes)
     excluded_urls = {
         str(value).strip()
         for value in item.get("rejected_urls") or []
@@ -1719,6 +1896,26 @@ def crawl_image_candidates(
             for query in google_queries
             if _match_photo_query(query, item)
         ]
+        match_teams = [str(value) for value in item.get("match_teams") or [] if str(value).strip()]
+        scene_subject, scene_action = _scene_match_action(item, match_teams)
+        if scene_subject:
+            context_word = "coach touchline" if "coach touchline" in scene_action else (
+                "celebration" if "goal celebration" in scene_action else "match action"
+            )
+            focused_query = _concise_match_query(
+                " ".join(
+                    value
+                    for value in (
+                        scene_subject,
+                        match_teams[0] if match_teams else "",
+                        context_word,
+                    )
+                    if value
+                ),
+                item,
+            )
+            if focused_query and focused_query not in google_queries:
+                google_queries = [google_queries[0], focused_query, *google_queries[1:]]
         tiers = [
             (
                 "Google match photography",
@@ -1729,10 +1926,10 @@ def crawl_image_candidates(
                     project,
                     folder,
                     queries,
-                    count=1,
+                    count=6,
                     excluded_urls=excluded_urls,
                     excluded_dhashes=excluded_dhashes,
-                    skip_results=min(6, retry_skip_count),
+                    skip_results=0,
                 ),
             ),
         ]
@@ -1748,10 +1945,10 @@ def crawl_image_candidates(
                     project,
                     folder,
                     queries,
-                    count=1,
+                    count=6,
                     excluded_urls=excluded_urls,
                     excluded_dhashes=excluded_dhashes,
-                    skip_results=min(6, retry_skip_count),
+                    skip_results=0,
                 ),
             ),
         ]
@@ -1761,18 +1958,30 @@ def crawl_image_candidates(
         source_dir = attempt_dir / folder_name
         downloaded = fetcher(source_dir, queries)
         query_text = queries[0]
+        effective_min_score = (
+            0
+            if match_photography
+            and bool((settings or {}).get("image_ai_validation_enabled", True))
+            and bool(str((settings or {}).get("gemini_api_key") or "").strip())
+            else min_score
+        )
         candidates = _valid_crawled_images(
             source_dir,
             excluded_hashes,
             excluded_dhashes,
             query=query_text,
             settings=settings,
-            min_keyword_score=min_score,
+            min_keyword_score=effective_min_score,
         )
         if candidates:
-            candidate = candidates[0]
+            ranked = _rank_images_with_gemini(candidates, item, settings, log=log)
+            if not ranked:
+                errors.append(f"{source_name}: Gemini Vision loai tat ca {len(candidates)} anh")
+                continue
+            candidate, vision_decision = ranked[0]
             metadata_path = candidate.with_suffix(candidate.suffix + ".json")
             metadata = read_json(metadata_path, {}) if metadata_path.exists() else {}
+            metadata["vision"] = vision_decision
             return candidate, len(candidates), f"{source_name}: {query_text}", metadata
         rejection_summary = _crawled_image_rejection_summary(source_dir, settings=settings)
         errors.append(f"{source_name} tai {downloaded} file nhung khong co anh 16:9 hop le ({rejection_summary})")
@@ -1834,7 +2043,7 @@ def search_and_download_asset(
     attempt = int(item.get("search_attempt") or 0) + 1
     try:
         candidate, candidate_count, matched_query, candidate_metadata = crawl_image_candidates(
-            project, item, attempt, settings=settings
+            project, item, attempt, settings=settings, log=log
         )
         suffix = candidate.suffix.lower() if candidate.suffix.lower() in IMAGE_SUFFIXES else ".jpg"
         downloads_dir = project / "assets" / "downloads"
@@ -1857,6 +2066,7 @@ def search_and_download_asset(
                 "candidate_source_url": str(candidate_metadata.get("url") or ""),
                 "candidate_source_page": str(candidate_metadata.get("page") or ""),
                 "candidate_source_title": str(candidate_metadata.get("title") or ""),
+                "image_ai_validation": candidate_metadata.get("vision") or {},
                 "thumbnail_url": "",
                 "local_path": str(target),
                 "raw_local_path": str(raw_target),
@@ -1877,7 +2087,12 @@ def search_and_download_asset(
         old_path_text = str(item.get("local_path") or "").strip()
         old_path = Path(old_path_text) if old_path_text else None
         reusable = None
-        if not reject_current and not (old_path and old_path.is_file()) and _is_match_photography_item(item):
+        if (
+            not reject_current
+            and not (old_path and old_path.is_file())
+            and _is_match_photography_item(item)
+            and not bool((settings or {}).get("image_ai_validation_enabled", True))
+        ):
             match_teams = {str(value).lower() for value in item.get("match_teams") or [] if str(value).strip()}
             for existing in load_manifest(project):
                 existing_path_text = str(existing.get("local_path") or "").strip()
@@ -1945,14 +2160,38 @@ def _capcut_root() -> Path:
 
 def _find_capcut_template(capcut_root: Path) -> Path:
     preferred = capcut_root / "test-export"
-    candidates = [preferred] + [path for path in capcut_root.iterdir() if path.is_dir() and not path.name.startswith(".")]
+    bundled = Path(__file__).resolve().parents[1] / "capcut_template"
+    capcut_candidates = [
+        path for path in capcut_root.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    ] if capcut_root.exists() else []
+    portable_candidates = sorted(
+        {
+            path.parent
+            for path in (Path(__file__).resolve().parents[1] / "Projects").rglob("draft_content.json")
+            if (path.parent / "draft_meta_info.json").is_file()
+        },
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    candidates = [preferred, *capcut_candidates, bundled, *portable_candidates]
     for candidate in candidates:
         if (candidate / "draft_content.json").exists() and (candidate / "draft_meta_info.json").exists():
             content = read_json(candidate / "draft_content.json", {})
-            types = {str(track.get("type")) for track in content.get("tracks") or []}
-            if {"video", "audio"}.issubset(types):
+            tracks = {str(track.get("type")): track for track in content.get("tracks") or []}
+            materials = content.get("materials") or {}
+            if (
+                {"video", "audio"}.issubset(tracks)
+                and tracks["video"].get("segments")
+                and tracks["audio"].get("segments")
+                and materials.get("videos")
+                and materials.get("audios")
+            ):
                 return candidate
-    raise FileNotFoundError("Khong tim thay draft CapCut mau co track video va audio.")
+    raise FileNotFoundError(
+        "Khong tim thay draft CapCut hop le trong CapCut hoac Projects. "
+        "Hay tao mot project CapCut rong co 1 anh va 1 audio de lam template."
+    )
 
 
 CAPCUT_TIMELINE_ATTACHMENT_DEFAULTS = {
