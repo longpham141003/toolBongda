@@ -8,7 +8,7 @@ def default_workflow_steps() -> list[dict]:
     return [
         {
             "enabled": True,
-            "name": "Phan tich de tai",
+            "name": "Phân tích đề tài",
             "prompt": (
                 "Analyze the topic/source. Identify the audience, angle, key facts, named entities, "
                 "timeline, and the strongest visual moments. Do not write the final script yet."
@@ -16,7 +16,7 @@ def default_workflow_steps() -> list[dict]:
         },
         {
             "enabled": True,
-            "name": "Lap dan y",
+            "name": "Lập dàn ý",
             "prompt": (
                 "Turn the analysis into a coherent video outline with a strong opening, logical body, "
                 "specific events, and a concise conclusion. Remove repetition."
@@ -24,7 +24,7 @@ def default_workflow_steps() -> list[dict]:
         },
         {
             "enabled": True,
-            "name": "Viet script final",
+            "name": "Viết script final",
             "prompt": (
                 "Write the final voice-over script in natural English. Use complete spoken sentences, "
                 "keep factual names and events specific, and output only the narration. Do not include "
@@ -45,7 +45,7 @@ def normalize_workflow_steps(raw_steps) -> list[dict]:
         result.append(
             {
                 "enabled": bool(raw.get("enabled", True)),
-                "name": str(raw.get("name") or f"Buoc {index}").strip() or f"Buoc {index}",
+                "name": str(raw.get("name") or f"Bước {index}").strip() or f"Bước {index}",
                 "prompt": prompt,
             }
         )
@@ -60,10 +60,10 @@ def run_script_workflow(
 ) -> str:
     source_input = str(source_input or "").strip()
     if not source_input:
-        raise ValueError("Workflow chua co chu de/du lieu dau vao.")
+        raise ValueError("Workflow chưa có chủ đề/dữ liệu đầu vào.")
     enabled_steps = [step for step in normalize_workflow_steps(steps) if step.get("enabled")]
     if not enabled_steps:
-        raise ValueError("Workflow khong co buoc nao dang bat.")
+        raise ValueError("Workflow không có bước nào đang bật.")
 
     provider = str(settings.get("keyword_ai_provider") or "auto").strip().lower()
     openai_key = str(settings.get("openai_api_key") or "").strip()
@@ -72,21 +72,21 @@ def run_script_workflow(
         provider = "openai" if openai_key.startswith("sk-") else "gemini"
     if provider == "openai":
         if not openai_key.startswith("sk-"):
-            raise RuntimeError("Workflow OpenAI can API key bat dau bang sk-.")
+            raise RuntimeError("Workflow OpenAI cần API key bắt đầu bằng sk-.")
         api_key = openai_key
         model = str(settings.get("keyword_ai_model") or "gpt-4.1-mini")
     else:
         if not gemini_key:
-            raise RuntimeError("Workflow Gemini chua co API key.")
+            raise RuntimeError("Workflow Gemini chưa có API key.")
         api_key = gemini_key
         model = str(settings.get("gemini_keyword_model") or "gemini-2.5-flash")
 
     previous = source_input
     total = len(enabled_steps)
     for index, step in enumerate(enabled_steps, start=1):
-        name = str(step.get("name") or f"Buoc {index}")
+        name = str(step.get("name") or f"Bước {index}")
         if callable(log):
-            log(f"Workflow AI: dang chay {index}/{total} - {name}")
+            log(f"Workflow AI: đang chạy {index}/{total} - {name}")
         prompt = _workflow_prompt(
             source_input=source_input,
             previous_output=previous,
@@ -100,9 +100,9 @@ def run_script_workflow(
         else:
             previous = _call_gemini(api_key, model, prompt)
         if not previous.strip():
-            raise RuntimeError(f"Workflow buoc {index} khong tra ve noi dung.")
+            raise RuntimeError(f"Workflow bước {index} không trả về nội dung.")
     if callable(log):
-        log(f"Workflow AI: hoan tat {total} buoc.")
+        log(f"Workflow AI: hoàn tất {total} bước.")
     return previous.strip()
 
 
@@ -150,13 +150,13 @@ def _call_gemini(api_key: str, model: str, prompt: str) -> str:
         if attempt < 2:
             time.sleep(2.5 * (attempt + 1))
     if response is None:
-        raise RuntimeError("Gemini workflow khong phan hoi.")
+        raise RuntimeError("Gemini workflow không phản hồi.")
     if response.status_code >= 400:
-        raise RuntimeError(f"Gemini workflow loi {response.status_code}: {response.text[-700:]}")
+        raise RuntimeError(f"Gemini workflow lỗi {response.status_code}: {response.text[-700:]}")
     data = response.json()
     candidates = data.get("candidates") or []
     if not candidates:
-        raise RuntimeError("Gemini workflow khong tra ve candidate.")
+        raise RuntimeError("Gemini workflow không trả về candidate.")
     parts = ((candidates[0].get("content") or {}).get("parts") or [])
     return "".join(str(part.get("text") or "") for part in parts).strip()
 
@@ -178,5 +178,5 @@ def _call_openai(api_key: str, model: str, prompt: str) -> str:
         timeout=180,
     )
     if response.status_code >= 400:
-        raise RuntimeError(f"OpenAI workflow loi {response.status_code}: {response.text[-700:]}")
+        raise RuntimeError(f"OpenAI workflow lỗi {response.status_code}: {response.text[-700:]}")
     return str(response.json()["choices"][0]["message"]["content"] or "").strip()

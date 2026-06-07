@@ -95,7 +95,7 @@ class ImageLightbox(QDialog):
         self.scene.setSceneRect(self.item.boundingRect())
         layout.addWidget(self.view, 1)
 
-        hint = QLabel("Cuon chuot de zoom | Giu chuot va keo | Esc hoac double-click de dong")
+        hint = QLabel("Cuộn chuột để zoom | Giữ chuột và kéo | Esc hoặc double-click để đóng")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet("color: #d1d5db; font-size: 13px; padding: 6px;")
         layout.addWidget(hint)
@@ -162,7 +162,7 @@ class ClickablePreview(QLabel):
         super().__init__(parent)
         self.image_path = image_path
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("Bam de xem anh lon")
+        self.setToolTip("Bấm để xem ảnh lớn")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.image_path:
@@ -187,7 +187,7 @@ class VisualPipelineWindow(QMainWindow):
 
         form = QFormLayout()
         self.title_input = QLineEdit()
-        self.title_input.setPlaceholderText("Ten project")
+        self.title_input.setPlaceholderText("Tên project")
         self.language_combo = QComboBox()
         for code, label in LANGUAGES.items():
             self.language_combo.addItem(label, code)
@@ -215,11 +215,11 @@ class VisualPipelineWindow(QMainWindow):
         self.keyword_provider_combo.setCurrentIndex(max(0, provider_index))
         self.keyword_model_input = QLineEdit(str(self.settings.get("keyword_ai_model") or "gpt-4.1-mini"))
         self.gemini_model_input = QLineEdit(str(self.settings.get("gemini_keyword_model") or "gemini-2.5-flash"))
-        form.addRow("Ten project", self.title_input)
-        form.addRow("Ngon ngu voice", self.language_combo)
-        form.addRow("Giong voice", self.voice_combo)
-        form.addRow("Kieu doc", self.delivery_combo)
-        form.addRow("Toc do", self.speed_input)
+        form.addRow("Tên project", self.title_input)
+        form.addRow("Ngôn ngữ voice", self.language_combo)
+        form.addRow("Giọng voice", self.voice_combo)
+        form.addRow("Kiểu đọc", self.delivery_combo)
+        form.addRow("Tốc độ", self.speed_input)
         form.addRow("AI provider", self.keyword_provider_combo)
         form.addRow("Gemini API key", self.gemini_key_input)
         form.addRow("Gemini model", self.gemini_model_input)
@@ -230,7 +230,7 @@ class VisualPipelineWindow(QMainWindow):
         self.reload_voices()
 
         self.script_input = QTextEdit()
-        self.script_input.setPlaceholderText("B0: Dan script final vao day...")
+        self.script_input.setPlaceholderText("B0: Dán script final vào đây...")
         script_workflow_splitter = QSplitter(Qt.Orientation.Vertical)
         script_workflow_splitter.addWidget(self.script_input)
         script_workflow_splitter.addWidget(self._build_workflow_panel())
@@ -240,15 +240,15 @@ class VisualPipelineWindow(QMainWindow):
         layout.addWidget(script_workflow_splitter, 3)
 
         buttons = QHBoxLayout()
-        self.create_button = QPushButton("B0 Tao project")
-        self.load_button = QPushButton("Mo project cu")
-        self.voice_button = QPushButton("B1 Tao Magic Voice")
-        self.analyze_button = QPushButton("B2 Tu chia canh theo SRT + keyword")
-        self.search_all_button = QPushButton("B3 Tim anh SportsDB/Google")
-        self.retry_button = QPushButton("Tim lai dong dang chon")
-        self.approve_button = QPushButton("Duyet / bo duyet")
-        self.capcut_button = QPushButton("B4 Xuat project CapCut")
-        self.open_button = QPushButton("Mo thu muc project")
+        self.create_button = QPushButton("B0 Tạo project")
+        self.load_button = QPushButton("Mở project cũ")
+        self.voice_button = QPushButton("B1 Tạo Magic Voice")
+        self.analyze_button = QPushButton("B2 Tự chia cảnh theo SRT + keyword")
+        self.search_all_button = QPushButton("B3 Tìm ảnh SportsDB/Google")
+        self.retry_button = QPushButton("Tìm lại dòng đang chọn")
+        self.approve_button = QPushButton("Duyệt / bỏ duyệt")
+        self.capcut_button = QPushButton("B4 Xuất project CapCut")
+        self.open_button = QPushButton("Mở thư mục project")
         for button in (
             self.create_button, self.load_button, self.voice_button, self.analyze_button, self.search_all_button,
             self.retry_button, self.approve_button, self.capcut_button, self.open_button,
@@ -258,7 +258,7 @@ class VisualPipelineWindow(QMainWindow):
 
         self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels(
-            ["Preview", "Asset", "Cau", "Start", "End", "Ly do tach", "Keyword", "Trang thai", "File", "Nguon"]
+            ["Preview", "Asset", "Câu", "Start", "End", "Lý do tách", "Keyword", "Trạng thái", "File", "Nguồn"]
         )
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setColumnWidth(0, 150)
@@ -283,20 +283,20 @@ class VisualPipelineWindow(QMainWindow):
         self.open_button.clicked.connect(self.open_project)
 
     def _build_workflow_panel(self) -> QWidget:
-        group = QGroupBox("Tao script bang AI Workflow (tuy chon, ket qua se do vao o script phia tren)")
+        group = QGroupBox("Tạo script bằng AI Workflow (tùy chọn, kết quả sẽ đổ vào ô script phía trên)")
         layout = QVBoxLayout(group)
 
         self.workflow_input = QTextEdit()
         self.workflow_input.setPlaceholderText(
-            "Nhap chu de, yeu cau, du lieu tho hoac thong tin nguon. "
-            "Co the dung {input} va {previous} trong prompt tung buoc."
+            "Nhập chủ đề, yêu cầu, dữ liệu thô hoặc thông tin nguồn. "
+            "Có thể dùng {input} và {previous} trong prompt từng bước."
         )
         self.workflow_input.setPlainText(str(self.settings.get("script_workflow_input") or ""))
         self.workflow_input.setMaximumHeight(90)
         layout.addWidget(self.workflow_input)
 
         self.workflow_table = QTableWidget(0, 3)
-        self.workflow_table.setHorizontalHeaderLabels(["Bat", "Ten buoc", "Prompt / yeu cau xu ly"])
+        self.workflow_table.setHorizontalHeaderLabels(["Bật", "Tên bước", "Prompt / yêu cầu xử lý"])
         self.workflow_table.setColumnWidth(0, 55)
         self.workflow_table.setColumnWidth(1, 180)
         self.workflow_table.setColumnWidth(2, 850)
@@ -304,12 +304,12 @@ class VisualPipelineWindow(QMainWindow):
         layout.addWidget(self.workflow_table)
 
         buttons = QHBoxLayout()
-        self.workflow_add_button = QPushButton("+ Them buoc")
-        self.workflow_remove_button = QPushButton("- Xoa buoc")
-        self.workflow_up_button = QPushButton("Len")
-        self.workflow_down_button = QPushButton("Xuong")
-        self.workflow_reset_button = QPushButton("Workflow mau")
-        self.workflow_run_button = QPushButton("Chay Workflow -> Script final")
+        self.workflow_add_button = QPushButton("+ Thêm bước")
+        self.workflow_remove_button = QPushButton("- Xóa bước")
+        self.workflow_up_button = QPushButton("Lên")
+        self.workflow_down_button = QPushButton("Xuống")
+        self.workflow_reset_button = QPushButton("Workflow mẫu")
+        self.workflow_run_button = QPushButton("Chạy Workflow → Script final")
         for button in (
             self.workflow_add_button,
             self.workflow_remove_button,
@@ -342,7 +342,7 @@ class VisualPipelineWindow(QMainWindow):
             steps.append(
                 {
                     "enabled": enabled_item is not None and enabled_item.checkState() == Qt.CheckState.Checked,
-                    "name": name_item.text().strip() if name_item else f"Buoc {row + 1}",
+                    "name": name_item.text().strip() if name_item else f"Bước {row + 1}",
                     "prompt": prompt_item.text().strip() if prompt_item else "",
                 }
             )
@@ -356,8 +356,8 @@ class VisualPipelineWindow(QMainWindow):
     def _append_workflow_row(self, step: dict | None = None):
         step = step or {
             "enabled": True,
-            "name": f"Buoc {self.workflow_table.rowCount() + 1}",
-            "prompt": "Mo ta ro dau ra ban muon AI tao o buoc nay.",
+            "name": f"Bước {self.workflow_table.rowCount() + 1}",
+            "prompt": "Mô tả rõ đầu ra bạn muốn AI tạo ở bước này.",
         }
         row = self.workflow_table.rowCount()
         self.workflow_table.insertRow(row)
@@ -365,7 +365,7 @@ class VisualPipelineWindow(QMainWindow):
         enabled.setFlags(enabled.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         enabled.setCheckState(Qt.CheckState.Checked if step.get("enabled", True) else Qt.CheckState.Unchecked)
         self.workflow_table.setItem(row, 0, enabled)
-        self.workflow_table.setItem(row, 1, QTableWidgetItem(str(step.get("name") or f"Buoc {row + 1}")))
+        self.workflow_table.setItem(row, 1, QTableWidgetItem(str(step.get("name") or f"Bước {row + 1}")))
         self.workflow_table.setItem(row, 2, QTableWidgetItem(str(step.get("prompt") or "")))
         self.workflow_table.setRowHeight(row, 52)
 
@@ -395,10 +395,10 @@ class VisualPipelineWindow(QMainWindow):
         source_input = self.workflow_input.toPlainText().strip()
         steps = self.workflow_steps()
         if not source_input:
-            QMessageBox.warning(self, "Thieu dau vao", "Hay nhap chu de/du lieu cho workflow.")
+            QMessageBox.warning(self, "Thiếu đầu vào", "Hãy nhập chủ đề/dữ liệu cho workflow.")
             return
         if not steps:
-            QMessageBox.warning(self, "Thieu workflow", "Hay them it nhat mot buoc workflow.")
+            QMessageBox.warning(self, "Thiếu workflow", "Hãy thêm ít nhất một bước workflow.")
             return
         self.save_api_settings()
         settings = dict(self.settings)
@@ -409,8 +409,8 @@ class VisualPipelineWindow(QMainWindow):
 
     def _workflow_done(self, script: str):
         self.script_input.setPlainText(str(script or "").strip())
-        self.log("Workflow AI: da do ket qua cuoi vao o script.")
-        QMessageBox.information(self, "Workflow xong", "Da tao script final. Kiem tra lai roi bam B0/B1.")
+        self.log("Workflow AI: đã đổ kết quả cuối vào ô script.")
+        QMessageBox.information(self, "Workflow xong", "Đã tạo script final. Kiểm tra lại rồi bấm B0/B1.")
 
     def log(self, message: str):
         self.log_box.append(str(message))
@@ -443,12 +443,12 @@ class VisualPipelineWindow(QMainWindow):
     def create_project(self):
         script = self.script_input.toPlainText().strip()
         if not script:
-            QMessageBox.warning(self, "Thieu script", "Hay dan script final.")
+            QMessageBox.warning(self, "Thiếu script", "Hãy dán script final.")
             return
         self.save_api_settings()
         projects_dir = Path(str(self.settings.get("projects_dir") or "Projects"))
         self.project = create_visual_project(projects_dir, self.title_input.text(), script)
-        self.log(f"Da tao project: {self.project}")
+        self.log(f"Đã tạo project: {self.project}")
 
     def load_project(self):
         projects_dir = str(self.settings.get("projects_dir") or "")
@@ -458,35 +458,35 @@ class VisualPipelineWindow(QMainWindow):
         project = Path(selected)
         script_path = project / "scripts" / "script_final.txt"
         if not script_path.exists():
-            QMessageBox.warning(self, "Khong dung project", "Khong tim thay scripts/script_final.txt.")
+            QMessageBox.warning(self, "Không đúng project", "Không tìm thấy scripts/script_final.txt.")
             return
         self.project = project
         self.title_input.setText(project.name)
         self.script_input.setPlainText(script_path.read_text(encoding="utf-8", errors="replace"))
         self.refresh_table()
-        self.log(f"Da mo project: {project}")
+        self.log(f"Đã mở project: {project}")
 
     def _ensure_project(self) -> bool:
         if self.project:
             return True
-        QMessageBox.warning(self, "Chua co project", "Hay bam B0 Tao project truoc.")
+        QMessageBox.warning(self, "Chưa có project", "Hãy bấm B0 Tạo project trước.")
         return False
 
     def _run(self, callback, on_done=None):
         if self.worker and self.worker.isRunning():
-            QMessageBox.information(self, "Dang chay", "Mot tac vu khac dang chay.")
+            QMessageBox.information(self, "Đang chạy", "Một tác vụ khác đang chạy.")
             return
         self.worker = TaskThread(callback, self)
         self.worker.log.connect(self.log)
         self.worker.failed.connect(self._task_failed)
-        self.worker.done.connect(on_done or (lambda result: self.log("Da xong.")))
+        self.worker.done.connect(on_done or (lambda result: self.log("Đã xong.")))
         self.worker.finished.connect(self._task_finished)
         self._set_task_buttons_enabled(False)
         self.worker.start()
 
     def _task_failed(self, error: str):
-        QMessageBox.critical(self, "Loi", error)
-        self.log(f"LOI: {error}")
+        QMessageBox.critical(self, "Lỗi", error)
+        self.log(f"LỖI: {error}")
 
     def _task_finished(self):
         self._set_task_buttons_enabled(True)
@@ -507,7 +507,7 @@ class VisualPipelineWindow(QMainWindow):
             button.setEnabled(enabled)
         if hasattr(self, "workflow_run_button"):
             self.workflow_run_button.setEnabled(enabled)
-        self.retry_button.setText("Tim lai dong dang chon" if enabled else "Dang xu ly...")
+        self.retry_button.setText("Tìm lại dòng đang chọn" if enabled else "Đang xử lý...")
 
     def create_voice(self):
         if not self._ensure_project():
@@ -515,13 +515,13 @@ class VisualPipelineWindow(QMainWindow):
         project = self.project
         current_script = self.script_input.toPlainText().strip()
         if not current_script:
-            QMessageBox.warning(self, "Thieu script", "O script dang rong.")
+            QMessageBox.warning(self, "Thiếu script", "Ô script đang rỗng.")
             return
         script_path = project / "scripts" / "script_final.txt"
         previous_script = script_path.read_text(encoding="utf-8", errors="replace").strip() if script_path.exists() else ""
         if current_script != previous_script:
             script_path.write_text(current_script + "\n", encoding="utf-8")
-            self.log("B1: da dong bo script hien tai vao project.")
+            self.log("B1: đã đồng bộ script hiện tại vào project.")
         self._run(lambda log: generate_voice(project, self.settings, log), lambda path: self.log(f"Voice: {path}"))
 
     def analyze_assets(self):
@@ -532,11 +532,11 @@ class VisualPipelineWindow(QMainWindow):
 
         def task(log):
             items = build_asset_manifest(project, self.settings, log=log)
-            log(f"Da tu chia {len(items)} canh theo Whisper SRT + ngu canh.")
+            log(f"Đã tự chia {len(items)} cảnh theo Whisper SRT + ngữ cảnh.")
             items = optimize_asset_keywords_with_ai(project, self.settings, log=log)
             return items
 
-        self._run(task, lambda items: (self.refresh_table(), self.log(f"Da tao keyword cho {len(items)} canh.")))
+        self._run(task, lambda items: (self.refresh_table(), self.log(f"Đã tạo keyword cho {len(items)} cảnh.")))
 
     def search_all(self):
         if not self._ensure_project():
@@ -563,13 +563,13 @@ class VisualPipelineWindow(QMainWindow):
             return
         self.save_api_settings()
         project = self.project
-        asset_id = self.table.item(row, 1).text() if self.table.item(row, 1) else f"dong {row + 1}"
-        self.log(f"{asset_id}: bat dau tim lai anh...")
+        asset_id = self.table.item(row, 1).text() if self.table.item(row, 1) else f"dòng {row + 1}"
+        self.log(f"{asset_id}: bắt đầu tìm lại ảnh...")
 
         def task(log):
             items = load_manifest(project)
             if row >= len(items):
-                raise RuntimeError("Dong asset da thay doi. Hay chon lai.")
+                raise RuntimeError("Dòng asset đã thay đổi. Hãy chọn lại.")
             items[row]["status"] = "pending"
             items[row] = search_and_download_asset(project, items[row], log, settings=self.settings)
             save_manifest(project, items)
@@ -582,11 +582,11 @@ class VisualPipelineWindow(QMainWindow):
         status = str((item or {}).get("status") or "")
         error = str((item or {}).get("error") or "")
         if error and status == "downloaded":
-            self.log(f"{item.get('asset_id')}: khong co anh moi, dang giu anh cu. {error}")
+            self.log(f"{item.get('asset_id')}: không có ảnh mới, đang giữ ảnh cũ. {error}")
         elif status == "downloaded":
-            self.log(f"{item.get('asset_id')}: da tim lai xong.")
+            self.log(f"{item.get('asset_id')}: đã tìm lại xong.")
         else:
-            self.log(f"{item.get('asset_id')}: tim lai khong thanh cong. {error}")
+            self.log(f"{item.get('asset_id')}: tìm lại không thành công. {error}")
 
     def toggle_approve(self):
         if not self._ensure_project():
@@ -633,7 +633,7 @@ class VisualPipelineWindow(QMainWindow):
     def open_image_lightbox(self, image_path: str):
         path = Path(str(image_path or ""))
         if not path.exists():
-            QMessageBox.warning(self, "Khong thay anh", str(path))
+            QMessageBox.warning(self, "Không thấy ảnh", str(path))
             return
         ImageLightbox(path, self).exec()
 
@@ -648,10 +648,10 @@ class VisualPipelineWindow(QMainWindow):
         )
 
     def _capcut_done(self, path: Path):
-        self.log(f"Da xuat CapCut: {path}")
+        self.log(f"Đã xuất CapCut: {path}")
         opened = self.open_capcut_app()
-        note = "Da mo CapCut." if opened else "Khong tu mo duoc CapCut, hay mo thu cong."
-        QMessageBox.information(self, "Da xuat", f"Project da nam trong CapCut:\n{path}\n\n{note}\nNeu chua thay project, dong han CapCut roi mo lai.")
+        note = "Đã mở CapCut." if opened else "Không tự mở được CapCut, hãy mở thủ công."
+        QMessageBox.information(self, "Đã xuất", f"Project đã nằm trong CapCut:\n{path}\n\n{note}\nNếu chưa thấy project, đóng hẳn CapCut rồi mở lại.")
 
     def open_capcut_app(self) -> bool:
         configured = str(self.settings.get("capcut_exe_path") or "").strip()
@@ -665,20 +665,20 @@ class VisualPipelineWindow(QMainWindow):
             if candidate.exists():
                 try:
                     os.startfile(str(candidate))
-                    self.log(f"Da mo CapCut: {candidate}")
+                    self.log(f"Đã mở CapCut: {candidate}")
                     return True
                 except Exception as exc:
-                    self.log(f"Khong mo duoc CapCut qua {candidate}: {exc}")
+                    self.log(f"Không mở được CapCut qua {candidate}: {exc}")
         try:
             subprocess.Popen(
                 ["explorer.exe", "shell:AppsFolder\\d:.bytedance.capcut.apps.8.5.0.3590.capcut.exe"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            self.log("Da goi CapCut qua AppsFolder.")
+            self.log("Đã gọi CapCut qua AppsFolder.")
             return True
         except Exception as exc:
-            self.log(f"Khong mo duoc CapCut: {exc}")
+            self.log(f"Không mở được CapCut: {exc}")
             return False
 
     def open_project(self):

@@ -154,7 +154,7 @@ def refine_timing_with_whisper(
 
     audio_path = project / "voices" / "voice.wav"
     if not audio_path.exists():
-        raise FileNotFoundError(f"Khong tim thay voice de can timing: {audio_path}")
+        raise FileNotFoundError(f"Không tìm thấy voice để căn timing: {audio_path}")
 
     source_mtime = audio_path.stat().st_mtime_ns
     existing = read_json(timing_path, {})
@@ -166,7 +166,7 @@ def refine_timing_with_whisper(
         and existing.get("segments")
     ):
         if callable(log):
-            log("Whisper timing: dung lai ket qua da can theo voice.")
+            log("Whisper timing: dùng lại kết quả đã căn theo voice.")
         return existing
 
     raw_python = str(settings.get("text_to_voice_python") or "").strip()
@@ -200,7 +200,7 @@ def refine_timing_with_whisper(
         env["HF_HOME"] = hf_home
         env["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
     if callable(log):
-        log("Whisper timing: dang nghe lai toan bo voice va can timestamp...")
+        log("Whisper timing: đang nghe lại toàn bộ voice và căn timestamp...")
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -216,7 +216,7 @@ def refine_timing_with_whisper(
         raise RuntimeError(detail[-1400:] or "Whisper timing failed.")
     data = read_json(whisper_json, {})
     if not isinstance(data, dict) or not data.get("segments"):
-        raise RuntimeError("Whisper timing khong tao duoc segment.")
+        raise RuntimeError("Whisper timing không tạo được segment.")
     script_path = project / "scripts" / "script_final.txt"
     script = script_path.read_text(encoding="utf-8", errors="replace").strip()
     aligned_segments = _align_script_sentences_to_whisper(script, data)
@@ -231,7 +231,7 @@ def refine_timing_with_whisper(
     write_json(whisper_json, data)
     write_json(timing_path, data)
     if callable(log):
-        log(f"Whisper timing: da tao {len(data['segments'])} moc thoai chinh xac.")
+        log(f"Whisper timing: đã tạo {len(data['segments'])} mốc thoại chính xác.")
     return data
 
 
@@ -365,7 +365,7 @@ def load_timing(project: Path) -> dict:
     timing_path = project / "voices" / "voice.segments.json"
     data = read_json(timing_path, {})
     if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
-        raise FileNotFoundError(f"Khong tim thay timing voice: {timing_path}")
+        raise FileNotFoundError(f"Không tìm thấy timing voice: {timing_path}")
     return data
 
 
@@ -580,10 +580,10 @@ def build_asset_manifest(
         timing = refine_timing_with_whisper(project, settings, log=log)
     except Exception as exc:
         if callable(log):
-            log(f"Whisper timing loi, dung timing voice hien tai: {exc}")
+            log(f"Whisper timing lỗi, dùng timing voice hiện tại: {exc}")
     segments = normalize_voice_segments(timing)
     if not segments:
-        raise RuntimeError("Timing khong co cau thoai.")
+        raise RuntimeError("Timing không có câu thoại.")
     sentences = merge_segments_into_sentences(segments)
     split_mode = "semantic_srt_scenes"
     try:
@@ -591,7 +591,7 @@ def build_asset_manifest(
         split_mode = "gemini_semantic_srt_scenes"
     except Exception as exc:
         if callable(log):
-            log(f"Gemini chia canh loi, dung bo chia local: {exc}")
+            log(f"Gemini chia cảnh lỗi, dùng bộ chia local: {exc}")
         scenes = split_sentences_into_scenes(sentences)
         assets = [
             _manifest_item(index, scene["sentences"], scene["break_reason"])
@@ -749,9 +749,9 @@ def group_scenes_with_ai(
     provider = str(settings.get("keyword_ai_provider") or "auto").strip().lower()
     gemini_key = str(settings.get("gemini_api_key") or "").strip()
     if provider == "openai":
-        raise RuntimeError("Chia canh ngu nghia hien chi dung Gemini.")
+        raise RuntimeError("Chia cảnh ngữ nghĩa hiện chỉ dùng Gemini.")
     if not gemini_key:
-        raise RuntimeError("Chua co Gemini API key.")
+        raise RuntimeError("Chưa có Gemini API key.")
 
     script_path = project / "scripts" / "script_final.txt"
     script = script_path.read_text(encoding="utf-8", errors="replace").strip()
@@ -765,7 +765,7 @@ def group_scenes_with_ai(
         for item in sentences
     ]
     if callable(log):
-        log(f"Gemini scene: dang doc toan bo SRT va gom {len(sentences)} cau theo ngu canh...")
+        log(f"Gemini scene: đang đọc toàn bộ SRT và gộp {len(sentences)} câu theo ngữ cảnh...")
     rows = _call_scene_ai_gemini(
         gemini_key,
         str(settings.get("gemini_keyword_model") or "gemini-2.5-flash"),
@@ -807,7 +807,7 @@ def group_scenes_with_ai(
         item["keyword_source"] = "gemini_scene"
         assets.append(item)
     if callable(log):
-        log(f"Gemini scene: da gom thanh {len(assets)} canh.")
+        log(f"Gemini scene: đã gộp thành {len(assets)} cảnh.")
     return assets
 
 
@@ -922,13 +922,13 @@ def _call_scene_ai_gemini(
         if response.status_code not in {429, 500, 502, 503, 504}:
             break
     if response is None:
-        raise RuntimeError("Gemini scene API khong phan hoi.")
+        raise RuntimeError("Gemini scene API không phản hồi.")
     if response.status_code >= 400:
-        raise RuntimeError(f"Gemini scene API loi ({', '.join(errors)}): {response.text[-600:]}")
+        raise RuntimeError(f"Gemini scene API lỗi ({', '.join(errors)}): {response.text[-600:]}")
     data = response.json()
     candidates = data.get("candidates") or []
     if not candidates:
-        raise RuntimeError("Gemini scene API khong tra ve candidate.")
+        raise RuntimeError("Gemini scene API không trả về candidate.")
     parts = ((candidates[0].get("content") or {}).get("parts") or [])
     content = "".join(str(part.get("text") or "") for part in parts).strip()
     if content.startswith("```"):
@@ -937,7 +937,7 @@ def _call_scene_ai_gemini(
     parsed = json.loads(content)
     rows = parsed.get("scenes") if isinstance(parsed, dict) else parsed
     if not isinstance(rows, list):
-        raise RuntimeError("Gemini scene API khong tra ve scenes list.")
+        raise RuntimeError("Gemini scene API không trả về scenes list.")
     return rows
 
 
@@ -951,7 +951,7 @@ def _validate_scene_groups(
     result = []
     for row in rows:
         if not isinstance(row, dict):
-            raise RuntimeError("Gemini scene co dong khong hop le.")
+            raise RuntimeError("Gemini scene có dòng không hợp lệ.")
         indexes = row.get("sentence_indexes") if isinstance(row.get("sentence_indexes"), list) else []
         start_value = (
             row.get("sentence_start")
@@ -969,12 +969,12 @@ def _validate_scene_groups(
         start = int(start_value) if start_value is not None else 0
         end = int(end_value) if end_value is not None else 0
         if start < 1 or end < start or end > len(sentences):
-            raise RuntimeError(f"Gemini scene range khong hop le: {start}-{end}.")
+            raise RuntimeError(f"Gemini scene range không hợp lệ: {start}-{end}.")
         indexes = list(range(start, end + 1))
         used.extend(indexes)
         result.append((row, [by_index[index] for index in indexes]))
     if used != expected:
-        raise RuntimeError("Gemini scene khong bao phu dung tat ca cau SRT theo thu tu.")
+        raise RuntimeError("Gemini scene không bao phủ đúng tất cả câu SRT theo thứ tự.")
     return result
 
 
@@ -1031,7 +1031,7 @@ def optimize_asset_keywords_with_ai(
     api_key = openai_key if provider == "openai" else gemini_key
     if not api_key:
         if callable(log):
-            log("AI keyword: chua co API key, dung keyword local.")
+            log("AI keyword: chưa có API key, dùng keyword local.")
         return load_manifest(project)
 
     items = load_manifest(project)
@@ -1044,7 +1044,7 @@ def optimize_asset_keywords_with_ai(
         for item in items
     ):
         if callable(log):
-            log("AI keyword: Gemini da tao keyword ngay khi chia canh, khong goi lai API.")
+            log("AI keyword: Gemini đã tạo keyword ngay khi chia cảnh, không gọi lại API.")
         return items
     for item in items:
         item.setdefault("keyword_local", item.get("keyword") or "")
@@ -1061,17 +1061,17 @@ def optimize_asset_keywords_with_ai(
             for item in chunk
         ]
         if callable(log):
-            log(f"AI keyword: toi uu {start + 1}-{start + len(chunk)}/{len(items)}")
+            log(f"AI keyword: tối ưu {start + 1}-{start + len(chunk)}/{len(items)}")
         try:
             if provider == "gemini":
                 result = _call_keyword_ai_gemini(api_key, str(settings.get("gemini_keyword_model") or "gemini-2.5-flash"), payload)
             else:
                 if not api_key.startswith("sk-"):
-                    raise RuntimeError("OpenAI key phai bat dau bang sk-. Neu dung key AQ..., hay chon provider Gemini.")
+                    raise RuntimeError("OpenAI key phải bắt đầu bằng sk-. Nếu dùng key AQ..., hãy chọn provider Gemini.")
                 result = _call_keyword_ai_openai(api_key, str(settings.get("keyword_ai_model") or "gpt-4.1-mini"), payload)
         except Exception as exc:
             if callable(log):
-                log(f"AI keyword loi, giu keyword/query fallback noi bo: {exc}")
+                log(f"AI keyword lỗi, giữ keyword/query fallback nội bộ: {exc}")
             break
         by_id = {str(row.get("asset_id") or ""): row for row in result}
         for item in chunk:
@@ -1144,7 +1144,7 @@ def _parse_keyword_ai_json(content: str) -> list[dict]:
     parsed = json.loads(content)
     items = parsed.get("items") if isinstance(parsed, dict) else parsed
     if not isinstance(items, list):
-        raise RuntimeError("Keyword AI khong tra ve items list.")
+        raise RuntimeError("Keyword AI không trả về items list.")
     return items
 
 
@@ -1168,7 +1168,7 @@ def _call_keyword_ai_openai(api_key: str, model: str, scenes: list[dict]) -> lis
         timeout=90,
     )
     if response.status_code >= 400:
-        raise RuntimeError(f"OpenAI keyword API loi {response.status_code}: {response.text[-600:]}")
+        raise RuntimeError(f"OpenAI keyword API lỗi {response.status_code}: {response.text[-600:]}")
     data = response.json()
     content = data["choices"][0]["message"]["content"]
     return _parse_keyword_ai_json(content)
@@ -1200,13 +1200,13 @@ def _call_keyword_ai_gemini(api_key: str, model: str, scenes: list[dict]) -> lis
         if response.status_code not in {429, 500, 502, 503, 504}:
             break
     if response is None:
-        raise RuntimeError("Gemini keyword API khong phan hoi.")
+        raise RuntimeError("Gemini keyword API không phản hồi.")
     if response.status_code >= 400:
-        raise RuntimeError(f"Gemini keyword API loi ({', '.join(errors)}): {response.text[-600:]}")
+        raise RuntimeError(f"Gemini keyword API lỗi ({', '.join(errors)}): {response.text[-600:]}")
     data = response.json()
     candidates = data.get("candidates") or []
     if not candidates:
-        raise RuntimeError("Gemini keyword API khong tra ve candidate.")
+        raise RuntimeError("Gemini keyword API không trả về candidate.")
     parts = ((candidates[0].get("content") or {}).get("parts") or [])
     content = "".join(str(part.get("text") or "") for part in parts)
     return _parse_keyword_ai_json(content)
@@ -1322,7 +1322,7 @@ def _rank_images_with_gemini(
     enabled = bool(settings.get("image_ai_validation_enabled", True))
     if not enabled or not api_key:
         if enabled and log:
-            log(f"{item.get('asset_id')}: chua co Gemini API key, chi cham theo metadata.")
+            log(f"{item.get('asset_id')}: chưa có Gemini API key, chỉ chấm theo metadata.")
         return [(path, {"accepted": True, "score": 0, "reason": "metadata-only"}) for path in candidates]
 
     primary_model = str(settings.get("gemini_vision_model") or settings.get("gemini_keyword_model") or "gemini-2.5-flash")
@@ -1412,8 +1412,8 @@ def _rank_images_with_gemini(
         if response.status_code not in {429, 500, 502, 503, 504}:
             break
     if response is None or response.status_code >= 400:
-        detail = response.text[-500:] if response is not None else "khong co response"
-        raise RuntimeError(f"Gemini Vision khong kha dung ({', '.join(errors)}): {detail}")
+        detail = response.text[-500:] if response is not None else "không có response"
+        raise RuntimeError(f"Gemini Vision không khả dụng ({', '.join(errors)}): {detail}")
     data = response.json()
     response_parts = ((((data.get("candidates") or [{}])[0].get("content") or {}).get("parts")) or [])
     content = "".join(str(part.get("text") or "") for part in response_parts)
@@ -1431,7 +1431,7 @@ def _rank_images_with_gemini(
         if "ytimg.com" in metadata_text or "youtube" in metadata_text:
             accepted = False
             score = min(score, 20)
-            row["reason"] = "YouTube thumbnail/graphic bi cam."
+            row["reason"] = "YouTube thumbnail/graphic bị chặn."
         if required_person:
             required_tokens = [
                 token for token in _ascii_words(required_person)
@@ -1443,7 +1443,7 @@ def _rank_images_with_gemini(
                 accepted = False
                 score = min(score, 40)
                 row["reason"] = (
-                    f"Khong nhin thay dung nguoi bat buoc {required_person}. "
+                    f"Không nhìn thấy đúng người bắt buộc {required_person}. "
                     f"{row.get('reason') or ''}"
                 ).strip()
         decision = {
@@ -1455,8 +1455,8 @@ def _rank_images_with_gemini(
         }
         write_json(_vision_sidecar(path), decision)
         if log:
-            state = "dat" if accepted else "loai"
-            log(f"{item.get('asset_id')}: Gemini Vision {state} anh {index} ({score}/100) - {decision['reason']}")
+            state = "đạt" if accepted else "loại"
+            log(f"{item.get('asset_id')}: Gemini Vision {state} ảnh {index} ({score}/100) - {decision['reason']}")
         decisions.append((path, decision))
     decisions.sort(key=lambda value: int(value[1].get("score") or 0), reverse=True)
     return [value for value in decisions if value[1].get("accepted")]
@@ -1504,12 +1504,12 @@ def _crawled_image_rejection_summary(folder: Path, settings: dict | None = None)
         if len(samples) < 4:
             samples.append(f"{width}x{height}={ratio:.3f}")
     if total <= 0:
-        return "khong tai duoc file anh nao"
-    parts = [f"{total} anh"]
+        return "không tải được file ảnh nào"
+    parts = [f"{total} ảnh"]
     if wrong_ratio:
-        parts.append(f"{wrong_ratio} sai ti le 16:9")
+        parts.append(f"{wrong_ratio} sai tỉ lệ 16:9")
     if small:
-        parts.append(f"{small} qua nho")
+        parts.append(f"{small} quá nhỏ")
     if samples:
         parts.append("mau " + ", ".join(samples))
     return "; ".join(parts)
@@ -1522,7 +1522,7 @@ def _enhance_image_without_crop(source: Path, target: Path, settings: dict | Non
     with Image.open(source) as image:
         image = image.convert("RGB")
         if not _is_target_aspect(int(image.width), int(image.height), settings):
-            raise RuntimeError(f"Anh khong dung 16:9: {image.width}x{image.height}")
+            raise RuntimeError(f"Ảnh không đúng 16:9: {image.width}x{image.height}")
         target_width = int(options["target_width"])
         target_height = int(options["target_height"])
         target_ratio = target_width / target_height
@@ -1976,7 +1976,7 @@ def crawl_image_candidates(
         if candidates:
             ranked = _rank_images_with_gemini(candidates, item, settings, log=log)
             if not ranked:
-                errors.append(f"{source_name}: Gemini Vision loai tat ca {len(candidates)} anh")
+                errors.append(f"{source_name}: Gemini Vision loại tất cả {len(candidates)} ảnh")
                 continue
             candidate, vision_decision = ranked[0]
             metadata_path = candidate.with_suffix(candidate.suffix + ".json")
@@ -1984,8 +1984,8 @@ def crawl_image_candidates(
             metadata["vision"] = vision_decision
             return candidate, len(candidates), f"{source_name}: {query_text}", metadata
         rejection_summary = _crawled_image_rejection_summary(source_dir, settings=settings)
-        errors.append(f"{source_name} tai {downloaded} file nhung khong co anh 16:9 hop le ({rejection_summary})")
-    raise RuntimeError("Khong tim duoc anh moi. " + "; ".join(errors[-3:]))
+        errors.append(f"{source_name} tải {downloaded} file nhưng không có ảnh 16:9 hợp lệ ({rejection_summary})")
+    raise RuntimeError("Không tìm được ảnh mới. " + "; ".join(errors[-3:]))
 
 
 def search_and_download_asset(
@@ -2026,8 +2026,8 @@ def search_and_download_asset(
         item["rejected_urls"] = sorted(rejected_urls)
         item["rejected_current_path"] = str(item.get("local_path") or "")
         log(
-            f"{item['asset_id']}: da gan co anh cu "
-            f"({len(rejected_dhashes)} perceptual hash, {len(rejected_urls)} URL bi cam)."
+            f"{item['asset_id']}: đã gắn cờ ảnh cũ "
+            f"({len(rejected_dhashes)} perceptual hash, {len(rejected_urls)} URL bị chặn)."
         )
     if _is_match_photography_item(item):
         concise_keyword = _concise_match_query(str(item.get("keyword") or ""), item)
@@ -2082,7 +2082,7 @@ def search_and_download_asset(
                 "error": "",
             }
         )
-        log(f"{item['asset_id']}: tai {candidate_count} anh 16:9 bang {matched_query}, chon {target.name} ({width}x{height})")
+        log(f"{item['asset_id']}: tải {candidate_count} ảnh 16:9 bằng {matched_query}, chọn {target.name} ({width}x{height})")
     except Exception as exc:
         old_path_text = str(item.get("local_path") or "").strip()
         old_path = Path(old_path_text) if old_path_text else None
@@ -2127,10 +2127,10 @@ def search_and_download_asset(
                     "image_height": height,
                     "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
                     "reused_from_asset": str(existing.get("asset_id") or ""),
-                    "error": f"Khong co anh 16:9 moi; da dung lai anh dung tran. {exc}",
+                    "error": f"Không có ảnh 16:9 mới; đã dùng lại ảnh dùng tràn. {exc}",
                 }
             )
-            log(f"{item['asset_id']}: khong co anh 16:9 moi, dung lai anh dung tran tu {existing.get('asset_id')}.")
+            log(f"{item['asset_id']}: không có ảnh 16:9 mới, dùng lại ảnh dùng tràn từ {existing.get('asset_id')}.")
             return item
         item.update(
             {
@@ -2189,8 +2189,8 @@ def _find_capcut_template(capcut_root: Path) -> Path:
             ):
                 return candidate
     raise FileNotFoundError(
-        "Khong tim thay draft CapCut hop le trong CapCut hoac Projects. "
-        "Hay tao mot project CapCut rong co 1 anh va 1 audio de lam template."
+        "Không tìm thấy draft CapCut hợp lệ trong CapCut hoặc Projects. "
+        "Hãy tạo một project CapCut rỗng có 1 ảnh và 1 audio để làm template."
     )
 
 
@@ -2292,7 +2292,7 @@ def _copy_capcut_template_snapshot(template: Path, portable: Path) -> None:
         except (FileNotFoundError, shutil.Error, OSError) as exc:
             last_error = exc
             time.sleep(0.5 * (attempt + 1))
-    raise RuntimeError(f"Khong copy duoc draft CapCut mau sau 4 lan thu: {last_error}")
+    raise RuntimeError(f"Không copy được draft CapCut mẫu sau 4 lần thử: {last_error}")
 
 
 def _slash_path(path: Path) -> str:
@@ -2384,10 +2384,10 @@ def _clone_extra_material_refs(segment: dict, source_index: dict[str, tuple[str,
 def export_capcut_project(project: Path, title: str, install_to_capcut: bool = True) -> Path:
     items = [item for item in load_manifest(project) if Path(str(item.get("local_path") or "")).exists()]
     if not items:
-        raise RuntimeError("Chua co asset da tai de dung CapCut.")
+        raise RuntimeError("Chưa có asset đã tải để dùng CapCut.")
     voice = project / "voices" / "voice.wav"
     if not voice.exists():
-        raise FileNotFoundError(f"Thieu voice: {voice}")
+        raise FileNotFoundError(f"Thiếu voice: {voice}")
 
     capcut_root = _capcut_root()
     template = _find_capcut_template(capcut_root)

@@ -48,7 +48,7 @@ def resolve_voice(root: Path, voice: str, language: str) -> str | None:
     for path in candidates:
         if path.exists():
             return str(path)
-    raise FileNotFoundError(f"Khong thay voice Chatterbox: {clean}")
+    raise FileNotFoundError(f"Không thấy voice Chatterbox: {clean}")
 
 
 def write_outputs(output_path: Path, chunks: list[str], wavs: list, sample_rate: int, metadata: dict) -> None:
@@ -56,7 +56,7 @@ def write_outputs(output_path: Path, chunks: list[str], wavs: list, sample_rate:
     import torchaudio
 
     if not wavs:
-        raise RuntimeError("Chatterbox khong tao duoc audio.")
+        raise RuntimeError("Chatterbox không tạo được audio.")
     normalized = []
     segments = []
     cursor = 0.0
@@ -119,7 +119,7 @@ def main() -> int:
     text = sanitize_text_for_tts(args.input.read_text(encoding="utf-8"))
     chunks = smart_chunk_text(text, max_words=max(12, min(int(args.max_words), 60)))
     if not chunks:
-        raise ValueError("Script rong.")
+        raise ValueError("Script rỗng.")
 
     language = str(args.lang or "en").lower()
     voice_path = resolve_voice(root, args.voice, language)
@@ -135,7 +135,7 @@ def main() -> int:
     if language == "en":
         model = model_manager.get_tts_model()
         if model is None:
-            raise RuntimeError("Khong load duoc Chatterbox TTS model.")
+            raise RuntimeError("Không load được Chatterbox TTS model.")
 
         def generate_chunk(chunk: str):
             return model.generate(
@@ -151,7 +151,7 @@ def main() -> int:
     else:
         model = model_manager.get_mtl_model()
         if model is None:
-            raise RuntimeError("Khong load duoc Chatterbox Multilingual model.")
+            raise RuntimeError("Không load được Chatterbox Multilingual model.")
 
         def generate_chunk(chunk: str):
             return model.generate(

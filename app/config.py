@@ -42,7 +42,7 @@ DEFAULT_SETTINGS = {
     "script_workflow_steps": [
         {
             "enabled": True,
-            "name": "Phan tich de tai",
+            "name": "Phân tích đề tài",
             "prompt": (
                 "Analyze the topic/source. Identify the audience, angle, key facts, named entities, "
                 "timeline, and the strongest visual moments. Do not write the final script yet."
@@ -50,7 +50,7 @@ DEFAULT_SETTINGS = {
         },
         {
             "enabled": True,
-            "name": "Lap dan y",
+            "name": "Lập dàn ý",
             "prompt": (
                 "Turn the analysis into a coherent video outline with a strong opening, logical body, "
                 "specific events, and a concise conclusion. Remove repetition."
@@ -58,7 +58,7 @@ DEFAULT_SETTINGS = {
         },
         {
             "enabled": True,
-            "name": "Viet script final",
+            "name": "Viết script final",
             "prompt": (
                 "Write the final voice-over script in natural English. Use complete spoken sentences, "
                 "keep factual names and events specific, and output only the narration. Do not include "

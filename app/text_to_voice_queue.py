@@ -28,13 +28,13 @@ LANGUAGES = {
 VOICES = {"en": ["Default"], "vi": ["Default"]}
 
 DELIVERY_STYLES = {
-    "plain": "Mac dinh",
-    "natural": "Tu nhien",
-    "expressive": "Nhan nhe",
-    "dramatic": "Dien cam",
+    "plain": "Mặc định",
+    "natural": "Tự nhiên",
+    "expressive": "Nhẹ nhàng",
+    "dramatic": "Diễn cảm",
     "heavy_drama": "Heavy Drama",
-    "storytelling": "Ke chuyen",
-    "calm": "Diem tinh",
+    "storytelling": "Kể chuyện",
+    "calm": "Điềm tĩnh",
 }
 
 
@@ -77,12 +77,12 @@ def validate_text_to_voice(settings: dict) -> tuple[Path, Path]:
     root = text_to_voice_root(settings)
     python = text_to_voice_python(settings, root)
     if not root.exists():
-        raise FileNotFoundError(f"Khong thay thu muc Text to Voice: {root}")
+        raise FileNotFoundError(f"Không thấy thư mục Text to Voice: {root}")
     if not (root / "modules" / "model_manager.py").exists():
-        raise FileNotFoundError(f"Khong thay Chatterbox modules trong: {root}")
+        raise FileNotFoundError(f"Không thấy Chatterbox modules trong: {root}")
     if not python.exists():
         raise FileNotFoundError(
-            f"Khong thay Python venv cua Chatterbox: {python}. Hay chay 1_CAI_DAT.bat."
+            f"Không thấy Python venv của Chatterbox: {python}. Hãy chạy 1_CAI_DAT.bat."
         )
     return root, python
 
@@ -144,7 +144,7 @@ def ensure_text_to_voice_server(settings: dict, log: Callable[[str], None] | Non
     url = text_to_voice_url(settings)
     if is_text_to_voice_server_ready(settings):
         if callable(log):
-            log(f"Text to Voice UI da san sang: {url}")
+            log(f"Text to Voice UI đã sẵn sàng: {url}")
         return url
 
     log_path = root / "ui-server.log"
@@ -158,12 +158,12 @@ def ensure_text_to_voice_server(settings: dict, log: Callable[[str], None] | Non
         str(int(settings.get("text_to_voice_port") or 7860)),
     ]
     if callable(log):
-        log(f"Khoi dong Text to Voice UI: {url}")
+        log(f"Khởi động Text to Voice UI: {url}")
     with log_path.open("a", encoding="utf-8") as stdout, err_path.open("a", encoding="utf-8") as stderr:
         subprocess.Popen(cmd, cwd=str(root), stdout=stdout, stderr=stderr, **_win_hidden_kwargs())
 
     if not wait_for_text_to_voice_server(settings, timeout_seconds=45):
-        raise RuntimeError(f"Text to Voice UI chua san sang o {url}. Xem log: {err_path}")
+        raise RuntimeError(f"Text to Voice UI chưa sẵn sàng ở {url}. Xem log: {err_path}")
     return url
 
 
@@ -177,7 +177,7 @@ class TextToVoiceRunner:
 
     def start(self) -> None:
         self.root, self.python = validate_text_to_voice(self.settings)
-        self.log(f"Chatterbox TTS da san sang: {self.root}")
+        self.log(f"Chatterbox TTS đã sẵn sàng: {self.root}")
 
     def close(self) -> None:
         return None
@@ -186,7 +186,7 @@ class TextToVoiceRunner:
         text_file = Path(text_path)
         text = text_file.read_text(encoding="utf-8").strip()
         if not text:
-            raise ValueError("Text chapter rong.")
+            raise ValueError("Text chapter rỗng.")
 
         output = Path(output_path)
         if output.suffix.lower() != ".wav":
@@ -194,18 +194,18 @@ class TextToVoiceRunner:
         output.parent.mkdir(parents=True, exist_ok=True)
 
         label = f"chapter_{int(chapter_index):02d}"
-        self.log(f"Text to Voice {label}: tao audio ({len(text)} ky tu)")
+        self.log(f"Text to Voice {label}: tạo audio ({len(text)} ký tự)")
         return self.submit_file(text_file, label, output)
 
     def submit_file(self, text_path: Path, label: str, output_path: Path) -> str:
         if self.root is None or self.python is None:
-            raise RuntimeError("Text to Voice runner chua start.")
+            raise RuntimeError("Text to Voice runner chưa start.")
         if self.stop_check():
             raise RuntimeError("Stopped.")
 
         cache_key = self._cache_key(text_path)
         if self._can_reuse_output(output_path, cache_key):
-            self.log(f"Text to Voice {label}: dung lai audio da co {output_path.name}")
+            self.log(f"Text to Voice {label}: dùng lại audio đã có {output_path.name}")
             return str(output_path)
 
         cli_path = Path(__file__).with_name("chatterbox_voice_cli.py")
@@ -269,9 +269,9 @@ class TextToVoiceRunner:
                     raise RuntimeError("Stopped.")
                 if time.time() > deadline:
                     process.kill()
-                    raise RuntimeError(f"Timeout tao Text to Voice: {label}")
+                    raise RuntimeError(f"Timeout tạo Text to Voice: {label}")
                 if time.time() - last_log >= 20:
-                    self.log(f"Text to Voice {label}: dang tao audio...")
+                    self.log(f"Text to Voice {label}: đang tạo audio...")
                     last_log = time.time()
                 time.sleep(0.5)
         finally:
@@ -282,16 +282,16 @@ class TextToVoiceRunner:
         stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
         if process.returncode != 0:
             detail = (stderr or stdout or "").strip()
-            raise RuntimeError(detail[-1400:] or f"Text to Voice failed voi exit code {process.returncode}")
+            raise RuntimeError(detail[-1400:] or f"Text to Voice thất bại với exit code {process.returncode}")
 
         result = self._parse_result(stdout)
         final_path = Path(str(result.get("output") or output_path))
         if not final_path.exists():
-            raise RuntimeError(f"Text to Voice khong tao file output: {final_path}")
+            raise RuntimeError(f"Text to Voice không tạo file output: {final_path}")
         parts = int(result.get("parts") or 1)
-        suffix = f" ({parts} phan)" if parts > 1 else ""
+        suffix = f" ({parts} phần)" if parts > 1 else ""
         self._write_cache_meta(final_path, cache_key)
-        self.log(f"Text to Voice {label}: da luu audio {final_path.name}{suffix}")
+        self.log(f"Text to Voice {label}: đã lưu audio {final_path.name}{suffix}")
         return str(final_path)
 
     @staticmethod
@@ -415,7 +415,7 @@ class TextToVoiceQueue:
                     if not started:
                         runner.start()
                         started = True
-                    self.status(chapter_index, "running", f"Dang tao Text to Voice worker {worker_index}")
+                    self.status(chapter_index, "running", f"Đang tạo Text to Voice worker {worker_index}")
                     detail = runner.submit_chapter(
                         chapter_index,
                         str(job.get("text_path") or ""),
@@ -424,7 +424,7 @@ class TextToVoiceQueue:
                     self.status(chapter_index, "done", detail)
                 except Exception as exc:
                     self.status(chapter_index, "error", str(exc))
-                    self.log(f"Text to Voice loi chapter {chapter_index:02d}: {exc}")
+                    self.log(f"Text to Voice lỗi chapter {chapter_index:02d}: {exc}")
         finally:
             if started:
                 runner.close()

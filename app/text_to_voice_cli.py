@@ -26,10 +26,10 @@ def parse_args() -> argparse.Namespace:
 def load_kokoro_app(ttv_root: Path):
     app_path = ttv_root / "app.py"
     if not app_path.exists():
-        raise FileNotFoundError(f"Khong thay app.py trong Text to Voice root: {ttv_root}")
+        raise FileNotFoundError(f"Không thấy app.py trong Text to Voice root: {ttv_root}")
     spec = importlib.util.spec_from_file_location("kokoro_local_text_to_voice", app_path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Khong load duoc Text to Voice app: {app_path}")
+        raise RuntimeError(f"Không load được Text to Voice app: {app_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -126,7 +126,7 @@ def combine_wavs(paths: list[Path], output_path: Path) -> float:
         if sample_rate is None:
             sample_rate = int(sr)
         elif int(sr) != sample_rate:
-            raise RuntimeError(f"Sample rate khong khop: {path}")
+            raise RuntimeError(f"Sample rate không khớp: {path}")
         arrays.append(audio)
         duration += len(audio) / sample_rate
         if index < len(paths) - 1:
@@ -138,7 +138,7 @@ def combine_wavs(paths: list[Path], output_path: Path) -> float:
             duration += pause_samples / sample_rate
 
     if sample_rate is None or not arrays:
-        raise RuntimeError("Khong co audio de ghep.")
+        raise RuntimeError("Không có audio để ghép.")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(output_path, np.concatenate(arrays), sample_rate)
@@ -337,7 +337,7 @@ def main() -> int:
     text = sanitize_text_for_tts(args.input.read_text(encoding="utf-8"))
     chunks = split_text_for_text_to_voice(text, args.max_chars)
     if not chunks:
-        raise ValueError("Text chapter rong.")
+        raise ValueError("Text chapter rỗng.")
 
     kokoro_app = load_kokoro_app(ttv_root)
     prepare_espeak_runtime()
