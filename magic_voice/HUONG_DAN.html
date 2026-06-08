@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hướng dẫn sử dụng Chatterbox TTS</title>
+<style>
+  body { font-family: "Segoe UI", Arial, sans-serif; max-width: 860px; margin: 0 auto; padding: 24px; line-height: 1.7; color: #1f2937; background: #f8fafc; font-size: 17px; }
+  h1 { color: #1d4ed8; border-bottom: 3px solid #1d4ed8; padding-bottom: 8px; }
+  h2 { color: #1e40af; margin-top: 40px; background: #dbeafe; padding: 10px 14px; border-radius: 8px; }
+  .step { background: #ffffff; border: 1px solid #e2e8f0; border-left: 6px solid #2563eb; border-radius: 8px; padding: 14px 18px; margin: 14px 0; }
+  .step b.num { display: inline-block; background: #2563eb; color: #fff; border-radius: 50%; width: 28px; height: 28px; text-align: center; line-height: 28px; margin-right: 8px; }
+  .warn { background: #fef3c7; border-left: 6px solid #f59e0b; padding: 12px 16px; border-radius: 8px; margin: 14px 0; }
+  .ok { background: #dcfce7; border-left: 6px solid #16a34a; padding: 12px 16px; border-radius: 8px; margin: 14px 0; }
+  code, .file { background: #e2e8f0; padding: 2px 8px; border-radius: 6px; font-weight: bold; color: #b91c1c; font-family: Consolas, monospace; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td { border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left; }
+  th { background: #dbeafe; }
+</style>
+</head>
+<body>
+
+<h1>🎙️ Hướng dẫn sử dụng Tool Chatterbox TTS</h1>
+<p>Tool này biến <b>văn bản (script)</b> thành <b>file giọng nói (audio)</b> và <b>tự động tạo luôn file phụ đề SRT</b> khớp với audio. Anh không cần biết gì về kỹ thuật, chỉ cần làm đúng theo từng bước dưới đây.</p>
+
+<h2>PHẦN 1 — Cài đặt (chỉ làm 1 LẦN DUY NHẤT)</h2>
+<div class="step"><b class="num">1</b> Mở thư mục <span class="file">Chatterbox_Tool</span> (thư mục đang chứa file hướng dẫn này).</div>
+<div class="step"><b class="num">2</b> Nháy đúp chuột vào file <span class="file">1_CAI_DAT.bat</span></div>
+<div class="step"><b class="num">3</b> Một cửa sổ đen hiện ra và tự làm mọi thứ: tìm/cài Python, kiểm tra card đồ họa, tải thư viện AI. <b>Cứ để yên, đừng tắt.</b> Mất khoảng 10–20 phút tùy mạng.</div>
+<div class="step"><b class="num">4</b> Khi thấy dòng <b>"CAI DAT HOAN TAT!"</b> là xong. Bấm phím bất kỳ để đóng.</div>
+<div class="warn">⚠️ <b>Cần có mạng internet</b> khi cài đặt. Nếu cửa sổ báo lỗi mạng, anh kiểm tra wifi rồi chạy lại file <span class="file">1_CAI_DAT.bat</span> — chạy lại bao nhiêu lần cũng được, không hỏng gì cả.</div>
+<div class="warn">⚠️ Nếu máy anh <b>không có card NVIDIA</b>, tool vẫn chạy được nhưng tạo giọng sẽ <b>chậm hơn nhiều</b>. Khi đó nên cân nhắc dùng Google Colab (nói với em, em làm thêm cho anh bản Colab).</div>
+
+<h2>PHẦN 2 — Mở tool để dùng (làm mỗi lần muốn dùng)</h2>
+<div class="step"><b class="num">1</b> Nháy đúp file <span class="file">2_CHAY_TOOL.bat</span></div>
+<div class="step"><b class="num">2</b> <b>Lần đầu tiên</b> chạy, tool tự tải model AI (~4GB) — mất 10–30 phút. Các lần sau mở rất nhanh.</div>
+<div class="step"><b class="num">3</b> Khi sẵn sàng, <b>trình duyệt tự mở</b> giao diện tool. Nếu không tự mở, anh gõ vào trình duyệt: <code>http://127.0.0.1:7860</code></div>
+<div class="step"><b class="num">4</b> <b>Đừng tắt cửa sổ đen</b> trong lúc dùng. Dùng xong, đóng cửa sổ đen là tắt tool.</div>
+
+<h2>PHẦN 3 — Tạo audio + phụ đề SRT (quy trình chuẩn)</h2>
+<p>Trên giao diện có nhiều tab. Anh chủ yếu dùng tab <b>🎤 TTS Main</b> (cho script tiếng Anh).</p>
+<div class="step"><b class="num">1</b> <b>Chọn giọng</b> ở ô Voice — có sẵn 20 giọng (Morgan Freeman, Liam Neeson, Carissa, Laurel...).</div>
+<div class="step"><b class="num">2</b> <b>Dán một đoạn ngắn ~150 chữ</b> của script vào ô text để nghe thử trước (lời khuyên của Vien).</div>
+<div class="step"><b class="num">3</b> Chỉnh <b>Exaggeration</b> (độ cảm xúc): <b>0.5</b> = trung bình, <b>0.6</b> = cảm xúc hơn. Khoảng cho phép 0.3–0.8.</div>
+<div class="step"><b class="num">4</b> Bấm <b>Generate</b>, nghe thử. Chưa ưng thì đổi giọng / đổi Exaggeration rồi thử lại.</div>
+<div class="step"><b class="num">5</b> Khi đã ưng, <b>dán toàn bộ script</b> vào và bấm Generate. Tool tự cắt nhỏ văn bản và đọc từng đoạn — script dài sẽ mất nhiều thời gian, cứ để máy chạy.</div>
+<div class="ok">✅ <b>Xong là có ngay cả audio lẫn phụ đề!</b> Em đã nâng cấp tool: mỗi lần generate xong, kết quả tự lưu vào thư mục <span class="file">Chatterbox_Tool\outputs\(ngày-giờ)</span> gồm:<br>
+• <b>full_audio.wav</b> — file audio hoàn chỉnh<br>
+• <b>subtitles.srt</b> — phụ đề khớp audio (không cần chạy make_srt.py như cách của Vien nữa)<br>
+• <b>chunk_0001.wav, chunk_0002.wav...</b> — từng đoạn nhỏ (để dựng video nếu cần)<br>
+• <b>script.txt</b> — văn bản đã dùng<br>
+• <b>qa_report.txt</b> — báo cáo kiểm tra chất lượng tự động (xem mục dưới)</div>
+
+<div class="ok">🤖 <b>Tính năng TỰ KIỂM TRA CHẤT LƯỢNG (Auto QA):</b> Chatterbox đôi khi tự chèn âm lạ hoặc đọc sai (lỗi đã biết của model). Tool của anh đã được nâng cấp: sau khi đọc xong mỗi đoạn, một AI thứ hai (Whisper) sẽ <b>nghe lại đoạn đó, so với kịch bản gốc</b> — nếu sai, tool <b>tự đọc lại tối đa 2 lần</b> và giữ bản tốt nhất.<br><br>
+• Lần generate đầu tiên, tool tự tải thêm model Whisper (~145MB) — chờ chút.<br>
+• Generate xong, nhìn dòng trạng thái: <b>"✅ QA: all ... chunks passed"</b> = mọi đoạn đều đạt, yên tâm dùng.<br>
+• Nếu hiện <b>"⚠️ QA: ... chunk(s) may still contain errors"</b> kèm số thứ tự (ví dụ [12, 47]) = anh chỉ cần mở file <b>chunk_0012.wav, chunk_0047.wav</b> trong thư mục outputs nghe lại 2 đoạn đó thôi, không phải nghe cả 75 phút. Chi tiết điểm số từng đoạn nằm trong <b>qa_report.txt</b>.<br><br>
+⏱️ Tính năng này làm thời gian generate lâu hơn một chút (kiểm tra + đọc lại đoạn hỏng) — đổi lại không còn phải dò tai cả tập.</div>
+
+<h2>PHẦN 4 — Clone giọng riêng (khi anh có file giọng mẫu)</h2>
+<div class="step"><b class="num">1</b> Vào tab <b>🧬 Clone Voice</b>.</div>
+<div class="step"><b class="num">2</b> Upload file giọng mẫu (file .wav/.mp3, nên dài 5–10 giây, rõ tiếng, ít tạp âm — <b>không cần</b> lọc qua CapCut).</div>
+<div class="step"><b class="num">3</b> Đặt tên giọng, chọn giới tính, bấm Clone. Giọng mới sẽ xuất hiện trong danh sách Voice ở các tab khác để dùng như giọng có sẵn.</div>
+<div class="warn">💡 File giọng Vien gửi qua link Google Drive (trong đoạn chat) có thể tải về rồi clone theo cách này.</div>
+
+<h2>Các tab khác (dùng khi cần)</h2>
+<table>
+<tr><th>Tab</th><th>Dùng để làm gì</th></tr>
+<tr><td>⚡ Turbo TTS</td><td>Tạo giọng nhanh hơn ~3 lần, hỗ trợ thẻ cảm xúc như [laugh] (cười), [sigh] (thở dài) chèn thẳng vào text.</td></tr>
+<tr><td>🎤 TTS Main</td><td>Tạo giọng tiếng Anh chất lượng cao, chỉnh được nhiều thông số. <b>Dùng tab này là chính.</b></td></tr>
+<tr><td>🌍 Multilingual</td><td>Tạo giọng 23 ngôn ngữ khác (Pháp, Đức, Nhật, Trung...).</td></tr>
+<tr><td>🔄 Voice Conversion</td><td>Đổi giọng của một file audio có sẵn sang giọng khác.</td></tr>
+<tr><td>🧬 Clone Voice</td><td>Tạo giọng riêng từ file mẫu.</td></tr>
+</table>
+
+<h2>Xử lý sự cố thường gặp</h2>
+<table>
+<tr><th>Hiện tượng</th><th>Cách xử lý</th></tr>
+<tr><td>Trình duyệt không tự mở</td><td>Tự gõ <code>http://127.0.0.1:7860</code> vào trình duyệt.</td></tr>
+<tr><td>Báo lỗi "Out of memory"</td><td>Đóng các phần mềm nặng khác (game, Photoshop...), tắt tool rồi mở lại bằng <span class="file">2_CHAY_TOOL.bat</span>.</td></tr>
+<tr><td>Tạo giọng quá chậm</td><td>Máy đang chạy chế độ CPU (không có card NVIDIA). Hãy nhờ em làm bản chạy trên Google Colab (miễn phí, có GPU).</td></tr>
+<tr><td>Lỗi khi cài đặt</td><td>Kiểm tra mạng, chạy lại <span class="file">1_CAI_DAT.bat</span>. Vẫn lỗi thì chụp màn hình cửa sổ đen gửi cho em (Claude) xem giúp.</td></tr>
+<tr><td>Generate xong không thấy file</td><td>Mở thư mục <span class="file">Chatterbox_Tool\outputs\</span> — kết quả nằm trong thư mục con đặt tên theo ngày giờ.</td></tr>
+</table>
+
+<div class="ok" style="margin-top:30px">🎉 <b>Tóm tắt cho anh:</b> Cài 1 lần bằng <span class="file">1_CAI_DAT.bat</span> → mỗi lần dùng mở <span class="file">2_CHAY_TOOL.bat</span> → chọn giọng, dán text, bấm Generate → lấy audio + SRT trong thư mục <span class="file">outputs</span>. Hết!</div>
+
+</body>
+</html>

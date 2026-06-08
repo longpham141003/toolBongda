@@ -9,12 +9,20 @@ SETTINGS_PATH = APP_DIR / "settings.json"
 
 DEFAULT_SETTINGS = {
     "projects_dir": str(APP_DIR / "Projects"),
-    "text_to_voice_root": r"C:\Users\longp\Downloads\SRT & Audio Vien\Chatterbox_Tool",
+    "text_to_voice_root": str(APP_DIR / "magic_voice"),
     "text_to_voice_python": "",
     "text_to_voice_language": "en",
     "text_to_voice_voice": "factory_vien_male",
+    "text_to_voice_mode": "standard",
     "text_to_voice_delivery": "dramatic",
     "text_to_voice_speed": 1.0,
+    "chatterbox_exaggeration": 0.9,
+    "chatterbox_cfg_weight": 0.5,
+    "chatterbox_temperature": 0.8,
+    "chatterbox_seed": 0,
+    "chatterbox_min_p": 0.05,
+    "chatterbox_top_p": 1.0,
+    "chatterbox_repetition_penalty": 1.2,
     "text_to_voice_max_chars": 10000,
     "text_to_voice_timeout": 1800,
     "chatterbox_max_words": 40,
@@ -66,6 +74,40 @@ DEFAULT_SETTINGS = {
             ),
         },
     ],
+    "active_workflow_id": "general-video",
+    "workflow_presets": [
+        {
+            "id": "general-video",
+            "name": "Video tổng hợp",
+            "description": "Dùng cho tin tức, thể thao, lịch sử, khoa học và các chủ đề phổ thông.",
+            "steps": [
+                {
+                    "enabled": True,
+                    "name": "Hiểu chủ đề",
+                    "prompt": (
+                        "Analyze the source and identify the audience, angle, verified facts, named "
+                        "entities, timeline, and strongest visual moments. Do not write the final script yet."
+                    ),
+                },
+                {
+                    "enabled": True,
+                    "name": "Lập dàn ý",
+                    "prompt": (
+                        "Create a coherent video outline with a clear opening, logical body, specific "
+                        "events, and a concise conclusion. Remove repetition."
+                    ),
+                },
+                {
+                    "enabled": True,
+                    "name": "Viết lời đọc cuối",
+                    "prompt": (
+                        "Write the final natural voice-over script. Output narration only, without "
+                        "headings, notes, citations, or visual instructions."
+                    ),
+                },
+            ],
+        }
+    ],
     "image_aspect_width": 16,
     "image_aspect_height": 9,
     "image_aspect_tolerance": 0.025,
@@ -91,6 +133,9 @@ def load_settings() -> dict:
         pass
     settings = dict(DEFAULT_SETTINGS)
     settings.update(data)
+    legacy_voice_root = r"C:\Users\longp\Downloads\SRT & Audio Vien\Chatterbox_Tool"
+    if str(settings.get("text_to_voice_root") or "").strip() == legacy_voice_root:
+        settings["text_to_voice_root"] = str(APP_DIR / "magic_voice")
     projects = Path(str(settings.get("projects_dir") or ""))
     if not projects.is_absolute():
         projects = APP_DIR / projects

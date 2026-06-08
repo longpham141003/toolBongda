@@ -57,7 +57,7 @@ def text_to_voice_root(settings: dict) -> Path:
         if not path.is_absolute():
             path = Path(__file__).resolve().parents[1] / path
         return path
-    return Path(r"C:\Users\longp\Downloads\SRT & Audio Vien\Chatterbox_Tool")
+    return Path(__file__).resolve().parents[1] / "magic_voice"
 
 
 def text_to_voice_python(settings: dict, root: Path | None = None) -> Path:
@@ -68,6 +68,9 @@ def text_to_voice_python(settings: dict, root: Path | None = None) -> Path:
             path = Path(__file__).resolve().parents[1] / path
         return path
     root = root or text_to_voice_root(settings)
+    bundled = Path(__file__).resolve().parents[1] / "chatterbox-venv"
+    if os.name == "nt" and (bundled / "Scripts" / "python.exe").exists():
+        return bundled / "Scripts" / "python.exe"
     if os.name == "nt":
         return root / "venv" / "Scripts" / "python.exe"
     return root / ".venv" / "bin" / "python"
@@ -113,7 +116,7 @@ def text_to_voice_url(settings: dict) -> str:
 
 def is_text_to_voice_server_ready(settings: dict) -> bool:
     try:
-        with urlopen(f"{text_to_voice_url(settings)}/api/config", timeout=1.5) as response:
+        with urlopen(text_to_voice_url(settings), timeout=1.5) as response:
             return int(response.status or 0) == 200
     except (URLError, OSError, ValueError):
         return False
@@ -159,8 +162,11 @@ def ensure_text_to_voice_server(settings: dict, log: Callable[[str], None] | Non
     ]
     if callable(log):
         log(f"Khởi động Text to Voice UI: {url}")
+    process_env = os.environ.copy()
+    process_env["PYTHONUTF8"] = "1"
+    process_env["PYTHONIOENCODING"] = "utf-8"
     with log_path.open("a", encoding="utf-8") as stdout, err_path.open("a", encoding="utf-8") as stderr:
-        subprocess.Popen(cmd, cwd=str(root), stdout=stdout, stderr=stderr, **_win_hidden_kwargs())
+        subprocess.Popen(cmd, cwd=str(root), stdout=stdout, stderr=stderr, env=process_env, **_win_hidden_kwargs())
 
     if not wait_for_text_to_voice_server(settings, timeout_seconds=45):
         raise RuntimeError(f"Text to Voice UI chưa sẵn sàng ở {url}. Xem log: {err_path}")
@@ -222,12 +228,28 @@ class TextToVoiceRunner:
             str(self.settings.get("text_to_voice_language") or "en"),
             "--voice",
             str(self.settings.get("text_to_voice_voice") or "Default"),
+            "--mode",
+            str(self.settings.get("text_to_voice_mode") or "standard"),
             "--speed",
             str(float(self.settings.get("text_to_voice_speed") or 1.0)),
             "--delivery",
             str(self.settings.get("text_to_voice_delivery") or "dramatic"),
             "--max-words",
             str(int(self.settings.get("chatterbox_max_words") or 40)),
+            "--exaggeration",
+            str(float(self.settings.get("chatterbox_exaggeration") or -1.0)),
+            "--cfg-weight",
+            str(float(self.settings.get("chatterbox_cfg_weight") or 0.5)),
+            "--temperature",
+            str(float(self.settings.get("chatterbox_temperature") or 0.8)),
+            "--seed",
+            str(int(self.settings.get("chatterbox_seed") or 0)),
+            "--min-p",
+            str(float(self.settings.get("chatterbox_min_p") or 0.05)),
+            "--top-p",
+            str(float(self.settings.get("chatterbox_top_p") or 1.0)),
+            "--repetition-penalty",
+            str(float(self.settings.get("chatterbox_repetition_penalty") or 1.2)),
         ]
         if not bool(self.settings.get("chatterbox_whisper_qa", True)):
             cmd.append("--disable-qa")
@@ -316,8 +338,13 @@ class TextToVoiceRunner:
             "text_mtime_ns": int(stat.st_mtime_ns),
             "language": str(self.settings.get("text_to_voice_language") or "en"),
             "voice": str(self.settings.get("text_to_voice_voice") or "Default"),
+            "mode": str(self.settings.get("text_to_voice_mode") or "standard"),
             "speed": str(float(self.settings.get("text_to_voice_speed") or 1.0)),
             "delivery": str(self.settings.get("text_to_voice_delivery") or "dramatic"),
+            "exaggeration": str(float(self.settings.get("chatterbox_exaggeration") or -1.0)),
+            "cfg_weight": str(float(self.settings.get("chatterbox_cfg_weight") or 0.5)),
+            "temperature": str(float(self.settings.get("chatterbox_temperature") or 0.8)),
+            "seed": str(int(self.settings.get("chatterbox_seed") or 0)),
             "max_chars": str(int(self.settings.get("text_to_voice_max_chars") or 10000)),
             "segment_cleaner": "tts_clean_v5",
         }

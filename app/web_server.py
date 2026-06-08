@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import subprocess
 import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,9 +19,12 @@ from pydantic import BaseModel, Field
 
 from .config import APP_DIR, load_settings, save_settings
 from .script_workflow import default_workflow_steps, normalize_workflow_steps, run_script_workflow
-from .text_to_voice_queue import chatterbox_voice_choices
+from .text_to_voice_queue import TextToVoiceRunner, chatterbox_voice_choices
 from .visual_pipeline import (
     _concise_match_query,
+    IMAGE_SUFFIXES,
+    VIDEO_SUFFIXES,
+    attach_local_media_to_asset,
     build_asset_manifest,
     create_visual_project,
     export_capcut_project,
@@ -57,12 +63,42 @@ class WorkflowRequest(BaseModel):
     settings: dict[str, Any] | None = None
 
 
+class VoicePreviewRequest(BaseModel):
+    settings: dict[str, Any] = Field(default_factory=dict)
+    text: str = ""
+
+
 class ExportRequest(BaseModel):
     title: str = ""
 
 
 class KeywordRequest(BaseModel):
     keyword: str
+
+
+IMAGE_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".webm", ".mp4"}
+
+
+def _normalize_workflow_presets(values: Any) -> list[dict[str, Any]]:
+    presets: list[dict[str, Any]] = []
+    if not isinstance(values, list):
+        return presets
+    for raw in values:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()[:80]
+        if not name:
+            continue
+        preset_id = str(raw.get("id") or "").strip() or uuid.uuid4().hex[:10]
+        presets.append(
+            {
+                "id": preset_id,
+                "name": name,
+                "description": str(raw.get("description") or "").strip()[:260],
+                "steps": normalize_workflow_steps(raw.get("steps")) or default_workflow_steps(),
+            }
+        )
+    return presets
 
 
 class Job:
@@ -265,6 +301,10 @@ def _public_settings() -> dict[str, Any]:
     settings = load_settings()
     steps = normalize_workflow_steps(settings.get("script_workflow_steps"))
     settings["script_workflow_steps"] = steps or default_workflow_steps()
+    presets = _normalize_workflow_presets(settings.get("workflow_presets"))
+    if not presets:
+        presets = _normalize_workflow_presets(load_settings().get("workflow_presets"))
+    settings["workflow_presets"] = presets
     return settings
 
 
@@ -273,8 +313,18 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
         "projects_dir",
         "text_to_voice_language",
         "text_to_voice_voice",
+        "text_to_voice_mode",
         "text_to_voice_delivery",
         "text_to_voice_speed",
+        "chatterbox_exaggeration",
+        "chatterbox_cfg_weight",
+        "chatterbox_temperature",
+        "chatterbox_seed",
+        "chatterbox_min_p",
+        "chatterbox_top_p",
+        "chatterbox_repetition_penalty",
+        "chatterbox_max_words",
+        "chatterbox_whisper_qa",
         "openai_api_key",
         "keyword_ai_model",
         "keyword_ai_provider",
@@ -285,6 +335,10 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
         "image_ai_min_score",
         "script_workflow_input",
         "script_workflow_steps",
+        "workflow_presets",
+        "active_workflow_id",
+        "text_to_voice_root",
+        "text_to_voice_python",
         "whisper_timing_enabled",
         "whisper_timing_model",
         "scene_ai_enabled",
@@ -303,8 +357,58 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
             settings[key] = value
     if "script_workflow_steps" in values:
         settings["script_workflow_steps"] = normalize_workflow_steps(values["script_workflow_steps"])
+    if "workflow_presets" in values:
+        settings["workflow_presets"] = _normalize_workflow_presets(values["workflow_presets"])
     save_settings(settings)
     return settings
+
+
+def _timing_payload(project: Path) -> dict[str, Any]:
+    timing_path = project / "voices" / "voice.segments.json"
+    whisper_srt = project / "voices" / "voice.whisper.srt"
+    timing = {}
+    if timing_path.exists():
+        try:
+            import json
+
+            timing = json.loads(timing_path.read_text(encoding="utf-8-sig"))
+        except Exception:
+            timing = {}
+    return {
+        "timing_path": str(timing_path) if timing_path.exists() else "",
+        "srt_path": str(whisper_srt) if whisper_srt.exists() else "",
+        "srt": whisper_srt.read_text(encoding="utf-8", errors="replace") if whisper_srt.exists() else "",
+        "segments": timing.get("segments") if isinstance(timing, dict) and isinstance(timing.get("segments"), list) else [],
+        "scenes": load_manifest(project),
+    }
+
+
+def _preflight_payload() -> dict[str, Any]:
+    settings = load_settings()
+    checks = []
+
+    voice_root = Path(str(settings.get("text_to_voice_root") or ""))
+    if not voice_root.is_absolute():
+        voice_root = APP_DIR / voice_root
+    checks.append(
+        {
+            "id": "magic_voice",
+            "label": "Magic Voice đã nằm trong tool",
+            "ok": (voice_root / "app.py").is_file() and (voice_root / "modules" / "model_manager.py").is_file(),
+            "detail": str(voice_root),
+        }
+    )
+    raw_python = str(settings.get("text_to_voice_python") or "").strip()
+    python_path = Path(raw_python) if raw_python else APP_DIR / "chatterbox-venv" / "Scripts" / "python.exe"
+    if not raw_python:
+        python_path = APP_DIR / "chatterbox-venv" / "Scripts" / "python.exe"
+    elif not python_path.is_absolute():
+        python_path = APP_DIR / python_path
+    checks.append({"id": "voice_python", "label": "Python tạo voice", "ok": python_path.is_file(), "detail": str(python_path)})
+    checks.append({"id": "gemini", "label": "Gemini API key", "ok": bool(str(settings.get("gemini_api_key") or "").strip()), "detail": "Dùng để viết script, tạo keyword và kiểm ảnh."})
+    checks.append({"id": "capcut_template", "label": "Mẫu CapCut", "ok": (APP_DIR / "capcut_template" / "draft_content.json").is_file(), "detail": str(APP_DIR / "capcut_template")})
+    checks.append({"id": "projects", "label": "Thư mục project", "ok": Path(str(settings.get("projects_dir") or "")).exists(), "detail": str(settings.get("projects_dir") or "")})
+    return {"ok": all(item["ok"] for item in checks), "checks": checks}
 
 
 def _sync_script(project: Path, script: str) -> None:
@@ -367,12 +471,89 @@ def state() -> dict[str, Any]:
 @app.get("/api/voices")
 def voices(language: str = "en") -> dict[str, Any]:
     settings = load_settings()
-    return {"items": chatterbox_voice_choices(settings, language)}
+    items = chatterbox_voice_choices(settings, language)
+    return {"items": items, "options": [{"value": item, "label": item} for item in items]}
+
+
+def _safe_voice_name(value: str) -> str:
+    import unicodedata
+
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    normalized = re.sub(r"[^A-Za-z0-9_ -]+", "", normalized).strip().replace(" ", "_")
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Tên giọng đang trống.")
+    return normalized[:60]
+
+
+def _convert_audio_to_wav(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source.suffix.lower() == ".wav":
+        shutil.copy2(source, target)
+        return
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(source), "-ac", "1", "-ar", "24000", str(target)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if result.returncode != 0 or not target.exists() or target.stat().st_size < 1024:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise HTTPException(status_code=400, detail=f"Không chuyển được audio sang WAV. Cần cài ffmpeg hoặc upload file WAV sạch. {detail[-300:]}")
+
+
+@app.post("/api/voices/clone")
+async def clone_voice_native(
+    name: str,
+    gender: str = "male",
+    language: str = "en",
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    settings = load_settings()
+    voice_root = Path(str(settings.get("text_to_voice_root") or APP_DIR / "magic_voice"))
+    if not voice_root.is_absolute():
+        voice_root = APP_DIR / voice_root
+    voice_dir = voice_root / "modules" / "voice_samples"
+    if not voice_dir.exists():
+        raise HTTPException(status_code=500, detail=f"Không thấy thư mục voice_samples: {voice_dir}")
+
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in IMAGE_AUDIO_SUFFIXES:
+        raise HTTPException(status_code=400, detail="File không hợp lệ. Hãy upload WAV/MP3/M4A/WEBM/MP4 audio.")
+    clean_name = _safe_voice_name(name)
+    clean_gender = "female" if str(gender).lower().startswith("f") else "male"
+    clean_lang = re.sub(r"[^a-z]", "", str(language or "en").lower()) or "en"
+    final_stem = f"{clean_name}_{clean_gender}" + (f"_{clean_lang}" if clean_lang != "en" else "")
+    target = voice_dir / f"{final_stem}.wav"
+    if target.exists():
+        raise HTTPException(status_code=409, detail=f"Giọng '{final_stem}' đã tồn tại. Hãy dùng tên khác.")
+
+    temp_dir = voice_root / "tmp_uploads"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = temp_dir / f"{uuid.uuid4().hex}{suffix}"
+    try:
+        with temp_path.open("wb") as output:
+            shutil.copyfileobj(file.file, output)
+        _convert_audio_to_wav(temp_path, target)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    choices = chatterbox_voice_choices(settings, clean_lang)
+    return {"ok": True, "voice": final_stem, "items": choices, "options": [{"value": item, "label": item} for item in choices]}
 
 
 @app.post("/api/settings")
 def update_settings(request: SettingsRequest) -> dict[str, Any]:
     return {"settings": _save_partial_settings(request.settings)}
+
+
+@app.get("/api/preflight")
+def preflight() -> dict[str, Any]:
+    return _preflight_payload()
 
 
 @app.post("/api/projects")
@@ -452,6 +633,64 @@ def create_voice(request: ScriptRequest) -> dict[str, Any]:
     return {"job": runtime.start_job("B1 Magic Voice", task).payload()}
 
 
+@app.post("/api/voice-preview")
+def preview_voice(request: VoicePreviewRequest) -> dict[str, Any]:
+    settings = load_settings()
+    if isinstance(request.settings, dict):
+        for key in (
+            "text_to_voice_language",
+            "text_to_voice_voice",
+            "text_to_voice_mode",
+            "text_to_voice_delivery",
+            "text_to_voice_speed",
+            "chatterbox_exaggeration",
+            "chatterbox_cfg_weight",
+            "chatterbox_temperature",
+            "chatterbox_seed",
+            "chatterbox_min_p",
+            "chatterbox_top_p",
+            "chatterbox_repetition_penalty",
+            "chatterbox_max_words",
+            "chatterbox_whisper_qa",
+            "text_to_voice_root",
+            "text_to_voice_python",
+        ):
+            if key in request.settings:
+                settings[key] = request.settings[key]
+    sample = str(request.text or "").strip()
+    if not sample:
+        lang = str(settings.get("text_to_voice_language") or "en")
+        sample = (
+            "This is a voice preview for your video. Listen to the tone, emotion, pace, and clarity before creating the full narration."
+            if lang == "en"
+            else "Đây là đoạn nghe thử giọng cho video của bạn. Hãy nghe chất giọng, cảm xúc, nhịp đọc và độ rõ trước khi tạo bản đọc đầy đủ."
+        )
+    if len(sample) > 500:
+        sample = sample[:500]
+
+    preview_dir = APP_DIR / ".voice_preview"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    text_path = preview_dir / "preview.txt"
+    output_path = preview_dir / f"preview_{uuid.uuid4().hex}.wav"
+    text_path.write_text(sample, encoding="utf-8")
+
+    logs: list[str] = []
+    runner = TextToVoiceRunner(settings, logs.append, lambda: False)
+    try:
+        runner.start()
+        result_path = runner.submit_file(text_path, "preview", output_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không tạo được nghe thử giọng: {exc}") from exc
+    finally:
+        runner.close()
+    return {
+        "ok": True,
+        "path": result_path,
+        "url": f"/api/media?path={quote(result_path, safe='')}",
+        "logs": logs[-8:],
+    }
+
+
 @app.post("/api/analyze")
 def analyze() -> dict[str, Any]:
     project = runtime.require_project()
@@ -466,6 +705,40 @@ def analyze() -> dict[str, Any]:
         return {"items": items, "project": _project_payload(project)}
 
     return {"job": runtime.start_job("B2 Phan tich canh", task).payload()}
+
+
+@app.post("/api/analyze-search")
+def analyze_and_search() -> dict[str, Any]:
+    project = runtime.require_project()
+    settings = load_settings()
+
+    def task(job: Job) -> dict[str, Any]:
+        job.determinate = True
+        job.total_units = 2
+        job.current_label = "Đang chia cảnh theo giọng đọc"
+        items = build_asset_manifest(project, settings, log=job.log)
+        job.log(f"Đã chia {len(items)} cảnh. Đang tối ưu từ khóa.")
+        items = optimize_asset_keywords_with_ai(project, settings, log=job.log)
+        save_manifest(project, items)
+        job.completed_units = 1
+        job.progress = 50
+
+        total = max(1, len(items))
+        job.total_units = len(items) + 1
+        for index, item in enumerate(items):
+            job.completed_units = index + 1
+            job.progress = round((job.completed_units / max(1, job.total_units)) * 100)
+            job.current_label = f"Đang tìm media cho cảnh {index + 1}/{len(items)}"
+            if item.get("status") != "approved":
+                items[index] = search_and_download_asset(project, item, job.log, settings=settings)
+                save_manifest(project, items)
+            job.result = {"items": items, "project": _project_payload(project), "last_asset_id": items[index].get("asset_id")}
+        job.completed_units = job.total_units
+        job.progress = 100
+        job.current_label = "Đã chuẩn bị xong cảnh và media"
+        return {"items": items, "project": _project_payload(project), "timing": _timing_payload(project)}
+
+    return {"job": runtime.start_job("B2+B3 Chia canh va tim media", task).payload()}
 
 
 @app.post("/api/search")
@@ -560,6 +833,27 @@ def update_asset_keyword(asset_id: str, request: KeywordRequest) -> dict[str, An
     return {"project": _project_payload(project)}
 
 
+@app.post("/api/assets/{asset_id}/upload")
+async def upload_asset_media(asset_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+    project = runtime.require_project()
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in IMAGE_SUFFIXES and suffix not in VIDEO_SUFFIXES:
+        raise HTTPException(status_code=400, detail="File không hợp lệ. Hãy chọn ảnh hoặc video.")
+    temp_dir = project / "assets" / "uploads_tmp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = temp_dir / f"{asset_id}_{uuid.uuid4().hex}{suffix}"
+    try:
+        with temp_path.open("wb") as output:
+            shutil.copyfileobj(file.file, output)
+        item = attach_local_media_to_asset(project, asset_id, temp_path, load_settings())
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return {"item": item, "project": _project_payload(project)}
+
+
 @app.post("/api/assets/approve-all")
 def approve_all_assets() -> dict[str, Any]:
     project = runtime.require_project()
@@ -594,6 +888,12 @@ def open_project_folder() -> dict[str, Any]:
     return {"ok": True}
 
 
+@app.get("/api/project/timing")
+def project_timing() -> dict[str, Any]:
+    project = runtime.require_project()
+    return _timing_payload(project)
+
+
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str) -> dict[str, Any]:
     job = runtime.jobs.get(job_id)
@@ -606,14 +906,20 @@ def get_job(job_id: str) -> dict[str, Any]:
 def media(path: str) -> FileResponse:
     file_path = Path(path).resolve()
     projects_dir = Path(str(load_settings().get("projects_dir") or APP_DIR / "Projects")).resolve()
+    preview_dir = (APP_DIR / ".voice_preview").resolve()
     try:
         file_path.relative_to(projects_dir)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail="Đường dẫn media không hợp lệ.") from exc
+    except ValueError:
+        try:
+            file_path.relative_to(preview_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="Đường dẫn media không hợp lệ.") from exc
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="Không tìm thấy media.")
+    media_type = "audio/wav" if file_path.suffix.lower() == ".wav" else None
     return FileResponse(
         file_path,
+        media_type=media_type,
         headers={
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",

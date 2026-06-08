@@ -1014,6 +1014,65 @@ def save_manifest(project: Path, items: list[dict]) -> None:
     write_json(project / "assets" / "asset_manifest.json", {"version": 1, "items": items})
 
 
+def attach_local_media_to_asset(project: Path, asset_id: str, source: Path, settings: dict | None = None) -> dict:
+    items = load_manifest(project)
+    index = next((i for i, item in enumerate(items) if item.get("asset_id") == asset_id), -1)
+    if index < 0:
+        raise FileNotFoundError(f"Không tìm thấy cảnh {asset_id}.")
+    if not source.is_file():
+        raise FileNotFoundError(f"Không tìm thấy file media: {source}")
+
+    suffix = source.suffix.lower()
+    if suffix not in IMAGE_SUFFIXES and suffix not in VIDEO_SUFFIXES:
+        raise RuntimeError("File không hợp lệ. Chỉ nhận ảnh JPG/PNG/WEBP/BMP/AVIF hoặc video MP4/MOV/MKV/WEBM/AVI.")
+
+    manual_dir = project / "assets" / "downloads" / "manual"
+    manual_dir.mkdir(parents=True, exist_ok=True)
+    item = items[index]
+    if suffix in IMAGE_SUFFIXES:
+        raw_target = manual_dir / f"{asset_id}_manual_raw{suffix}"
+        shutil.copy2(source, raw_target)
+        target = manual_dir / f"{asset_id}_manual_16x9.jpg"
+        width, height = _enhance_image_without_crop(raw_target, target, settings)
+        local_path = target
+        raw_path = raw_target
+        media_kind = "image"
+    else:
+        target = manual_dir / f"{asset_id}_manual{suffix}"
+        shutil.copy2(source, target)
+        width, height = _image_size(target)
+        local_path = target
+        raw_path = target
+        media_kind = "video"
+
+    item.update(
+        {
+            "status": "downloaded",
+            "visual_source_type": "local_upload",
+            "source_page": "Người dùng tải lên",
+            "source_url": "",
+            "thumbnail_url": "",
+            "local_path": str(local_path),
+            "raw_local_path": str(raw_path),
+            "image_width": width,
+            "image_height": height,
+            "sha256": hashlib.sha256(local_path.read_bytes()).hexdigest(),
+            "raw_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+            "image_ai_validation": {
+                "accepted": True,
+                "score": 100,
+                "visible_subject": "Media do người dùng chọn",
+                "reason": "Bỏ qua kiểm tra AI vì người dùng đã tự tải media cho cảnh này.",
+                "model": "manual",
+            },
+            "media_kind": media_kind,
+            "error": "",
+        }
+    )
+    save_manifest(project, items)
+    return item
+
+
 def optimize_asset_keywords_with_ai(
     project: Path,
     settings: dict,

@@ -17,6 +17,11 @@ chrome_*_profile/
 .kokoro_espeakng_loader/
 kokoro-tts-local/
 chatterbox-venv/
+magic_voice/venv/
+magic_voice/.venv/
+magic_voice/outputs/
+magic_voice/__pycache__/
+magic_voice/*.log
 .venv/
 venv/
 

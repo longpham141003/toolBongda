@@ -6,3 +6,4 @@ requests
 imagehash
 fastapi
 uvicorn
+python-multipart

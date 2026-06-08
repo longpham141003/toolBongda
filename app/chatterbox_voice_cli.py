@@ -14,8 +14,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--lang", default="en")
     parser.add_argument("--voice", default="")
+    parser.add_argument("--mode", choices=["standard", "turbo", "multilingual"], default="standard")
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--delivery", default="dramatic")
+    parser.add_argument("--exaggeration", type=float, default=-1.0)
+    parser.add_argument("--cfg-weight", type=float, default=0.5)
+    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--min-p", type=float, default=0.05)
+    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument("--repetition-penalty", type=float, default=1.2)
     parser.add_argument("--max-words", type=int, default=40)
     parser.add_argument("--disable-qa", action="store_true")
     return parser.parse_args()
@@ -113,7 +121,7 @@ def main() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
     from text_to_voice_cli import sanitize_text_for_tts
-    from modules.generation_functions import _generate_with_qa, smart_chunk_text
+    from modules.generation_functions import _generate_with_qa, set_seed, smart_chunk_text
     from modules.model_manager import model_manager
 
     text = sanitize_text_for_tts(args.input.read_text(encoding="utf-8"))
@@ -123,16 +131,30 @@ def main() -> int:
 
     language = str(args.lang or "en").lower()
     voice_path = resolve_voice(root, args.voice, language)
-    exaggeration = delivery_exaggeration(args.delivery)
-    cfg_weight = max(0.15, min(0.85, 0.50 + ((float(args.speed) - 1.0) * 0.35)))
-    temperature = 0.80
+    mode = str(args.mode or "standard").lower()
+    exaggeration = float(args.exaggeration) if float(args.exaggeration) >= 0 else delivery_exaggeration(args.delivery)
+    cfg_weight = max(0.0, min(1.0, float(args.cfg_weight)))
+    temperature = max(0.05, min(5.0, float(args.temperature)))
+    if int(args.seed):
+        set_seed(int(args.seed))
 
     import modules.generation_functions as generation
 
     if args.disable_qa:
         generation.WHISPER_VALIDATION = False
 
-    if language == "en":
+    if mode == "turbo":
+        if language != "en":
+            raise RuntimeError("Turbo hiện chỉ hỗ trợ tiếng Anh.")
+        if not voice_path:
+            raise RuntimeError("Turbo cần chọn một giọng mẫu.")
+        model = model_manager.get_turbo_model()
+        if model is None:
+            raise RuntimeError("Không load được Chatterbox Turbo model.")
+
+        def generate_chunk(chunk: str):
+            return model.generate(chunk, audio_prompt_path=voice_path)
+    elif language == "en" and mode != "multilingual":
         model = model_manager.get_tts_model()
         if model is None:
             raise RuntimeError("Không load được Chatterbox TTS model.")
@@ -144,9 +166,9 @@ def main() -> int:
                 exaggeration=exaggeration,
                 temperature=temperature,
                 cfg_weight=cfg_weight,
-                min_p=0.05,
-                top_p=1.0,
-                repetition_penalty=1.2,
+                min_p=max(0.0, min(1.0, float(args.min_p))),
+                top_p=max(0.0, min(1.0, float(args.top_p))),
+                repetition_penalty=max(1.0, min(2.0, float(args.repetition_penalty))),
             )
     else:
         model = model_manager.get_mtl_model()
@@ -184,6 +206,7 @@ def main() -> int:
         model.sr,
         {
             "lang": language,
+            "mode": mode,
             "voice": args.voice,
             "speed": args.speed,
             "delivery": args.delivery,
@@ -197,6 +220,7 @@ def main() -> int:
                 "timing": str(output_path.with_suffix(".segments.json")),
                 "parts": len(chunks),
                 "engine": "chatterbox",
+                "mode": mode,
             },
             ensure_ascii=False,
         ),

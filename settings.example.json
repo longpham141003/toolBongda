@@ -1,11 +1,21 @@
 {
   "projects_dir": "Projects",
-  "text_to_voice_root": "",
+  "text_to_voice_root": "magic_voice",
   "text_to_voice_python": "",
   "text_to_voice_language": "en",
   "text_to_voice_voice": "factory_vien_male",
+  "text_to_voice_mode": "standard",
   "text_to_voice_delivery": "dramatic",
   "text_to_voice_speed": 1,
+  "chatterbox_exaggeration": 0.9,
+  "chatterbox_cfg_weight": 0.5,
+  "chatterbox_temperature": 0.8,
+  "chatterbox_seed": 0,
+  "chatterbox_min_p": 0.05,
+  "chatterbox_top_p": 1,
+  "chatterbox_repetition_penalty": 1.2,
+  "chatterbox_max_words": 40,
+  "chatterbox_whisper_qa": true,
   "whisper_timing_enabled": true,
   "whisper_timing_model": "base",
   "scene_ai_enabled": true,
@@ -19,6 +29,31 @@
   "image_ai_min_score": 72,
   "keyword_ai_provider": "auto",
   "gemini_keyword_model": "gemini-2.5-flash",
+  "active_workflow_id": "general-video",
+  "workflow_presets": [
+    {
+      "id": "general-video",
+      "name": "Video tổng hợp",
+      "description": "Dùng cho tin tức, thể thao, lịch sử, khoa học và các chủ đề phổ thông.",
+      "steps": [
+        {
+          "enabled": true,
+          "name": "Hiểu chủ đề",
+          "prompt": "Analyze the source and identify the audience, angle, verified facts, named entities, timeline, and strongest visual moments. Do not write the final script yet."
+        },
+        {
+          "enabled": true,
+          "name": "Lập dàn ý",
+          "prompt": "Create a coherent video outline with a clear opening, logical body, specific events, and a concise conclusion. Remove repetition."
+        },
+        {
+          "enabled": true,
+          "name": "Viết lời đọc cuối",
+          "prompt": "Write the final natural voice-over script. Output narration only, without headings, notes, citations, or visual instructions."
+        }
+      ]
+    }
+  ],
   "image_aspect_width": 16,
   "image_aspect_height": 9,
   "image_min_width": 600,
