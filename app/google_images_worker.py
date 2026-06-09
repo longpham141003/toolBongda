@@ -196,11 +196,7 @@ def _valid_download_shape(path: Path) -> bool:
     try:
         with Image.open(path) as image:
             width, height = image.size
-        return (
-            width >= 900
-            and height >= 480
-            and abs((width / max(1, height)) - (16 / 9)) <= 0.04
-        )
+        return width >= 600 and height >= 330
     except Exception:
         return False
 
@@ -277,7 +273,7 @@ def download_google_images(
             wait_until="domcontentloaded",
             timeout=30000,
         )
-        page.wait_for_timeout(2500)
+        page.wait_for_timeout(1400)
         if _is_captcha(page):
             context.close()
             if browser:
@@ -310,7 +306,7 @@ def download_google_images(
                 accepted_dhashes.add(perceptual)
             downloaded.append(str(path))
         thumbnails = page.locator("img")
-        max_clicks = min(thumbnails.count(), max(40, count * 8))
+        max_clicks = min(thumbnails.count(), max(24, count * 6))
         eligible_seen = 0
         for i in range(max_clicks):
             if len(downloaded) >= count:
@@ -335,7 +331,7 @@ def download_google_images(
                 )
                 thumbnails.nth(i).click(timeout=900)
                 clicked += 1
-                page.wait_for_timeout(850)
+                page.wait_for_timeout(450)
                 if _is_captcha(page):
                     context.close()
                     if browser:
@@ -369,7 +365,7 @@ def download_google_images(
             if len(downloaded) < count:
                 try:
                     page.keyboard.press("Escape")
-                    page.wait_for_timeout(200)
+                    page.wait_for_timeout(100)
                 except Exception:
                     pass
         context.close()

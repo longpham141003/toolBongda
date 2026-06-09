@@ -15,13 +15,13 @@ chrome_*_profile/
 # Models, caches, and local environments
 .hf-cache/
 .kokoro_espeakng_loader/
-kokoro-tts-local/
-chatterbox-venv/
-magic_voice/venv/
-magic_voice/.venv/
-magic_voice/outputs/
-magic_voice/__pycache__/
-magic_voice/*.log
+kokoro-tts-local/.venv/
+kokoro-tts-local/.hf_cache/
+kokoro-tts-local/.cache/
+kokoro-tts-local/outputs/
+kokoro-tts-local/.voice_preview/
+kokoro-tts-local/__pycache__/
+kokoro-tts-local/*.log
 .venv/
 venv/
 

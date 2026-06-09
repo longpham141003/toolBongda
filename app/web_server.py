@@ -7,11 +7,13 @@ import subprocess
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +21,12 @@ from pydantic import BaseModel, Field
 
 from .config import APP_DIR, load_settings, save_settings
 from .script_workflow import default_workflow_steps, normalize_workflow_steps, run_script_workflow
-from .text_to_voice_queue import TextToVoiceRunner, chatterbox_voice_choices
+from .text_to_voice_queue import (
+    TextToVoiceRunner,
+    kokoro_voice_choices,
+    normalize_kokoro_language,
+    warm_kokoro_server,
+)
 from .visual_pipeline import (
     _concise_match_query,
     IMAGE_SUFFIXES,
@@ -38,6 +45,7 @@ from .visual_pipeline import (
 
 WEB_DIST = APP_DIR / "webui" / "dist"
 STATE_PATH = APP_DIR / ".webui_state"
+CURRENT_CLIENT_ID: ContextVar[str] = ContextVar("visual_client_id", default="default")
 
 
 class ProjectCreateRequest(BaseModel):
@@ -76,7 +84,6 @@ class KeywordRequest(BaseModel):
     keyword: str
 
 
-IMAGE_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".webm", ".mp4"}
 
 
 def _normalize_workflow_presets(values: Any) -> list[dict[str, Any]]:
@@ -102,11 +109,12 @@ def _normalize_workflow_presets(values: Any) -> list[dict[str, Any]]:
 
 
 class Job:
-    def __init__(self, name: str, *, kind: str = "", asset_id: str = ""):
+    def __init__(self, name: str, *, kind: str = "", asset_id: str = "", client_id: str = "default"):
         self.id = uuid.uuid4().hex
         self.name = name
         self.kind = kind
         self.asset_id = asset_id
+        self.client_id = client_id
         self.status = "queued"
         self.queue_position = 0
         self.progress = 0
@@ -119,6 +127,7 @@ class Job:
         self.error = ""
         self.created_at = time.time()
         self.updated_at = self.created_at
+        self.cancel_requested = False
 
     def log(self, message: str) -> None:
         text = str(message)
@@ -142,6 +151,7 @@ class Job:
             "logs": self.logs,
             "result": self.result,
             "error": self.error,
+            "cancel_requested": self.cancel_requested,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -151,9 +161,33 @@ class RuntimeState:
     def __init__(self) -> None:
         self.lock = threading.RLock()
         self.jobs: dict[str, Job] = {}
-        self.active_job_id: str | None = None
-        self.pending_jobs: list[tuple[Job, Callable[[Job], Any]]] = []
-        self.current_project = self._load_current_project()
+        self.active_job_ids: dict[str, str] = {}
+        self.pending_jobs_by_client: dict[str, list[tuple[Job, Callable[[Job], Any]]]] = {}
+        self.current_projects: dict[str, Path] = {}
+        self.default_project = self._load_current_project()
+
+    @property
+    def client_id(self) -> str:
+        return CURRENT_CLIENT_ID.get() or "default"
+
+    @property
+    def active_job_id(self) -> str | None:
+        return self.active_job_ids.get(self.client_id)
+
+    @property
+    def pending_jobs(self) -> list[tuple[Job, Callable[[Job], Any]]]:
+        return self.pending_jobs_by_client.setdefault(self.client_id, [])
+
+    @property
+    def current_project(self) -> Path | None:
+        return self.current_projects.get(self.client_id, self.default_project)
+
+    @current_project.setter
+    def current_project(self, project: Path | None) -> None:
+        if project is None:
+            self.current_projects.pop(self.client_id, None)
+        else:
+            self.current_projects[self.client_id] = project
 
     def _load_current_project(self) -> Path | None:
         try:
@@ -166,7 +200,7 @@ class RuntimeState:
 
     def set_project(self, project: Path) -> None:
         project = project.resolve()
-        self.current_project = project
+        self.current_projects[self.client_id] = project
         STATE_PATH.write_text(str(project), encoding="utf-8")
 
     def require_project(self) -> Path:
@@ -175,13 +209,14 @@ class RuntimeState:
             raise HTTPException(status_code=400, detail="Chưa chọn project. Hãy tạo hoặc mở project trước.")
         return project
 
-    def _refresh_queue_positions(self) -> None:
-        for index, (job, _callback) in enumerate(self.pending_jobs, start=1):
+    def _refresh_queue_positions(self, client_id: str) -> None:
+        for index, (job, _callback) in enumerate(self.pending_jobs_by_client.get(client_id, []), start=1):
             job.queue_position = index
             job.updated_at = time.time()
 
     def _launch_job(self, job: Job, callback: Callable[[Job], Any]) -> None:
-        self.active_job_id = job.id
+        client_id = job.client_id
+        self.active_job_ids[client_id] = job.id
         job.queue_position = 0
 
         def runner() -> None:
@@ -189,21 +224,31 @@ class RuntimeState:
             job.updated_at = time.time()
             try:
                 job.result = callback(job)
-                job.progress = 100
-                job.status = "done"
+                if job.cancel_requested:
+                    job.status = "cancelled"
+                    job.current_label = "Đã dừng tác vụ"
+                else:
+                    job.progress = 100
+                    job.status = "done"
             except Exception as exc:
-                job.error = str(exc)
-                job.log(f"LỖI: {exc}")
-                job.status = "failed"
+                if job.cancel_requested:
+                    job.log("Đã dừng tác vụ.")
+                    job.status = "cancelled"
+                    job.current_label = "Đã dừng tác vụ"
+                else:
+                    job.error = str(exc)
+                    job.log(f"LỖI: {exc}")
+                    job.status = "failed"
             finally:
                 job.updated_at = time.time()
                 next_job: tuple[Job, Callable[[Job], Any]] | None = None
                 with self.lock:
-                    if self.active_job_id == job.id:
-                        self.active_job_id = None
-                    if self.pending_jobs:
-                        next_job = self.pending_jobs.pop(0)
-                        self._refresh_queue_positions()
+                    if self.active_job_ids.get(client_id) == job.id:
+                        self.active_job_ids.pop(client_id, None)
+                    pending = self.pending_jobs_by_client.get(client_id, [])
+                    if pending:
+                        next_job = pending.pop(0)
+                        self._refresh_queue_positions(client_id)
                     if next_job:
                         self._launch_job(*next_job)
 
@@ -218,9 +263,11 @@ class RuntimeState:
         kind: str = "",
         asset_id: str = "",
     ) -> Job:
+        client_id = self.client_id
         with self.lock:
-            if self.active_job_id:
-                active = self.jobs.get(self.active_job_id)
+            active_job_id = self.active_job_ids.get(client_id)
+            if active_job_id:
+                active = self.jobs.get(active_job_id)
                 if active and active.status in {"queued", "running"} and not allow_queue:
                     raise HTTPException(status_code=409, detail=f"Tác vụ '{active.name}' đang chạy.")
             if asset_id:
@@ -228,24 +275,67 @@ class RuntimeState:
                     (
                         job
                         for job in self.jobs.values()
-                        if job.asset_id == asset_id and job.status in {"queued", "running"}
+                        if job.client_id == client_id
+                        and job.asset_id == asset_id
+                        and job.status in {"queued", "running"}
                     ),
                     None,
                 )
                 if duplicate:
                     return duplicate
-            job = Job(name, kind=kind, asset_id=asset_id)
+            job = Job(name, kind=kind, asset_id=asset_id, client_id=client_id)
             self.jobs[job.id] = job
-            if self.active_job_id:
-                self.pending_jobs.append((job, callback))
-                self._refresh_queue_positions()
+            if active_job_id:
+                self.pending_jobs_by_client.setdefault(client_id, []).append((job, callback))
+                self._refresh_queue_positions(client_id)
             else:
                 self._launch_job(job, callback)
         return job
 
+    def cancel_current(self, clear_project: bool = False) -> Job | None:
+        client_id = self.client_id
+        with self.lock:
+            active = self.jobs.get(self.active_job_ids.get(client_id, ""))
+            if active and active.status in {"queued", "running"}:
+                active.cancel_requested = True
+                active.current_label = "Đang dừng tác vụ..."
+                active.log("Người dùng yêu cầu dừng tác vụ.")
+                active.updated_at = time.time()
+            pending = self.pending_jobs_by_client.get(client_id, [])
+            for job, _callback in pending:
+                job.cancel_requested = True
+                job.status = "cancelled"
+                job.current_label = "Đã hủy khỏi hàng đợi"
+                job.log("Đã hủy khỏi hàng đợi.")
+                job.updated_at = time.time()
+            pending.clear()
+            if clear_project:
+                self.current_projects.pop(client_id, None)
+            return active
+
 
 runtime = RuntimeState()
 app = FastAPI(title="Visual CapCut Studio API", version="2.0")
+
+
+@app.middleware("http")
+async def bind_client_session(request: Request, call_next):
+    client_id = re.sub(r"[^a-zA-Z0-9_-]", "", request.headers.get("X-Visual-Client") or "default")[:80] or "default"
+    token = CURRENT_CLIENT_ID.set(client_id)
+    try:
+        return await call_next(request)
+    finally:
+        CURRENT_CLIENT_ID.reset(token)
+
+
+@app.on_event("startup")
+def warm_voice_engine_on_startup() -> None:
+    threading.Thread(
+        target=warm_kokoro_server,
+        args=(load_settings(),),
+        name="kokoro-warmup",
+        daemon=True,
+    ).start()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
@@ -313,18 +403,9 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
         "projects_dir",
         "text_to_voice_language",
         "text_to_voice_voice",
-        "text_to_voice_mode",
         "text_to_voice_delivery",
         "text_to_voice_speed",
-        "chatterbox_exaggeration",
-        "chatterbox_cfg_weight",
-        "chatterbox_temperature",
-        "chatterbox_seed",
-        "chatterbox_min_p",
-        "chatterbox_top_p",
-        "chatterbox_repetition_penalty",
-        "chatterbox_max_words",
-        "chatterbox_whisper_qa",
+        "text_to_voice_max_chars",
         "openai_api_key",
         "keyword_ai_model",
         "keyword_ai_provider",
@@ -333,12 +414,14 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
         "gemini_vision_model",
         "image_ai_validation_enabled",
         "image_ai_min_score",
+        "image_search_parallel_jobs",
         "script_workflow_input",
         "script_workflow_steps",
         "workflow_presets",
         "active_workflow_id",
         "text_to_voice_root",
         "text_to_voice_python",
+        "whisper_python",
         "whisper_timing_enabled",
         "whisper_timing_model",
         "scene_ai_enabled",
@@ -392,16 +475,16 @@ def _preflight_payload() -> dict[str, Any]:
         voice_root = APP_DIR / voice_root
     checks.append(
         {
-            "id": "magic_voice",
-            "label": "Magic Voice đã nằm trong tool",
-            "ok": (voice_root / "app.py").is_file() and (voice_root / "modules" / "model_manager.py").is_file(),
+            "id": "kokoro_voice",
+            "label": "Kokoro TTS đã nằm trong tool",
+            "ok": (voice_root / "app.py").is_file(),
             "detail": str(voice_root),
         }
     )
     raw_python = str(settings.get("text_to_voice_python") or "").strip()
-    python_path = Path(raw_python) if raw_python else APP_DIR / "chatterbox-venv" / "Scripts" / "python.exe"
+    python_path = Path(raw_python) if raw_python else voice_root / ".venv" / "Scripts" / "python.exe"
     if not raw_python:
-        python_path = APP_DIR / "chatterbox-venv" / "Scripts" / "python.exe"
+        python_path = voice_root / ".venv" / "Scripts" / "python.exe"
     elif not python_path.is_absolute():
         python_path = APP_DIR / python_path
     checks.append({"id": "voice_python", "label": "Python tạo voice", "ok": python_path.is_file(), "detail": str(python_path)})
@@ -435,9 +518,76 @@ def _open_capcut(settings: dict[str, Any]) -> bool:
     return False
 
 
+def _search_assets_parallel(
+    project: Path,
+    items: list[dict[str, Any]],
+    settings: dict[str, Any],
+    job: Job,
+    *,
+    initial_completed: int = 0,
+) -> list[dict[str, Any]]:
+    pending = [(index, item) for index, item in enumerate(items) if item.get("status") != "approved"]
+    if not pending:
+        return items
+    max_workers = max(1, min(4, int(settings.get("image_search_parallel_jobs") or 3), len(pending)))
+    job.log(f"Tìm media song song {max_workers} cảnh/lượt.")
+
+    def search_one(index: int, item: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
+        return index, search_and_download_asset(project, dict(item), job.log, settings=settings)
+
+    finished = 0
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="asset-search") as executor:
+        futures = {executor.submit(search_one, index, item): index for index, item in pending}
+        for future in as_completed(futures):
+            if job.cancel_requested:
+                for queued in futures:
+                    queued.cancel()
+                raise RuntimeError("Stopped.")
+            index = futures[future]
+            try:
+                _, result = future.result()
+                items[index] = result
+            except Exception as exc:
+                items[index]["status"] = "error"
+                items[index]["error"] = str(exc)
+                job.log(f"{items[index].get('asset_id')}: {exc}")
+            finished += 1
+            job.completed_units = initial_completed + finished
+            job.progress = min(99, round((job.completed_units / max(1, job.total_units)) * 100))
+            job.current_label = f"Đã tìm media {finished}/{len(pending)} cảnh"
+            save_manifest(project, items)
+            job.result = {
+                "items": items,
+                "project": _project_payload(project),
+                "last_asset_id": items[index].get("asset_id"),
+            }
+    return items
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "active_job_id": runtime.active_job_id}
+
+
+def _cancel_jobs_payload(clear_project: bool = False) -> dict[str, Any]:
+    active = runtime.cancel_current(clear_project=clear_project)
+    return {
+        "ok": True,
+        "cancelled_job": active.payload() if active else None,
+        "active_job_id": runtime.active_job_id,
+    }
+
+
+@app.post("/api/jobs/cancel")
+def cancel_jobs(clear_project: bool = False) -> dict[str, Any]:
+    return _cancel_jobs_payload(clear_project=clear_project)
+
+
+@app.get("/api/jobs/cancel")
+def cancel_jobs_get(clear_project: bool = False) -> dict[str, Any]:
+    return _cancel_jobs_payload(clear_project=clear_project)
 
 
 @app.get("/api/state")
@@ -471,79 +621,14 @@ def state() -> dict[str, Any]:
 @app.get("/api/voices")
 def voices(language: str = "en") -> dict[str, Any]:
     settings = load_settings()
-    items = chatterbox_voice_choices(settings, language)
-    return {"items": items, "options": [{"value": item, "label": item} for item in items]}
-
-
-def _safe_voice_name(value: str) -> str:
-    import unicodedata
-
-    normalized = unicodedata.normalize("NFKD", str(value or ""))
-    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
-    normalized = re.sub(r"[^A-Za-z0-9_ -]+", "", normalized).strip().replace(" ", "_")
-    normalized = re.sub(r"_+", "_", normalized).strip("_")
-    if not normalized:
-        raise HTTPException(status_code=400, detail="Tên giọng đang trống.")
-    return normalized[:60]
-
-
-def _convert_audio_to_wav(source: Path, target: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if source.suffix.lower() == ".wav":
-        shutil.copy2(source, target)
-        return
-    result = subprocess.run(
-        ["ffmpeg", "-y", "-i", str(source), "-ac", "1", "-ar", "24000", str(target)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-    if result.returncode != 0 or not target.exists() or target.stat().st_size < 1024:
-        detail = (result.stderr or result.stdout or "").strip()
-        raise HTTPException(status_code=400, detail=f"Không chuyển được audio sang WAV. Cần cài ffmpeg hoặc upload file WAV sạch. {detail[-300:]}")
-
-
-@app.post("/api/voices/clone")
-async def clone_voice_native(
-    name: str,
-    gender: str = "male",
-    language: str = "en",
-    file: UploadFile = File(...),
-) -> dict[str, Any]:
-    settings = load_settings()
-    voice_root = Path(str(settings.get("text_to_voice_root") or APP_DIR / "magic_voice"))
-    if not voice_root.is_absolute():
-        voice_root = APP_DIR / voice_root
-    voice_dir = voice_root / "modules" / "voice_samples"
-    if not voice_dir.exists():
-        raise HTTPException(status_code=500, detail=f"Không thấy thư mục voice_samples: {voice_dir}")
-
-    suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in IMAGE_AUDIO_SUFFIXES:
-        raise HTTPException(status_code=400, detail="File không hợp lệ. Hãy upload WAV/MP3/M4A/WEBM/MP4 audio.")
-    clean_name = _safe_voice_name(name)
-    clean_gender = "female" if str(gender).lower().startswith("f") else "male"
-    clean_lang = re.sub(r"[^a-z]", "", str(language or "en").lower()) or "en"
-    final_stem = f"{clean_name}_{clean_gender}" + (f"_{clean_lang}" if clean_lang != "en" else "")
-    target = voice_dir / f"{final_stem}.wav"
-    if target.exists():
-        raise HTTPException(status_code=409, detail=f"Giọng '{final_stem}' đã tồn tại. Hãy dùng tên khác.")
-
-    temp_dir = voice_root / "tmp_uploads"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    temp_path = temp_dir / f"{uuid.uuid4().hex}{suffix}"
-    try:
-        with temp_path.open("wb") as output:
-            shutil.copyfileobj(file.file, output)
-        _convert_audio_to_wav(temp_path, target)
-    finally:
-        try:
-            temp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-    choices = chatterbox_voice_choices(settings, clean_lang)
-    return {"ok": True, "voice": final_stem, "items": choices, "options": [{"value": item, "label": item} for item in choices]}
+    normalized_language, warning = normalize_kokoro_language(language)
+    items = kokoro_voice_choices(settings, normalized_language)
+    return {
+        "items": items,
+        "language": normalized_language,
+        "warning": warning,
+        "options": [{"value": item, "label": item} for item in items],
+    }
 
 
 @app.post("/api/settings")
@@ -611,7 +696,11 @@ def run_workflow(request: WorkflowRequest) -> dict[str, Any]:
                 job.completed_units = job.total_units
                 job.progress = 100
 
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
         script = run_script_workflow(request.source_input, request.steps, settings, log=workflow_log)
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
         job.completed_units = job.total_units
         job.progress = 100
         return {"script": script}
@@ -626,11 +715,38 @@ def create_voice(request: ScriptRequest) -> dict[str, Any]:
     settings = load_settings()
 
     def task(job: Job) -> dict[str, Any]:
+        job.determinate = True
+        job.total_units = 100
         job.current_label = "Đang tạo voice và timing"
-        path = generate_voice(project, settings, job.log)
+        seen_chunks: set[tuple[int, int]] = set()
+
+        def voice_log(message: str) -> None:
+            text = str(message or "")
+            job.log(text)
+            match = re.search(r"đoạn\s+(\d+)\s*/\s*(\d+)", text, flags=re.I)
+            if match:
+                current = max(1, int(match.group(1)))
+                total = max(1, int(match.group(2)))
+                seen_chunks.add((current, total))
+                job.total_units = total
+                job.completed_units = max(0, min(total, current - 1))
+                chunk_progress = 0
+                sampling = re.search(r"sampling\s+(\d+)%", text, flags=re.I)
+                if sampling:
+                    chunk_progress = max(0, min(99, int(sampling.group(1))))
+                calculated_progress = round(((job.completed_units + chunk_progress / 100) / total) * 100)
+                job.progress = max(job.progress, min(99, calculated_progress))
+                job.current_label = f"Đang tạo voice đoạn {current}/{total}"
+            elif "đã lưu audio" in text.lower():
+                job.progress = 100
+                job.current_label = "Đã tạo xong voice"
+
+        path = generate_voice(project, settings, voice_log, stop_check=lambda: job.cancel_requested)
+        job.completed_units = job.total_units
+        job.progress = 100
         return {"voice_path": str(path), "project": _project_payload(project)}
 
-    return {"job": runtime.start_job("B1 Magic Voice", task).payload()}
+    return {"job": runtime.start_job("B1 Kokoro Voice", task).payload()}
 
 
 @app.post("/api/voice-preview")
@@ -640,30 +756,23 @@ def preview_voice(request: VoicePreviewRequest) -> dict[str, Any]:
         for key in (
             "text_to_voice_language",
             "text_to_voice_voice",
-            "text_to_voice_mode",
             "text_to_voice_delivery",
             "text_to_voice_speed",
-            "chatterbox_exaggeration",
-            "chatterbox_cfg_weight",
-            "chatterbox_temperature",
-            "chatterbox_seed",
-            "chatterbox_min_p",
-            "chatterbox_top_p",
-            "chatterbox_repetition_penalty",
-            "chatterbox_max_words",
-            "chatterbox_whisper_qa",
             "text_to_voice_root",
             "text_to_voice_python",
         ):
             if key in request.settings:
                 settings[key] = request.settings[key]
     sample = str(request.text or "").strip()
+    requested_lang = str(settings.get("text_to_voice_language") or "en")
+    normalized_lang, language_warning = normalize_kokoro_language(requested_lang)
+    if normalized_lang != requested_lang:
+        settings["text_to_voice_language"] = normalized_lang
     if not sample:
-        lang = str(settings.get("text_to_voice_language") or "en")
         sample = (
             "This is a voice preview for your video. Listen to the tone, emotion, pace, and clarity before creating the full narration."
-            if lang == "en"
-            else "Đây là đoạn nghe thử giọng cho video của bạn. Hãy nghe chất giọng, cảm xúc, nhịp đọc và độ rõ trước khi tạo bản đọc đầy đủ."
+            if normalized_lang == "en"
+            else "This is a voice preview for your video. Listen to tone, emotion, pace, and clarity before creating the full narration."
         )
     if len(sample) > 500:
         sample = sample[:500]
@@ -687,7 +796,9 @@ def preview_voice(request: VoicePreviewRequest) -> dict[str, Any]:
         "ok": True,
         "path": result_path,
         "url": f"/api/media?path={quote(result_path, safe='')}",
-        "logs": logs[-8:],
+        "logs": ([language_warning] if language_warning else []) + logs[-8:],
+        "language": normalized_lang,
+        "warning": language_warning,
     }
 
 
@@ -698,10 +809,16 @@ def analyze() -> dict[str, Any]:
 
     def task(job: Job) -> dict[str, Any]:
         job.current_label = "Đang căn timing và chia cảnh"
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
         items = build_asset_manifest(project, settings, log=job.log)
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
         job.log(f"Đã chia {len(items)} cảnh theo Whisper SRT + ngữ cảnh.")
         job.current_label = "Đang tối ưu keyword bằng AI"
         items = optimize_asset_keywords_with_ai(project, settings, log=job.log)
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
         return {"items": items, "project": _project_payload(project)}
 
     return {"job": runtime.start_job("B2 Phan tich canh", task).payload()}
@@ -716,23 +833,22 @@ def analyze_and_search() -> dict[str, Any]:
         job.determinate = True
         job.total_units = 2
         job.current_label = "Đang chia cảnh theo giọng đọc"
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
         items = build_asset_manifest(project, settings, log=job.log)
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
         job.log(f"Đã chia {len(items)} cảnh. Đang tối ưu từ khóa.")
         items = optimize_asset_keywords_with_ai(project, settings, log=job.log)
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
         save_manifest(project, items)
         job.completed_units = 1
         job.progress = 50
 
-        total = max(1, len(items))
         job.total_units = len(items) + 1
-        for index, item in enumerate(items):
-            job.completed_units = index + 1
-            job.progress = round((job.completed_units / max(1, job.total_units)) * 100)
-            job.current_label = f"Đang tìm media cho cảnh {index + 1}/{len(items)}"
-            if item.get("status") != "approved":
-                items[index] = search_and_download_asset(project, item, job.log, settings=settings)
-                save_manifest(project, items)
-            job.result = {"items": items, "project": _project_payload(project), "last_asset_id": items[index].get("asset_id")}
+        job.current_label = f"Đang tìm media cho {len(items)} cảnh"
+        items = _search_assets_parallel(project, items, settings, job, initial_completed=1)
         job.completed_units = job.total_units
         job.progress = 100
         job.current_label = "Đã chuẩn bị xong cảnh và media"
@@ -748,23 +864,11 @@ def search_all() -> dict[str, Any]:
 
     def task(job: Job) -> dict[str, Any]:
         items = load_manifest(project)
-        total = max(1, len(items))
         job.determinate = True
         job.total_units = len(items)
-        for index, item in enumerate(items):
-            job.completed_units = index
-            job.progress = round((index / total) * 100)
-            job.current_label = f"Đang xử lý {item.get('asset_id') or f'asset {index + 1}'}"
-            if item.get("status") != "approved":
-                items[index] = search_and_download_asset(project, item, job.log, settings=settings)
-                save_manifest(project, items)
-            job.completed_units = index + 1
-            job.progress = round(((index + 1) / total) * 100)
-            job.result = {
-                "items": items,
-                "project": _project_payload(project),
-                "last_asset_id": items[index].get("asset_id"),
-            }
+        items = _search_assets_parallel(project, items, settings, job)
+        job.completed_units = job.total_units
+        job.progress = 100
         job.current_label = "Đã xử lý xong tất cả asset"
         return {"items": items, "project": _project_payload(project)}
 
@@ -784,6 +888,8 @@ def retry_asset(asset_id: str) -> dict[str, Any]:
         job.determinate = True
         job.total_units = 1
         job.current_label = f"Đang tìm lại {asset_id}"
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
         items[index]["status"] = "pending"
         items[index] = search_and_download_asset(
             project,
@@ -873,7 +979,11 @@ def export_project(request: ExportRequest) -> dict[str, Any]:
     def task(job: Job) -> dict[str, Any]:
         job.current_label = "Đang tạo và cài đặt draft CapCut"
         job.log("Đang tạo project CapCut...")
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
         path = export_capcut_project(project, title, install_to_capcut=True)
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
         opened = _open_capcut(load_settings())
         job.log("Đã mở CapCut." if opened else "Không tự mở được CapCut.")
         return {"capcut_path": str(path), "opened": opened}

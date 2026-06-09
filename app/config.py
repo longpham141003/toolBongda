@@ -1,33 +1,37 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 
 APP_DIR = Path(__file__).resolve().parents[1]
 SETTINGS_PATH = APP_DIR / "settings.json"
 
+
+def default_projects_dir() -> Path:
+    return Path.home() / "Videos" / "VisualCapCutStudio" / "Projects"
+
+
+def _expand_config_path(value: str | Path | None) -> Path:
+    raw = str(value or "").strip()
+    if not raw:
+        return Path()
+    return Path(os.path.expandvars(raw)).expanduser()
+
+
 DEFAULT_SETTINGS = {
-    "projects_dir": str(APP_DIR / "Projects"),
-    "text_to_voice_root": str(APP_DIR / "magic_voice"),
+    "projects_dir": str(default_projects_dir()),
+    "text_to_voice_root": str(APP_DIR / "kokoro-tts-local"),
     "text_to_voice_python": "",
     "text_to_voice_language": "en",
-    "text_to_voice_voice": "factory_vien_male",
-    "text_to_voice_mode": "standard",
+    "text_to_voice_voice": "af_heart",
     "text_to_voice_delivery": "dramatic",
     "text_to_voice_speed": 1.0,
-    "chatterbox_exaggeration": 0.9,
-    "chatterbox_cfg_weight": 0.5,
-    "chatterbox_temperature": 0.8,
-    "chatterbox_seed": 0,
-    "chatterbox_min_p": 0.05,
-    "chatterbox_top_p": 1.0,
-    "chatterbox_repetition_penalty": 1.2,
     "text_to_voice_max_chars": 10000,
     "text_to_voice_timeout": 1800,
-    "chatterbox_max_words": 40,
-    "chatterbox_whisper_qa": True,
-    "chatterbox_hf_home": str(APP_DIR / ".hf-cache"),
+    "whisper_python": sys.executable,
     "whisper_timing_enabled": True,
     "whisper_timing_model": "base",
     "whisper_timing_beam_size": 5,
@@ -46,6 +50,7 @@ DEFAULT_SETTINGS = {
     "gemini_vision_model": "gemini-2.5-flash",
     "image_ai_validation_enabled": True,
     "image_ai_min_score": 72,
+    "image_search_parallel_jobs": 3,
     "script_workflow_input": "",
     "script_workflow_steps": [
         {
@@ -133,12 +138,48 @@ def load_settings() -> dict:
         pass
     settings = dict(DEFAULT_SETTINGS)
     settings.update(data)
-    legacy_voice_root = r"C:\Users\longp\Downloads\SRT & Audio Vien\Chatterbox_Tool"
-    if str(settings.get("text_to_voice_root") or "").strip() == legacy_voice_root:
-        settings["text_to_voice_root"] = str(APP_DIR / "magic_voice")
-    projects = Path(str(settings.get("projects_dir") or ""))
-    if not projects.is_absolute():
-        projects = APP_DIR / projects
+    for deprecated_key in (
+        "text_to_voice_mode",
+        "chatterbox_exaggeration",
+        "chatterbox_cfg_weight",
+        "chatterbox_temperature",
+        "chatterbox_seed",
+        "chatterbox_min_p",
+        "chatterbox_top_p",
+        "chatterbox_repetition_penalty",
+        "chatterbox_max_words",
+        "chatterbox_whisper_qa",
+        "chatterbox_hf_home",
+    ):
+        settings.pop(deprecated_key, None)
+    configured_voice_root = str(settings.get("text_to_voice_root") or "").strip().lower()
+    if not configured_voice_root or "chatterbox" in configured_voice_root or configured_voice_root.endswith("\\magic_voice"):
+        settings["text_to_voice_root"] = str(APP_DIR / "kokoro-tts-local")
+        settings["text_to_voice_python"] = ""
+    if str(settings.get("text_to_voice_voice") or "").strip() not in {
+        "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore",
+        "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "am_adam",
+        "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx",
+        "am_puck", "am_santa", "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
+        "bm_daniel", "bm_fable", "bm_george", "bm_lewis", "ef_dora", "em_alex",
+        "em_santa", "ff_siwis", "hf_alpha", "hf_beta", "hm_omega", "hm_psi",
+        "if_sara", "im_nicola", "jf_alpha", "jf_gongitsune", "jf_nezumi",
+        "jf_tebukuro", "jm_kumo", "pf_dora", "pm_alex", "pm_santa", "zf_xiaobei",
+        "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi", "zm_yunjian", "zm_yunxi",
+        "zm_yunxia", "zm_yunyang",
+    }:
+        settings["text_to_voice_voice"] = "af_heart"
+    projects = _expand_config_path(settings.get("projects_dir"))
+    repo_projects = (APP_DIR / "Projects").resolve()
+    if not projects or str(projects).strip() in {".", "Projects"}:
+        projects = default_projects_dir()
+    elif not projects.is_absolute():
+        projects = default_projects_dir().parent / projects
+    try:
+        if projects.resolve() == repo_projects:
+            projects = default_projects_dir()
+    except Exception:
+        pass
     settings["projects_dir"] = str(projects)
     return settings
 
@@ -146,5 +187,9 @@ def load_settings() -> dict:
 def save_settings(settings: dict) -> None:
     data = dict(DEFAULT_SETTINGS)
     data.update(settings or {})
-    Path(str(data["projects_dir"])).mkdir(parents=True, exist_ok=True)
+    projects = _expand_config_path(data.get("projects_dir")) or default_projects_dir()
+    if not projects.is_absolute():
+        projects = default_projects_dir().parent / projects
+    data["projects_dir"] = str(projects)
+    projects.mkdir(parents=True, exist_ok=True)
     SETTINGS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

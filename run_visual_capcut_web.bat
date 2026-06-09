@@ -8,6 +8,39 @@ where py >nul 2>nul || (
   exit /b 1
 )
 
+if not exist "settings.json" (
+  copy /Y "settings.example.json" "settings.json" >nul
+)
+
+py -3.13 -m pip show fastapi >nul 2>nul || (
+  echo Dang cai dependency backend...
+  py -3.13 -m pip install -r requirements.txt
+  if errorlevel 1 (
+    echo Cai dependency backend that bai.
+    pause
+    exit /b 1
+  )
+)
+
+if not exist "kokoro-tts-local\app.py" (
+  echo Thieu thu muc kokoro-tts-local. Hay pull lai day du repo.
+  pause
+  exit /b 1
+)
+
+if not exist "kokoro-tts-local\.venv\Scripts\python.exe" (
+  echo Lan dau chay: dang cai Kokoro local...
+  powershell -NoProfile -ExecutionPolicy Bypass -File "kokoro-tts-local\setup.ps1"
+  if errorlevel 1 (
+    echo Cai Kokoro that bai.
+    pause
+    exit /b 1
+  )
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$owners = Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; foreach ($owner in $owners) { try { Stop-Process -Id $owner -Force -ErrorAction Stop } catch {} }"
+timeout /t 1 /nobreak >nul
+
 start "Visual CapCut API" /min py -3.13 -m app.web_server
 
 for /l %%i in (1,1,30) do (

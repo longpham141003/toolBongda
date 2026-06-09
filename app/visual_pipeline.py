@@ -169,7 +169,7 @@ def refine_timing_with_whisper(
             log("Whisper timing: dùng lại kết quả đã căn theo voice.")
         return existing
 
-    raw_python = str(settings.get("text_to_voice_python") or "").strip()
+    raw_python = str(settings.get("whisper_python") or "").strip()
     python_path = Path(raw_python) if raw_python else Path(sys.executable)
     if not python_path.is_absolute():
         python_path = Path(__file__).resolve().parents[1] / python_path
@@ -195,7 +195,7 @@ def refine_timing_with_whisper(
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
-    hf_home = str(settings.get("chatterbox_hf_home") or "").strip()
+    hf_home = str(settings.get("whisper_hf_home") or "").strip()
     if hf_home:
         env["HF_HOME"] = hf_home
         env["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
@@ -599,7 +599,7 @@ def build_asset_manifest(
         ]
     script_path = project / "scripts" / "script_final.txt"
     script = script_path.read_text(encoding="utf-8", errors="replace").strip()
-    assets = _apply_match_search_context(assets, script)
+    assets = _apply_script_visual_context(assets, script)
     manifest_path = project / "assets" / "asset_manifest.json"
     write_json(
         manifest_path,
@@ -621,7 +621,10 @@ def _infer_match_teams(script: str) -> list[str]:
     patterns = (
         r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\s+(?:vs\.?|versus)\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
         r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\s+faced\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
+        r"\bhelp\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b[^.!?]{0,50}\b(?:defeat|beat)\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
+        r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b[^.!?]{0,30}\b(?:defeat|beat|defeated|beat)\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
         r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b[^.!?]{0,100}\bmatch against\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
+        r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b[^.!?]{0,80}\b(?:defeated|beat|lost to|drew with)\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
         r"^([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,2})\b[^.!?]{0,140}\bagainst\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
     )
     for pattern in patterns:
@@ -738,6 +741,102 @@ def _apply_match_search_context(items: list[dict], script: str) -> list[dict]:
     return items
 
 
+def _script_context_text(script: str, item: dict | None = None) -> str:
+    item = item or {}
+    return " ".join(
+        str(value or "")
+        for value in (
+            script,
+            item.get("sentence_text"),
+            item.get("main_subject"),
+            item.get("action_context"),
+            item.get("visual_intent"),
+        )
+    )
+
+
+def _strip_foreign_context_phrases(query: str, script: str, item: dict) -> str:
+    value = _clean_search_keyword(query)
+    if not value:
+        return ""
+    context = _script_context_text(script, item).lower()
+    keep_action_words = {
+        "action", "match", "goal", "celebration", "touchline", "tackle", "score",
+        "scored", "players", "team", "stadium", "victory", "defeat", "final",
+    }
+    kept_words = []
+    for word in value.split():
+        normalized = re.sub(r"[^A-Za-z0-9-]", "", word).lower()
+        if not normalized or normalized in {"the", "a", "an"}:
+            continue
+        is_name_like = bool(re.match(r"^[A-Z][A-Za-z'-]+$", word))
+        if is_name_like and normalized not in context and normalized not in keep_action_words:
+            continue
+        kept_words.append(word)
+    cleaned = " ".join(kept_words)
+    return _clean_search_keyword(cleaned)
+
+
+def _contextual_match_query(item: dict, script: str, teams: list[str]) -> str:
+    if len(teams) != 2:
+        return ""
+    score = ""
+    score_words = {
+        "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+        "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    }
+    score_match = re.search(
+        r"\b(one|two|three|four|five|six|seven|eight|nine)[ -](one|two|three|four|five|six|seven|eight|nine)\b",
+        script,
+        flags=re.I,
+    )
+    if score_match:
+        score = f"{score_words[score_match.group(1).lower()]}-{score_words[score_match.group(2).lower()]}"
+    subject, action = _scene_match_action(item, teams)
+    if not subject:
+        subject = str(item.get("main_subject") or "").strip()
+    action_short = "touchline" if "coach touchline" in action else "celebration" if "goal celebration" in action else "match action"
+    return _concise_match_query(" ".join(value for value in (subject, teams[0], teams[1], score, action_short) if value), item)
+
+
+def _apply_script_visual_context(items: list[dict], script: str) -> list[dict]:
+    script = str(script or "")
+    teams = _infer_match_teams(script)
+    script_lower = script.lower()
+    for item in items:
+        raw_queries = []
+        for key in ("keyword", "ai_search_keyword"):
+            if item.get(key):
+                raw_queries.append(str(item.get(key)))
+        for key in ("google_queries", "fallback_keywords", "sportsdb_queries"):
+            if isinstance(item.get(key), list):
+                raw_queries.extend(str(value) for value in item.get(key) if str(value).strip())
+        sanitized = []
+        for query in raw_queries:
+            query = _strip_foreign_context_phrases(query, script, item)
+            if query and query not in sanitized:
+                sanitized.append(query)
+        is_match_context = (
+            len(teams) == 2
+            and _is_match_photography_item(item)
+            and any(team.lower() in script_lower for team in teams)
+        )
+        if is_match_context:
+            item["match_teams"] = teams
+            contextual = _contextual_match_query(item, script, teams)
+            if contextual and contextual not in sanitized:
+                sanitized.insert(0, contextual)
+            item["visual_source_type"] = "match_photography"
+            item["sportsdb_queries"] = []
+        if sanitized:
+            item["keyword"] = sanitized[0]
+            item["ai_search_keyword"] = sanitized[0]
+            item["google_queries"] = sanitized[:4]
+            item["fallback_keywords"] = [value for value in sanitized[1:6] if value != sanitized[0]]
+        item["script_context_checked"] = True
+    return items
+
+
 def group_scenes_with_ai(
     project: Path,
     sentences: list[dict],
@@ -818,8 +917,9 @@ def _scene_prompt(
     target_max_seconds: float,
 ) -> str:
     return (
-        "You are a professional sports documentary editor and visual researcher.\n"
+        "You are a professional video editor and visual researcher.\n"
         "Read the full script and every timed SRT sentence before deciding scene boundaries.\n"
+        "Infer the video's topic and genre from the FULL SCRIPT. Do not force a sports interpretation unless the script is clearly about sports.\n"
         "Group consecutive sentence indexes into coherent visual scenes.\n"
         "Scene rules:\n"
         "- Split when the main person, team, location, event, action, or time period changes.\n"
@@ -831,13 +931,13 @@ def _scene_prompt(
         "location_change, time_change, action_change, or continuation. First scene uses opening.\n"
         "- main_subject names the exact visible person/team/place/object.\n"
         "- action_context describes the visible action, event, location, and useful date/competition context.\n"
-        "- This tool needs real editorial match photography, not thumbnails, title cards, posters, graphics, wallpapers, "
-        "training photos, portraits, logos, badges, team artwork, or generic player photos.\n"
-        "- For narration about a specific match, visual_source_type must be match_photography for every scene, including "
-        "the introduction and conclusion. Keep visuals inside that same match.\n"
+        "- This tool needs real useful visual assets, not thumbnails, title cards, posters, graphics, wallpapers, logos, or unrelated generic images.\n"
+        "- For narration about a specific sports match, visual_source_type should be match_photography and visuals must stay inside that same match.\n"
+        "- For non-sports narration, choose the appropriate visual_source_type and never invent sports teams/events.\n"
         "- search_keyword is a short 4-8 word Google Images query.\n"
-        "- Every match query must include both teams/opponents when known and use a visible match moment: match action, "
+        "- Every sports match query must include both teams/opponents when known and use a visible match moment: match action, "
         "goal, celebration, tackle, substitution, coach touchline, players after final whistle.\n"
+        "- Never introduce named people, countries, teams, places, or events that do not appear in the full script or scene.\n"
         "- Avoid abstract/generic queries such as football player, greatest player, famous team, sports scene.\n"
         "- Return 3-5 specific fallback_keywords.\n"
         "- sportsdb_queries contain only exact player/team/stadium/event names.\n"
@@ -1088,10 +1188,16 @@ def optimize_asset_keywords_with_ai(
         elif gemini_key:
             provider = "gemini"
     api_key = openai_key if provider == "openai" else gemini_key
+    script_path = project / "scripts" / "script_final.txt"
+    script = script_path.read_text(encoding="utf-8", errors="replace").strip() if script_path.exists() else ""
     if not api_key:
         if callable(log):
             log("AI keyword: chưa có API key, dùng keyword local.")
-        return load_manifest(project)
+        items = load_manifest(project)
+        if script:
+            items = _apply_script_visual_context(items, script)
+            save_manifest(project, items)
+        return items
 
     items = load_manifest(project)
     if not items:
@@ -1103,7 +1209,10 @@ def optimize_asset_keywords_with_ai(
         for item in items
     ):
         if callable(log):
-            log("AI keyword: Gemini đã tạo keyword ngay khi chia cảnh, không gọi lại API.")
+            log("AI keyword: Gemini đã tạo keyword khi chia cảnh; kiểm tra lại theo toàn bộ script.")
+        if script:
+            items = _apply_script_visual_context(items, script)
+            save_manifest(project, items)
         return items
     for item in items:
         item.setdefault("keyword_local", item.get("keyword") or "")
@@ -1123,11 +1232,11 @@ def optimize_asset_keywords_with_ai(
             log(f"AI keyword: tối ưu {start + 1}-{start + len(chunk)}/{len(items)}")
         try:
             if provider == "gemini":
-                result = _call_keyword_ai_gemini(api_key, str(settings.get("gemini_keyword_model") or "gemini-2.5-flash"), payload)
+                result = _call_keyword_ai_gemini(api_key, str(settings.get("gemini_keyword_model") or "gemini-2.5-flash"), payload, script)
             else:
                 if not api_key.startswith("sk-"):
                     raise RuntimeError("OpenAI key phải bắt đầu bằng sk-. Nếu dùng key AQ..., hãy chọn provider Gemini.")
-                result = _call_keyword_ai_openai(api_key, str(settings.get("keyword_ai_model") or "gpt-4.1-mini"), payload)
+                result = _call_keyword_ai_openai(api_key, str(settings.get("keyword_ai_model") or "gpt-4.1-mini"), payload, script)
         except Exception as exc:
             if callable(log):
                 log(f"AI keyword lỗi, giữ keyword/query fallback nội bộ: {exc}")
@@ -1162,34 +1271,34 @@ def optimize_asset_keywords_with_ai(
             item["google_queries"] = [_clean_search_keyword(value) for value in google_queries if _clean_search_keyword(value)][:8]
             item["visual_intent"] = str(row.get("visual_intent") or "").strip()
             item["keyword_source"] = provider
-    script_path = project / "scripts" / "script_final.txt"
-    if script_path.exists():
-        script = script_path.read_text(encoding="utf-8", errors="replace").strip()
-        items = _apply_match_search_context(items, script)
+    if script:
+        items = _apply_script_visual_context(items, script)
     save_manifest(project, items)
     return items
 
 
-def _keyword_prompt(scenes: list[dict]) -> str:
+def _keyword_prompt(scenes: list[dict], script: str = "") -> str:
     prompt = (
-        "You create sports visual asset search plans for video B-roll.\n"
-        "For each scene, understand the real visual meaning and return precise English search phrases.\n"
+        "You create visual asset search plans for a video production tool.\n"
+        "First read the FULL SCRIPT to understand the topic, genre, real-world context, named entities, location, time, and visual boundaries.\n"
+        "Then create precise English search phrases for each scene. Do not mix in people, countries, teams, places, brands, events, or topics that are not present in the full script or the scene.\n"
         "Rules:\n"
-        "- Target these sources in order: TheSportsDB, then Google Images via Playwright.\n"
+        "- The tool can use structured sources and Google Images via Playwright.\n"
         "- Main search_keyword must be 4-8 words and read like a normal Google Images search.\n"
-        "- Prefer exact visible moment: person + club/country/event + action/time.\n"
-        "- For a specific match, return only real match photography from that match. Never request portraits, training, "
-        "logos, artwork, thumbnails, posters, title cards, wallpapers, previews, reaction videos, or highlight thumbnails.\n"
-        "- Include both opponents in every specific-match query when known.\n"
-        "- Bad: football player, soccer, sports, family man, greatest player, real life action scene.\n"
-        "- Good: Lionel Messi Barcelona dribbling, Lionel Messi Luis Suarez Barcelona, Lionel Messi Argentina World Cup trophy 2022.\n"
-        "- Do not include abstract filler words like known, considered, important, history, famous.\n"
+        "- Prefer exact visible subject + event/location/action/time.\n"
+        "- If the script is about a specific sports match, queries must stay inside that match and include both opponents when known.\n"
+        "- If the script is not sports, do not invent sports terms or sports sources.\n"
+        "- Never request thumbnails, posters, title cards, wallpapers, logos, badges, collages, or unrelated generic images unless the scene specifically asks for them.\n"
+        "- Bad: football player, soccer, sports, famous, real life action scene, dramatic background.\n"
+        "- Good examples depend on context: Lionel Messi Argentina World Cup trophy 2022; NASA Artemis moon rocket launch; Roman Empire marble statue; iPhone factory assembly line.\n"
+        "- Do not include abstract filler words like known, considered, important, history, famous, editorial photo.\n"
         "- If a real public figure/team/event is mentioned, keep the name.\n"
-        "- sportsdb_queries: exact player/team/stadium/event names only, no long sentences.\n"
-        "- google_queries: person + both opponents + score or one action word. Never append editorial photo.\n"
+        "- sportsdb_queries: only for sports entities; otherwise return an empty list.\n"
+        "- google_queries: exact subject/context/action, no invented entities and no filler.\n"
         "- Include 3-5 fallback_keywords, all specific enough for image search.\n"
         "- For each item return: asset_id, visual_intent, search_keyword, fallback_keywords, sportsdb_queries, google_queries.\n"
         "- Output only valid JSON with key items.\n\n"
+        f"FULL SCRIPT:\n{script}\n\n"
         f"Scenes JSON:\n{json.dumps({'items': scenes}, ensure_ascii=False)}"
     )
     return prompt
@@ -1207,10 +1316,10 @@ def _parse_keyword_ai_json(content: str) -> list[dict]:
     return items
 
 
-def _call_keyword_ai_openai(api_key: str, model: str, scenes: list[dict]) -> list[dict]:
+def _call_keyword_ai_openai(api_key: str, model: str, scenes: list[dict], script: str = "") -> list[dict]:
     import requests
 
-    prompt = _keyword_prompt(scenes)
+    prompt = _keyword_prompt(scenes, script)
     response = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -1233,10 +1342,10 @@ def _call_keyword_ai_openai(api_key: str, model: str, scenes: list[dict]) -> lis
     return _parse_keyword_ai_json(content)
 
 
-def _call_keyword_ai_gemini(api_key: str, model: str, scenes: list[dict]) -> list[dict]:
+def _call_keyword_ai_gemini(api_key: str, model: str, scenes: list[dict], script: str = "") -> list[dict]:
     import requests
 
-    prompt = _keyword_prompt(scenes)
+    prompt = _keyword_prompt(scenes, script)
     payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -1301,6 +1410,7 @@ def _valid_crawled_images(
     query: str = "",
     settings: dict | None = None,
     min_keyword_score: int = 0,
+    require_target_aspect: bool = True,
 ) -> list[Path]:
     from PIL import Image
 
@@ -1322,7 +1432,7 @@ def _valid_crawled_images(
                 width, height = image.size
             if width < int(options["min_width"]) or height < int(options["min_height"]):
                 continue
-            if not _is_target_aspect(width, height, settings):
+            if require_target_aspect and not _is_target_aspect(width, height, settings):
                 continue
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if digest in excluded_hashes:
@@ -1385,15 +1495,7 @@ def _rank_images_with_gemini(
         return [(path, {"accepted": True, "score": 0, "reason": "metadata-only"}) for path in candidates]
 
     primary_model = str(settings.get("gemini_vision_model") or settings.get("gemini_keyword_model") or "gemini-2.5-flash")
-    models = list(
-        dict.fromkeys(
-            [
-                primary_model,
-                "gemini-2.5-flash-lite",
-                "gemini-2.0-flash-lite",
-            ]
-        )
-    )
+    models = [primary_model]
     minimum_score = max(1, min(100, int(settings.get("image_ai_min_score") or 72)))
     teams = [str(value) for value in item.get("match_teams") or [] if str(value).strip()]
     inferred_subject, _inferred_action = _scene_match_action(item, teams)
@@ -1463,7 +1565,7 @@ def _rank_images_with_gemini(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
             headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
             json=payload,
-            timeout=120,
+            timeout=35,
         )
         if response.status_code < 400:
             break
@@ -1575,21 +1677,24 @@ def _crawled_image_rejection_summary(folder: Path, settings: dict | None = None)
 
 
 def _enhance_image_without_crop(source: Path, target: Path, settings: dict | None = None) -> tuple[int, int]:
-    from PIL import Image, ImageEnhance, ImageFilter
+    from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
     options = _image_filter_settings(settings)
     with Image.open(source) as image:
         image = image.convert("RGB")
-        if not _is_target_aspect(int(image.width), int(image.height), settings):
-            raise RuntimeError(f"Ảnh không đúng 16:9: {image.width}x{image.height}")
         target_width = int(options["target_width"])
         target_height = int(options["target_height"])
-        target_ratio = target_width / target_height
-        image_ratio = image.width / image.height
-        if abs(image_ratio - target_ratio) > float(options["tolerance"]):
-            target_height = int(round(target_width / image_ratio))
         resampling = getattr(Image, "Resampling", Image).LANCZOS
-        if image.width != target_width or image.height != target_height:
+        if not _is_target_aspect(int(image.width), int(image.height), settings):
+            background = ImageOps.fit(image, (target_width, target_height), method=resampling)
+            background = background.filter(ImageFilter.GaussianBlur(radius=max(18, target_width // 80)))
+            background = ImageEnhance.Brightness(background).enhance(0.48)
+            foreground = ImageOps.contain(image, (target_width, target_height), method=resampling)
+            x = (target_width - foreground.width) // 2
+            y = (target_height - foreground.height) // 2
+            background.paste(foreground, (x, y))
+            image = background
+        elif image.width != target_width or image.height != target_height:
             image = image.resize((target_width, target_height), resampling)
         if bool(options["enhance_enabled"]):
             image = ImageEnhance.Contrast(image).enhance(1.04)
@@ -1844,15 +1949,15 @@ def _fetch_google_images(
 ) -> int:
     worker_path = Path(__file__).with_name("google_images_worker.py")
     downloaded = 0
-    target_count = max(1, min(6, int(count)))
-    for query_index, query in enumerate(queries[:4], start=1):
+    target_count = max(1, min(4, int(count)))
+    for query_index, query in enumerate(queries[:2], start=1):
         if downloaded >= target_count:
             break
         query_target = min(2, target_count - downloaded)
         query_dir = folder / f"google_{query_index:02d}"
         query_dir.mkdir(parents=True, exist_ok=True)
         run_logs = []
-        for worker_attempt in range(2):
+        for worker_attempt in range(1):
             request_path = query_dir / f"_request_{worker_attempt + 1}.json"
             profile_path = (
                 ""
@@ -1866,7 +1971,7 @@ def _fetch_google_images(
                     "output": str(query_dir),
                     "count": query_target,
                     "profile": profile_path,
-                    "headed": True,
+                    "headed": False,
                     "exclude_urls": sorted(excluded_urls or set()),
                     "exclude_dhashes": sorted(excluded_dhashes or set()),
                     "skip_results": skip_results + worker_attempt,
@@ -1884,7 +1989,7 @@ def _fetch_google_images(
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=70,
+                    timeout=45,
                     check=False,
                 )
                 run_logs.append(
@@ -1900,7 +2005,7 @@ def _fetch_google_images(
             ]
             if len(image_files) >= query_target:
                 break
-            time.sleep(0.7)
+            time.sleep(0.2)
         (query_dir / "_worker.log").write_text("\n\n".join(run_logs), encoding="utf-8")
         downloaded += len(
             [
@@ -2032,15 +2137,41 @@ def crawl_image_candidates(
             settings=settings,
             min_keyword_score=effective_min_score,
         )
+        used_aspect_fallback = False
+        if not candidates:
+            candidates = _valid_crawled_images(
+                source_dir,
+                excluded_hashes,
+                excluded_dhashes,
+                query=query_text,
+                settings=settings,
+                min_keyword_score=0,
+                require_target_aspect=False,
+            )
+            used_aspect_fallback = bool(candidates)
         if candidates:
-            ranked = _rank_images_with_gemini(candidates, item, settings, log=log)
+            try:
+                ranked = _rank_images_with_gemini(candidates, item, settings, log=log)
+            except Exception as exc:
+                ranked = []
+                if log:
+                    log(f"{item.get('asset_id')}: Gemini Vision chậm/lỗi ({exc}); dùng ảnh dự phòng.")
             if not ranked:
-                errors.append(f"{source_name}: Gemini Vision loại tất cả {len(candidates)} ảnh")
-                continue
-            candidate, vision_decision = ranked[0]
+                candidate = candidates[0]
+                vision_decision = {
+                    "accepted": True,
+                    "score": 0,
+                    "reason": "Gemini Vision không chọn được ảnh; dùng ứng viên tốt nhất để tránh thiếu media.",
+                    "fallback": True,
+                }
+                if log:
+                    log(f"{item.get('asset_id')}: Gemini loại toàn bộ; dùng ảnh dự phòng tốt nhất.")
+            else:
+                candidate, vision_decision = ranked[0]
             metadata_path = candidate.with_suffix(candidate.suffix + ".json")
             metadata = read_json(metadata_path, {}) if metadata_path.exists() else {}
             metadata["vision"] = vision_decision
+            metadata["aspect_fallback"] = used_aspect_fallback
             return candidate, len(candidates), f"{source_name}: {query_text}", metadata
         rejection_summary = _crawled_image_rejection_summary(source_dir, settings=settings)
         errors.append(f"{source_name} tải {downloaded} file nhưng không có ảnh 16:9 hợp lệ ({rejection_summary})")
@@ -2135,13 +2266,14 @@ def search_and_download_asset(
                 "matched_query": matched_query,
                 "image_width": width,
                 "image_height": height,
-                "image_processing": "16:9-filtered,no-crop,optional-realesrgan,resize-sharpen",
+                "image_processing": "16:9-preferred,aspect-fallback-letterbox,optional-realesrgan,resize-sharpen",
                 "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
                 "raw_sha256": hashlib.sha256(raw_target.read_bytes()).hexdigest(),
                 "error": "",
             }
         )
-        log(f"{item['asset_id']}: tải {candidate_count} ảnh 16:9 bằng {matched_query}, chọn {target.name} ({width}x{height})")
+        aspect_note = "ưu tiên 16:9" if not candidate_metadata.get("aspect_fallback") else "dùng tỷ lệ dự phòng và đặt vào khung 16:9"
+        log(f"{item['asset_id']}: tải {candidate_count} ảnh ({aspect_note}) bằng {matched_query}, chọn {target.name} ({width}x{height})")
     except Exception as exc:
         old_path_text = str(item.get("local_path") or "").strip()
         old_path = Path(old_path_text) if old_path_text else None

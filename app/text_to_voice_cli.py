@@ -343,7 +343,8 @@ def main() -> int:
     prepare_espeak_runtime()
     generated_paths: list[Path] = []
     generated_results: list[dict] = []
-    for chunk in chunks:
+    for index, chunk in enumerate(chunks, start=1):
+        print(f"Kokoro chunk {index}/{len(chunks)}", flush=True)
         result = kokoro_app.synthesize(
             text=chunk,
             lang=args.lang,

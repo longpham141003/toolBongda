@@ -3,29 +3,75 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
+import shutil
 import subprocess
 import threading
 import time
 from pathlib import Path
 from typing import Callable
-from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
+from .text_to_voice_cli import (
+    combine_wavs,
+    is_voice_segment_text,
+    sanitize_text_for_tts,
+    shift_segment_timing,
+    split_text_for_text_to_voice,
+)
+
+
+KOKORO_LANGUAGE_CODES = {
+    "en": "a",
+    "en-gb": "b",
+    "es": "e",
+    "fr": "f",
+    "hi": "h",
+    "it": "i",
+    "ja": "j",
+    "pt": "p",
+    "zh": "z",
+}
 
 LANGUAGES = {
-    "en": "English",
-    "vi": "Vietnamese",
+    "en": "American English",
+    "en-gb": "British English",
     "es": "Spanish",
     "fr": "French",
-    "de": "German",
     "hi": "Hindi",
     "it": "Italian",
     "ja": "Japanese",
-    "pt": "Portuguese",
-    "zh": "Chinese",
+    "pt": "Brazilian Portuguese",
+    "zh": "Mandarin Chinese",
 }
 
-VOICES = {"en": ["Default"], "vi": ["Default"]}
+KOKORO_VOICES = {
+    "en": [
+        "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore",
+        "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "am_adam",
+        "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx",
+        "am_puck", "am_santa",
+    ],
+    "en-gb": ["bf_alice", "bf_emma", "bf_isabella", "bf_lily", "bm_daniel", "bm_fable", "bm_george", "bm_lewis"],
+    "es": ["ef_dora", "em_alex", "em_santa"],
+    "fr": ["ff_siwis"],
+    "hi": ["hf_alpha", "hf_beta", "hm_omega", "hm_psi"],
+    "it": ["if_sara", "im_nicola"],
+    "ja": ["jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo"],
+    "pt": ["pf_dora", "pm_alex", "pm_santa"],
+    "zh": ["zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi", "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang"],
+}
+
+
+def normalize_kokoro_language(language: str | None) -> tuple[str, str | None]:
+    code = str(language or "en").strip().lower()
+    aliases = {"a": "en", "b": "en-gb", "e": "es", "f": "fr", "h": "hi", "i": "it", "j": "ja", "p": "pt", "z": "zh"}
+    code = aliases.get(code, code)
+    if code in KOKORO_LANGUAGE_CODES:
+        return code, None
+    return "en", f"Kokoro chưa hỗ trợ ngôn ngữ '{code}'. Tool đã chuyển về American English."
+
 
 DELIVERY_STYLES = {
     "plain": "Mặc định",
@@ -50,6 +96,34 @@ def _win_hidden_kwargs() -> dict:
         return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
+def _terminate_process_tree(process: subprocess.Popen, timeout: float = 8.0) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=max(2, int(timeout)),
+                check=False,
+                **_win_hidden_kwargs(),
+            )
+            return
+        except Exception:
+            pass
+    try:
+        process.terminate()
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
 def text_to_voice_root(settings: dict) -> Path:
     raw = str(settings.get("text_to_voice_root") or "").strip()
     if raw:
@@ -57,7 +131,7 @@ def text_to_voice_root(settings: dict) -> Path:
         if not path.is_absolute():
             path = Path(__file__).resolve().parents[1] / path
         return path
-    return Path(__file__).resolve().parents[1] / "magic_voice"
+    return Path(__file__).resolve().parents[1] / "kokoro-tts-local"
 
 
 def text_to_voice_python(settings: dict, root: Path | None = None) -> Path:
@@ -68,11 +142,8 @@ def text_to_voice_python(settings: dict, root: Path | None = None) -> Path:
             path = Path(__file__).resolve().parents[1] / path
         return path
     root = root or text_to_voice_root(settings)
-    bundled = Path(__file__).resolve().parents[1] / "chatterbox-venv"
-    if os.name == "nt" and (bundled / "Scripts" / "python.exe").exists():
-        return bundled / "Scripts" / "python.exe"
     if os.name == "nt":
-        return root / "venv" / "Scripts" / "python.exe"
+        return root / ".venv" / "Scripts" / "python.exe"
     return root / ".venv" / "bin" / "python"
 
 
@@ -81,31 +152,17 @@ def validate_text_to_voice(settings: dict) -> tuple[Path, Path]:
     python = text_to_voice_python(settings, root)
     if not root.exists():
         raise FileNotFoundError(f"Không thấy thư mục Text to Voice: {root}")
-    if not (root / "modules" / "model_manager.py").exists():
-        raise FileNotFoundError(f"Không thấy Chatterbox modules trong: {root}")
+    if not (root / "app.py").exists():
+        raise FileNotFoundError(f"Không thấy Kokoro app.py trong: {root}")
     if not python.exists():
-        raise FileNotFoundError(
-            f"Không thấy Python venv của Chatterbox: {python}. Hãy chạy 1_CAI_DAT.bat."
-        )
+        raise FileNotFoundError(f"Không thấy Python venv của Kokoro: {python}.")
     return root, python
 
 
-def chatterbox_voice_choices(settings: dict, language: str = "en") -> list[str]:
-    root = text_to_voice_root(settings)
-    voice_dir = root / "modules" / "voice_samples"
-    choices = ["Default"]
-    if not voice_dir.exists():
-        return choices
-    for path in sorted(voice_dir.glob("*.wav"), key=lambda value: value.name.lower()):
-        stem = path.stem
-        if language == "en":
-            suffixes = tuple(f"_{code}" for code in LANGUAGES if code != "en")
-            if stem.endswith(suffixes):
-                continue
-        elif not stem.endswith(f"_{language}"):
-            continue
-        choices.append(stem)
-    return choices
+def kokoro_voice_choices(settings: dict, language: str = "en") -> list[str]:
+    del settings
+    normalized, _ = normalize_kokoro_language(language)
+    return list(KOKORO_VOICES.get(normalized) or KOKORO_VOICES["en"])
 
 
 def text_to_voice_url(settings: dict) -> str:
@@ -173,6 +230,58 @@ def ensure_text_to_voice_server(settings: dict, log: Callable[[str], None] | Non
     return url
 
 
+def _kokoro_generate(settings: dict, payload: dict, timeout_seconds: int) -> dict:
+    request = Request(
+        f"{text_to_voice_url(settings)}/api/generate",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=max(30, int(timeout_seconds))) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = str(json.loads(detail).get("error") or detail)
+        except Exception:
+            pass
+        raise RuntimeError(detail) from exc
+    except (URLError, OSError, ValueError) as exc:
+        raise RuntimeError(f"Không kết nối được Kokoro local: {exc}") from exc
+    if not isinstance(result, dict) or not result.get("path"):
+        raise RuntimeError("Kokoro local không trả về file audio.")
+    return result
+
+
+def warm_kokoro_server(settings: dict, log: Callable[[str], None] | None = None) -> None:
+    ensure_text_to_voice_server(settings, log=log)
+    language, _ = normalize_kokoro_language(settings.get("text_to_voice_language"))
+    voices = kokoro_voice_choices(settings, language)
+    voice = str(settings.get("text_to_voice_voice") or "")
+    if voice not in voices:
+        voice = voices[0]
+    try:
+        result = _kokoro_generate(
+            settings,
+            {
+                "text": "Kokoro is ready.",
+                "lang": KOKORO_LANGUAGE_CODES[language],
+                "voice": voice,
+                "speed": 1.0,
+                "prefix": "preview",
+                "delivery": "plain",
+            },
+            timeout_seconds=180,
+        )
+        Path(str(result.get("path") or "")).unlink(missing_ok=True)
+        if callable(log):
+            log("Kokoro đã được làm nóng và sẵn sàng.")
+    except Exception as exc:
+        if callable(log):
+            log(f"Kokoro chưa làm nóng được: {exc}")
+
+
 class TextToVoiceRunner:
     def __init__(self, settings: dict, log: Callable[[str], None], stop_check: Callable[[], bool]):
         self.settings = settings
@@ -180,10 +289,12 @@ class TextToVoiceRunner:
         self.stop_check = stop_check
         self.root: Path | None = None
         self.python: Path | None = None
+        self._last_sampling_log = ""
 
     def start(self) -> None:
         self.root, self.python = validate_text_to_voice(self.settings)
-        self.log(f"Chatterbox TTS đã sẵn sàng: {self.root}")
+        ensure_text_to_voice_server(self.settings, log=self.log)
+        self.log(f"Kokoro TTS đã sẵn sàng: {self.root}")
 
     def close(self) -> None:
         return None
@@ -209,112 +320,181 @@ class TextToVoiceRunner:
         if self.stop_check():
             raise RuntimeError("Stopped.")
 
+        text_path = Path(text_path).resolve()
+        output_path = Path(output_path).resolve()
+        text = sanitize_text_for_tts(text_path.read_text(encoding="utf-8", errors="replace"))
+        if not text:
+            raise ValueError("Text rỗng.")
+        requested_language = str(self.settings.get("text_to_voice_language") or "en").lower()
+        language, language_warning = normalize_kokoro_language(requested_language)
+        if language_warning:
+            self.log(f"Text to Voice {label}: {language_warning}")
+        max_chars = max(1000, min(int(self.settings.get("text_to_voice_max_chars") or 10000), 12000))
+        chunks = split_text_for_text_to_voice(text, max_chars)
+        chunk_estimate = len(chunks)
+
         cache_key = self._cache_key(text_path)
         if self._can_reuse_output(output_path, cache_key):
             self.log(f"Text to Voice {label}: dùng lại audio đã có {output_path.name}")
             return str(output_path)
 
-        cli_path = Path(__file__).with_name("chatterbox_voice_cli.py")
-        cmd = [
-            str(self.python),
-            str(cli_path),
-            "--root",
-            str(self.root),
-            "--input",
-            str(text_path),
-            "--out",
-            str(output_path),
-            "--lang",
-            str(self.settings.get("text_to_voice_language") or "en"),
-            "--voice",
-            str(self.settings.get("text_to_voice_voice") or "Default"),
-            "--mode",
-            str(self.settings.get("text_to_voice_mode") or "standard"),
-            "--speed",
-            str(float(self.settings.get("text_to_voice_speed") or 1.0)),
-            "--delivery",
-            str(self.settings.get("text_to_voice_delivery") or "dramatic"),
-            "--max-words",
-            str(int(self.settings.get("chatterbox_max_words") or 40)),
-            "--exaggeration",
-            str(float(self.settings.get("chatterbox_exaggeration") or -1.0)),
-            "--cfg-weight",
-            str(float(self.settings.get("chatterbox_cfg_weight") or 0.5)),
-            "--temperature",
-            str(float(self.settings.get("chatterbox_temperature") or 0.8)),
-            "--seed",
-            str(int(self.settings.get("chatterbox_seed") or 0)),
-            "--min-p",
-            str(float(self.settings.get("chatterbox_min_p") or 0.05)),
-            "--top-p",
-            str(float(self.settings.get("chatterbox_top_p") or 1.0)),
-            "--repetition-penalty",
-            str(float(self.settings.get("chatterbox_repetition_penalty") or 1.2)),
-        ]
-        if not bool(self.settings.get("chatterbox_whisper_qa", True)):
-            cmd.append("--disable-qa")
-        timeout_seconds = int(self.settings.get("text_to_voice_timeout") or 1800)
-        stdout_path = output_path.with_suffix(".ttv.stdout.log")
-        stderr_path = output_path.with_suffix(".ttv.stderr.log")
-        stdout_file = stdout_path.open("w", encoding="utf-8")
-        stderr_file = stderr_path.open("w", encoding="utf-8")
-        process_env = os.environ.copy()
-        process_env["PYTHONUTF8"] = "1"
-        process_env["PYTHONIOENCODING"] = "utf-8"
-        hf_home = str(self.settings.get("chatterbox_hf_home") or "").strip()
-        if hf_home:
-            process_env["HF_HOME"] = hf_home
-            process_env["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-            process_env["HF_HUB_OFFLINE"] = "1"
-        process = subprocess.Popen(
-            cmd,
-            cwd=str(self.root),
-            stdout=stdout_file,
-            stderr=stderr_file,
-            env=process_env,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            **_win_hidden_kwargs(),
+        voices = kokoro_voice_choices(self.settings, language)
+        voice = str(self.settings.get("text_to_voice_voice") or "").strip()
+        if voice not in voices:
+            voice = voices[0]
+            self.log(f"Text to Voice {label}: giọng cũ không thuộc Kokoro, tự chọn {voice}.")
+        timeout_seconds = self._adaptive_timeout_seconds(chunk_estimate)
+        self.log(
+            f"Text to Voice {label}: chuẩn bị tạo khoảng {chunk_estimate} đoạn, timeout {round(timeout_seconds / 60)} phút."
         )
-
-        deadline = time.time() + timeout_seconds
-        last_log = 0.0
+        generated_paths: list[Path] = []
+        generated_results: list[dict] = []
         try:
-            while process.poll() is None:
+            for index, chunk in enumerate(chunks, start=1):
                 if self.stop_check():
-                    process.terminate()
-                    try:
-                        process.wait(timeout=8)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
                     raise RuntimeError("Stopped.")
-                if time.time() > deadline:
-                    process.kill()
-                    raise RuntimeError(f"Timeout tạo Text to Voice: {label}")
-                if time.time() - last_log >= 20:
-                    self.log(f"Text to Voice {label}: đang tạo audio...")
-                    last_log = time.time()
-                time.sleep(0.5)
+                self.log(f"Text to Voice {label}: đang tạo đoạn {index}/{chunk_estimate}")
+                result = _kokoro_generate(
+                    self.settings,
+                    {
+                        "text": chunk,
+                        "lang": KOKORO_LANGUAGE_CODES[language],
+                        "voice": voice,
+                        "speed": float(self.settings.get("text_to_voice_speed") or 1.0),
+                        "prefix": "preview" if label == "preview" else "",
+                        "delivery": str(self.settings.get("text_to_voice_delivery") or "dramatic"),
+                    },
+                    timeout_seconds=timeout_seconds,
+                )
+                source_path = Path(str(result["path"]))
+                if not source_path.exists():
+                    raise RuntimeError(f"Kokoro không tạo file: {source_path}")
+                part_path = output_path.with_name(f"{output_path.stem}.part{index:03d}.wav")
+                shutil.copy2(source_path, part_path)
+                generated_paths.append(part_path)
+                generated_results.append(result)
+
+            if len(generated_paths) == 1:
+                shutil.copy2(generated_paths[0], output_path)
+                duration = float(generated_results[0].get("duration") or 0.0)
+            else:
+                duration = combine_wavs(generated_paths, output_path)
+
+            combined_segments: list[dict] = []
+            offset = 0.0
+            for index, result in enumerate(generated_results):
+                for segment in result.get("segments", []):
+                    if isinstance(segment, dict) and is_voice_segment_text(str(segment.get("text") or "")):
+                        combined_segments.append(shift_segment_timing(segment, offset))
+                offset += float(result.get("duration") or 0.0)
+                if index < len(generated_results) - 1:
+                    offset += 0.25
+
+            output_path.with_suffix(".segments.json").write_text(
+                json.dumps(
+                    {
+                        "audio": str(output_path),
+                        "duration": round(duration, 4),
+                        "sampleRate": int(generated_results[0].get("sampleRate") or 24000),
+                        "lang": KOKORO_LANGUAGE_CODES[language],
+                        "voice": voice,
+                        "speed": float(self.settings.get("text_to_voice_speed") or 1.0),
+                        "delivery": str(self.settings.get("text_to_voice_delivery") or "dramatic"),
+                        "engine": "kokoro-server",
+                        "segments": combined_segments,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
         finally:
-            stdout_file.close()
-            stderr_file.close()
+            for part_path in generated_paths:
+                part_path.unlink(missing_ok=True)
 
-        stdout = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
-        stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
-        if process.returncode != 0:
-            detail = (stderr or stdout or "").strip()
-            raise RuntimeError(detail[-1400:] or f"Text to Voice thất bại với exit code {process.returncode}")
-
-        result = self._parse_result(stdout)
-        final_path = Path(str(result.get("output") or output_path))
-        if not final_path.exists():
-            raise RuntimeError(f"Text to Voice không tạo file output: {final_path}")
-        parts = int(result.get("parts") or 1)
+        final_path = output_path
+        parts = len(generated_results)
         suffix = f" ({parts} phần)" if parts > 1 else ""
         self._write_cache_meta(final_path, cache_key)
         self.log(f"Text to Voice {label}: đã lưu audio {final_path.name}{suffix}")
         return str(final_path)
+
+    def _adaptive_timeout_seconds(self, chunk_estimate: int) -> int:
+        configured = max(300, int(self.settings.get("text_to_voice_timeout") or 1800))
+        estimated = 180 + max(1, int(chunk_estimate)) * 300
+        return max(configured, min(7200, estimated))
+
+    @staticmethod
+    def _estimate_chunk_count(text: str, max_words: int) -> int:
+        words = re.findall(r"\S+", text or "")
+        return max(1, (len(words) + max(1, max_words) - 1) // max(1, max_words))
+
+    @staticmethod
+    def _looks_english(text: str) -> bool:
+        sample = " ".join(re.findall(r"[A-Za-z']+", text or "")[:250]).lower()
+        if not sample:
+            return False
+        common = {
+            "the",
+            "and",
+            "with",
+            "from",
+            "that",
+            "their",
+            "they",
+            "this",
+            "when",
+            "into",
+            "after",
+            "before",
+            "match",
+            "team",
+            "goal",
+        }
+        tokens = sample.split()
+        if not tokens:
+            return False
+        hits = sum(1 for token in tokens if token in common)
+        ascii_ratio = sum(1 for ch in text if ord(ch) < 128) / max(1, len(text))
+        return ascii_ratio > 0.92 and hits >= 4
+
+    def _stream_progress_logs(
+        self,
+        stdout_path: Path,
+        stderr_path: Path,
+        stdout_offset: int,
+        stderr_offset: int,
+        label: str,
+        last_chunk: str,
+    ) -> tuple[int, int, str]:
+        stdout_offset, stdout_text = self._read_new_text(stdout_path, stdout_offset)
+        stderr_offset, stderr_text = self._read_new_text(stderr_path, stderr_offset)
+        for line in stdout_text.splitlines():
+            clean = line.strip()
+            if not clean:
+                continue
+            match = re.search(r"Kokoro chunk\s+(\d+)\s*/\s*(\d+)", clean, flags=re.I)
+            if match:
+                current, total = match.group(1), match.group(2)
+                message = f"Text to Voice {label}: đang tạo đoạn {current}/{total}"
+                if message != last_chunk:
+                    self.log(message)
+                    last_chunk = message
+                continue
+        del stderr_text
+        return stdout_offset, stderr_offset, last_chunk
+
+    @staticmethod
+    def _read_new_text(path: Path, offset: int) -> tuple[int, str]:
+        if not path.exists():
+            return offset, ""
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                handle.seek(offset)
+                text = handle.read()
+                return handle.tell(), text
+        except Exception:
+            return offset, ""
 
     @staticmethod
     def _parse_result(stdout: str) -> dict:
@@ -337,16 +517,12 @@ class TextToVoiceRunner:
             "text_size": int(stat.st_size),
             "text_mtime_ns": int(stat.st_mtime_ns),
             "language": str(self.settings.get("text_to_voice_language") or "en"),
-            "voice": str(self.settings.get("text_to_voice_voice") or "Default"),
-            "mode": str(self.settings.get("text_to_voice_mode") or "standard"),
+            "voice": str(self.settings.get("text_to_voice_voice") or "af_heart"),
             "speed": str(float(self.settings.get("text_to_voice_speed") or 1.0)),
             "delivery": str(self.settings.get("text_to_voice_delivery") or "dramatic"),
-            "exaggeration": str(float(self.settings.get("chatterbox_exaggeration") or -1.0)),
-            "cfg_weight": str(float(self.settings.get("chatterbox_cfg_weight") or 0.5)),
-            "temperature": str(float(self.settings.get("chatterbox_temperature") or 0.8)),
-            "seed": str(int(self.settings.get("chatterbox_seed") or 0)),
             "max_chars": str(int(self.settings.get("text_to_voice_max_chars") or 10000)),
-            "segment_cleaner": "tts_clean_v5",
+            "engine": "kokoro",
+            "segment_cleaner": "tts_clean_v6",
         }
 
     @staticmethod

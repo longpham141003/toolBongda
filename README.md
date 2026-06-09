@@ -1,6 +1,6 @@
 # Tool Visual CapCut
 
-Tool tao video tu script, tao voice bang Magic Voice/Chatterbox, tu chia SRT thanh canh, tim media va xuat project CapCut.
+Tool tao video tu script, tao voice bang Kokoro local, tu chia SRT thanh canh, tim media va xuat project CapCut.
 
 ## Chay nhanh
 
@@ -13,6 +13,8 @@ Tool se mo giao dien web tai:
 ```text
 http://127.0.0.1:8765
 ```
+
+Lan dau chay, file `.bat` se tu tao `settings.json`, cai dependency backend neu thieu va cai moi truong Kokoro local trong `kokoro-tts-local/.venv`.
 
 ## Cai dat cho may moi
 
@@ -33,17 +35,18 @@ npm run build
 cd ..
 ```
 
-4. Cai moi truong Magic Voice de tao voice:
+4. Neu muon cai Kokoro thu cong:
 
 ```powershell
-py -3.10 -m venv chatterbox-venv
-chatterbox-venv\Scripts\python.exe -m pip install -r magic_voice\requirements.txt
+cd kokoro-tts-local
+powershell -ExecutionPolicy Bypass -File setup.ps1
+cd ..
 ```
 
 Ghi chu:
 
-- Repo co kem `magic_voice/` source va cac voice sample trong `magic_voice/modules/voice_samples/`.
-- Khong commit `chatterbox-venv/`, model cache, browser profile, project output.
+- Repo co kem `kokoro-tts-local/` va danh sach voice Kokoro.
+- Khong commit model cache, browser profile va project output.
 - Lan dau tao voice co the lau vi may phai load/tai model.
 
 ## Cau hinh
@@ -58,15 +61,16 @@ Sau do dien API key va duong dan rieng cua may. `settings.json` bi ignore, khong
 
 Quan trong:
 
-- `text_to_voice_root` mac dinh tro toi `magic_voice`.
-- `text_to_voice_python` co the de trong neu da tao `chatterbox-venv` trong thu muc tool.
+- `text_to_voice_root` mac dinh tro toi `kokoro-tts-local`.
+- `text_to_voice_python` co the de trong; tool tu dung `kokoro-tts-local/.venv`.
+- `projects_dir` mac dinh la `%USERPROFILE%\Videos\VisualCapCutStudio\Projects`, nam ngoai repo de khong lam phinh Git.
 - Gemini API key dung cho tao keyword va kiem tra anh.
 - CapCut path co the chinh trong Settings cua tool.
 
 ## Pipeline
 
 1. Nhap script hoac tao script bang workflow AI.
-2. Tao voice bang Magic Voice, sinh WAV + timing + SRT.
+2. Tao voice bang Kokoro, sinh WAV + timing + SRT.
 3. Whisper/Gemini gom SRT thanh canh.
 4. Tao keyword va tim anh/video cho tung canh.
 5. Duyet/tim lai/tai media local cho tung canh.
@@ -75,10 +79,12 @@ Quan trong:
 ## Khong day len Git
 
 - `settings.json`
-- `Projects/`
+- `Projects/` cu trong repo, neu con du lieu local
+- `%USERPROFILE%\Videos\VisualCapCutStudio\Projects` tren may tung nguoi
 - `.webui_state`
-- `chatterbox-venv/`
+- `kokoro-tts-local/.venv/`
+- `kokoro-tts-local/.hf_cache/`
+- `kokoro-tts-local/outputs/`
 - `.hf-cache/`
 - `chrome_*_profile/`
 - log/cache/temp/output sinh ra khi chay tool
-
