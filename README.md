@@ -8,6 +8,8 @@ Tool tao video tu script, tao voice bang Kokoro local, tu chia SRT thanh canh, t
 run_visual_capcut.bat
 ```
 
+Huong dan chi tiet cho may moi pull repo: xem `HUONG_DAN_CHAY_MAY_MOI.md`.
+
 Tool se mo giao dien web tai:
 
 ```text

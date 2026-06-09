@@ -22,6 +22,18 @@ py -3.13 -m pip show fastapi >nul 2>nul || (
   )
 )
 
+set "PW_OK="
+for /d %%D in ("%LOCALAPPDATA%\ms-playwright\chromium-*") do set "PW_OK=1"
+if not defined PW_OK (
+  echo Dang cai Chromium cho Playwright tim anh...
+  py -3.13 -m playwright install chromium
+  if errorlevel 1 (
+    echo Cai Chromium cho Playwright that bai.
+    pause
+    exit /b 1
+  )
+)
+
 if not exist "kokoro-tts-local\app.py" (
   echo Thieu thu muc kokoro-tts-local. Hay pull lai day du repo.
   pause
