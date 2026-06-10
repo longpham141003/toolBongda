@@ -169,3 +169,4 @@ Start-Process "http://127.0.0.1:8765"
 Write-Host ""
 Write-Host "Tool da san sang. Neu lan dau dung AI, hay vao Cai dat de dien Gemini API key." -ForegroundColor Green
 Start-Sleep -Seconds 2
+exit 0
