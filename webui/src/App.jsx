@@ -230,6 +230,7 @@ function App() {
   const [error, setError] = useState("")
   const [toast, setToast] = useState("")
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [apiKeyNoticeDismissed, setApiKeyNoticeDismissed] = useState(false)
   const [projectsOpen, setProjectsOpen] = useState(false)
   const [voicePreviewBusy, setVoicePreviewBusy] = useState(false)
   const [voicePreviewUrl, setVoicePreviewUrl] = useState("")
@@ -773,6 +774,8 @@ function App() {
     { id: "step3a", title: "Hình ảnh", desc: "Phân cảnh và duyệt media", icon: Image },
     { id: "step4", title: "Xuất CapCut", desc: "Kiểm tra và mở project", icon: Rocket },
   ]
+  const missingGeminiApiKey = !String(settings.gemini_api_key || "").trim()
+  const showApiKeyNotice = missingGeminiApiKey && !apiKeyNoticeDismissed && !settingsOpen
 
   return (
     <div className="stitch-app min-h-screen overflow-hidden bg-[#131315] text-[#e5e1e4]">
@@ -892,6 +895,34 @@ function App() {
       <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} setSettings={setSettings} workflowSteps={workflowSteps} setWorkflowSteps={setWorkflowSteps} workflowPresets={workflowPresets} applyWorkflowPreset={applyWorkflowPreset} updateStep={updateStep} presetName={presetName} setPresetName={setPresetName} saveCurrentWorkflowAsPreset={saveCurrentWorkflowAsPreset} saveSettings={saveSettings} runPreflight={runPreflight} preflight={preflight} />
       <ProjectsModal open={projectsOpen} onOpenChange={setProjectsOpen} state={state} project={project} openProject={openProject} />
       <Lightbox open={lightboxIndex !== null} setLightboxIndex={setLightboxIndex} lightboxIndex={lightboxIndex} assets={assets} lightboxAsset={lightboxAsset} assetJobs={assetJobs} statusBadge={statusBadge} startJob={startJob} approveAsset={approveAsset} chooseAssetMedia={chooseAssetMedia} editingAssetId={editingAssetId} setEditingAssetId={setEditingAssetId} editingKeywordValue={editingKeywordValue} setEditingKeywordValue={setEditingKeywordValue} saveKeyword={saveKeyword} />
+      <Dialog open={showApiKeyNotice} onOpenChange={(open) => !open && setApiKeyNoticeDismissed(true)}>
+        <DialogContent className="api-key-dialog max-w-xl">
+          <div className="api-key-dialog-glow" />
+          <div className="api-key-dialog-head">
+            <div className="api-key-dialog-icon"><KeyRound className="h-7 w-7" /></div>
+            <div>
+              <DialogTitle>Thiếu Gemini API key</DialogTitle>
+              <DialogDescription>
+                Tool vẫn mở được, nhưng các phần AI như tạo kịch bản, chia cảnh, tạo keyword và kiểm ảnh sẽ không chạy đúng nếu chưa nhập key.
+              </DialogDescription>
+            </div>
+          </div>
+          <div className="api-key-dialog-body">
+            <div><CheckCircle2 className="h-4 w-4" />Nhập một lần trong Cài đặt, tool sẽ tự lưu cho các lần sau.</div>
+            <div><AlertTriangle className="h-4 w-4" />Nếu bỏ qua, người dùng vẫn có thể dán kịch bản thủ công nhưng trải nghiệm AI sẽ bị thiếu.</div>
+          </div>
+          <div className="api-key-dialog-actions">
+            <Button variant="secondary" onClick={() => setApiKeyNoticeDismissed(true)}>Để sau</Button>
+            <Button onClick={() => {
+              setApiKeyNoticeDismissed(true)
+              setSettingsOpen(true)
+              setToast("Vào tab AI, dán Gemini API key rồi bấm Lưu cài đặt.")
+            }}>
+              <Settings className="mr-2 h-4 w-4" /> Nhập API key ngay
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {error && <div className="toast-error"><XCircle className="h-4 w-4 shrink-0" /><span>{error}</span><button onClick={() => setError("")}>Đóng</button></div>}
       {toast && <div className="toast-ok"><CheckCircle2 className="h-4 w-4" />{toast}</div>}
     </div>
