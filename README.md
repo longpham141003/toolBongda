@@ -32,7 +32,7 @@ Lan dau chay co the mat 5-15 phut tuy toc do mang/may. Tu lan sau se nhanh hon.
 
 ## Cai dat cho may moi
 
-1. Cai Python 3.10 tro len. Khuyen nghi Python 3.13. Neu may co `winget`, launcher se thu cai Python tu dong khi chua co.
+1. Cai Python 3.10 tro len. Khuyen nghi Python 3.12 vi Kokoro hien chua ho tro Python 3.13 on dinh. Neu may co `winget`, launcher se thu cai Python tu dong khi chua co.
 2. Cai CapCut PC va mo/dang nhap duoc binh thuong.
 3. Clone/pull repo.
 4. Double click `run_visual_capcut.bat`.

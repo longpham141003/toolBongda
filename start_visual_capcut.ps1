@@ -37,11 +37,21 @@ function Test-Command {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Test-PythonVersion {
+    param([string]$Version)
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & py "-$Version" --version *> $null
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
+    return $exitCode -eq 0
+}
+
 function Get-BasePythonCommand {
     if (-not (Test-Command "py")) {
         if (Test-Command "winget") {
-            Write-Step "May chua co Python. Dang thu cai Python 3.13 bang winget..."
-            winget install -e --id Python.Python.3.13 --accept-package-agreements --accept-source-agreements
+            Write-Step "May chua co Python. Dang thu cai Python 3.12 bang winget..."
+            winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
             $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
         }
         if (-not (Test-Command "py")) {
@@ -49,14 +59,13 @@ function Get-BasePythonCommand {
         }
     }
 
-    foreach ($version in @("3.13", "3.12", "3.11", "3.10")) {
-        & py "-$version" --version *> $null
-        if ($LASTEXITCODE -eq 0) {
+    foreach ($version in @("3.12", "3.11", "3.10", "3.13")) {
+        if (Test-PythonVersion $version) {
             return @("py", "-$version")
         }
     }
 
-    Stop-WithHelp "Khong tim thay Python 3.10 tro len. Hay cai Python 3.10/3.11/3.12/3.13 roi mo lai tool."
+    Stop-WithHelp "Khong tim thay Python 3.10 tro len. Khuyen nghi Python 3.12 de Kokoro voice chay on dinh."
 }
 
 function Invoke-Checked {
@@ -94,8 +103,12 @@ if (-not (Test-Path $BackendVenvPython)) {
 }
 
 Write-Step "Kiem tra va cai thu vien can thiet cho tool..."
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 & $BackendVenvPython -c "import fastapi,uvicorn,playwright,requests,PIL,imagehash,multipart" *> $null
-if ($LASTEXITCODE -ne 0) {
+$dependencyCheckExitCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorActionPreference
+if ($dependencyCheckExitCode -ne 0) {
     Write-Detail "Dang cai thu vien backend. Vui long cho..."
     Invoke-Checked -Command @($BackendVenvPython, "-m", "pip", "install", "--upgrade", "pip", "--disable-pip-version-check") -ErrorMessage "Khong nang cap duoc pip."
     Invoke-Checked -Command @($BackendVenvPython, "-m", "pip", "install", "-r", "requirements.txt", "--disable-pip-version-check") -ErrorMessage "Khong cai duoc thu vien backend. Kiem tra internet roi thu lai."

@@ -8,7 +8,7 @@ Bat buoc:
 
 - Git.
 - CapCut PC da dang nhap va mo duoc binh thuong.
-- Python 3.10 tro len, co Python Launcher `py`. Khuyen nghi Python 3.13. Neu may co `winget`, launcher se thu cai Python tu dong khi chua co.
+- Python 3.10 tro len, co Python Launcher `py`. Khuyen nghi Python 3.12 vi Kokoro hien chua ho tro Python 3.13 on dinh. Neu may co `winget`, launcher se thu cai Python tu dong khi chua co.
 - Internet cho lan chay dau tien de tai thu vien, Chromium Playwright va model Kokoro.
 
 Khong bat buoc:
