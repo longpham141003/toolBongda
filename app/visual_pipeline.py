@@ -1091,13 +1091,15 @@ def _enforce_scene_duration_limit(
     max_seconds: float = 15.0,
 ) -> list[tuple[dict, list[dict]]]:
     max_seconds = max(3.0, float(max_seconds or 15.0))
-    result: list[tuple[dict, list[dict]]] = []
+    min_seconds = min(10.0, max_seconds)
+    soft_merge_max_seconds = max_seconds + 5.0
+    split_groups: list[tuple[dict, list[dict]]] = []
     for row, grouped in groups:
         if not grouped:
             continue
         duration = float(grouped[-1]["end"]) - float(grouped[0]["start"])
         if duration <= max_seconds or len(grouped) == 1:
-            result.append((row, grouped))
+            split_groups.append((row, grouped))
             continue
         chunk: list[dict] = []
         part = 1
@@ -1107,15 +1109,54 @@ def _enforce_scene_duration_limit(
                 if next_duration > max_seconds:
                     next_row = dict(row)
                     next_row["break_reason"] = str(row.get("break_reason") or "duration_split") if part == 1 else "duration_split"
-                    result.append((next_row, chunk))
+                    split_groups.append((next_row, chunk))
                     chunk = []
                     part += 1
             chunk.append(sentence)
         if chunk:
             next_row = dict(row)
             next_row["break_reason"] = str(row.get("break_reason") or "duration_split") if part == 1 else "duration_split"
-            result.append((next_row, chunk))
-    return result
+            split_groups.append((next_row, chunk))
+
+    merged: list[tuple[dict, list[dict]]] = []
+    for row, grouped in split_groups:
+        duration = float(grouped[-1]["end"]) - float(grouped[0]["start"])
+        if merged and duration < min_seconds:
+            prev_row, prev_grouped = merged[-1]
+            combined_duration = float(grouped[-1]["end"]) - float(prev_grouped[0]["start"])
+            if combined_duration <= max_seconds:
+                merged[-1] = (prev_row, [*prev_grouped, *grouped])
+                continue
+        merged.append((row, grouped))
+
+    changed = True
+    while changed:
+        changed = False
+        output: list[tuple[dict, list[dict]]] = []
+        index = 0
+        while index < len(merged):
+            row, grouped = merged[index]
+            duration = float(grouped[-1]["end"]) - float(grouped[0]["start"])
+            if duration < min_seconds and index + 1 < len(merged):
+                next_row, next_grouped = merged[index + 1]
+                combined_duration = float(next_grouped[-1]["end"]) - float(grouped[0]["start"])
+                if combined_duration <= soft_merge_max_seconds:
+                    output.append((row, [*grouped, *next_grouped]))
+                    index += 2
+                    changed = True
+                    continue
+            output.append((row, grouped))
+            index += 1
+        merged = output
+    if len(merged) >= 2:
+        last_row, last_grouped = merged[-1]
+        last_duration = float(last_grouped[-1]["end"]) - float(last_grouped[0]["start"])
+        prev_row, prev_grouped = merged[-2]
+        combined_duration = float(last_grouped[-1]["end"]) - float(prev_grouped[0]["start"])
+        if last_duration < min_seconds and combined_duration <= soft_merge_max_seconds:
+            merged[-2] = (prev_row, [*prev_grouped, *last_grouped])
+            merged.pop()
+    return merged
 
 
 def _validate_scene_groups(
@@ -1563,6 +1604,7 @@ def _rank_images_with_gemini(
     item: dict,
     settings: dict | None,
     log: Callable[[str], None] | None = None,
+    accepted_only: bool = True,
 ) -> list[tuple[Path, dict]]:
     import requests
 
@@ -1576,7 +1618,9 @@ def _rank_images_with_gemini(
 
     primary_model = str(settings.get("gemini_vision_model") or settings.get("gemini_keyword_model") or "gemini-2.5-flash")
     models = [primary_model]
-    minimum_score = max(1, min(100, int(settings.get("image_ai_min_score") or 72)))
+    minimum_score = max(1, min(100, int(settings.get("image_ai_min_score") or 55)))
+    if "football video" in str(item.get("global_visual_context") or "").lower() or _is_match_photography_item(item):
+        minimum_score = min(minimum_score, 55)
     teams = [str(value) for value in item.get("match_teams") or [] if str(value).strip()]
     inferred_subject, _inferred_action = _scene_match_action(item, teams)
     subject = str(item.get("main_subject") or inferred_subject or "").strip()
@@ -1620,7 +1664,7 @@ def _rank_images_with_gemini(
         }
     ]
     included: list[Path] = []
-    for index, path in enumerate(candidates[:6], start=1):
+    for index, path in enumerate(candidates[:8], start=1):
         metadata = read_json(path.with_suffix(path.suffix + ".json"), {})
         parts.append(
             {
@@ -1649,7 +1693,7 @@ def _rank_images_with_gemini(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
             headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
             json=payload,
-            timeout=35,
+            timeout=18,
         )
         if response.status_code < 400:
             break
@@ -1704,7 +1748,7 @@ def _rank_images_with_gemini(
             log(f"{item.get('asset_id')}: Gemini Vision {state} ảnh {index} ({score}/100) - {decision['reason']}")
         decisions.append((path, decision))
     decisions.sort(key=lambda value: int(value[1].get("score") or 0), reverse=True)
-    return [value for value in decisions if value[1].get("accepted")]
+    return [value for value in decisions if value[1].get("accepted")] if accepted_only else decisions
 
 
 def _image_dhash(path: Path) -> int | None:
@@ -2174,7 +2218,7 @@ def crawl_image_candidates(
                     project,
                     folder,
                     queries,
-                    count=6,
+                    count=10,
                     excluded_urls=excluded_urls,
                     excluded_dhashes=excluded_dhashes,
                     skip_results=0,
@@ -2193,7 +2237,7 @@ def crawl_image_candidates(
                     project,
                     folder,
                     queries,
-                    count=6,
+                    count=10,
                     excluded_urls=excluded_urls,
                     excluded_dhashes=excluded_dhashes,
                     skip_results=0,
@@ -2243,7 +2287,13 @@ def crawl_image_candidates(
                 )
             )
             try:
-                ranked = _rank_images_with_gemini(candidates, item, settings, log=log)
+                ranked = _rank_images_with_gemini(
+                    candidates,
+                    item,
+                    settings,
+                    log=log,
+                    accepted_only=not vision_required,
+                )
             except Exception as exc:
                 ranked = []
                 if log:
@@ -2266,6 +2316,18 @@ def crawl_image_candidates(
                     log(f"{item.get('asset_id')}: Gemini loại toàn bộ; dùng ảnh dự phòng tốt nhất.")
             else:
                 candidate, vision_decision = ranked[0]
+                if vision_required and not vision_decision.get("accepted"):
+                    vision_decision = {
+                        **vision_decision,
+                        "accepted": True,
+                        "fallback": True,
+                        "reason": (
+                            f"AI chấm dưới ngưỡng nhưng dùng ảnh điểm cao nhất để tránh thiếu media. "
+                            f"{vision_decision.get('reason') or ''}"
+                        ).strip(),
+                    }
+                    if log:
+                        log(f"{item.get('asset_id')}: dùng ảnh điểm cao nhất dù dưới ngưỡng ({vision_decision.get('score')}/100).")
             metadata_path = candidate.with_suffix(candidate.suffix + ".json")
             metadata = read_json(metadata_path, {}) if metadata_path.exists() else {}
             metadata["vision"] = vision_decision
