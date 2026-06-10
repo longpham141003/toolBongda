@@ -84,30 +84,6 @@ const deliveryOptions = [
   { value: "calm", label: "Điềm tĩnh" },
 ]
 
-const quickScriptCategories = [
-  { value: "football-news", label: "Tin tức bóng đá", helper: "Tường thuật trận đấu, cầu thủ, CLB, đội tuyển." },
-  { value: "news", label: "Tin tức tổng hợp", helper: "Sự kiện mới, nhân vật, bối cảnh và kết quả." },
-  { value: "story", label: "Kể chuyện", helper: "Câu chuyện có mở đầu, cao trào và kết thúc." },
-  { value: "history", label: "Lịch sử", helper: "Sự kiện, nhân vật, nguyên nhân và hệ quả." },
-  { value: "science", label: "Khoa học", helper: "Giải thích kiến thức theo cách dễ hiểu." },
-  { value: "review", label: "Review", helper: "Đánh giá sản phẩm, phim, trận đấu hoặc dịch vụ." },
-]
-
-const quickScriptDurations = [
-  { value: "30 giây", label: "30 giây" },
-  { value: "1 phút", label: "1 phút" },
-  { value: "3 phút", label: "3 phút" },
-  { value: "5 phút", label: "5 phút" },
-]
-
-const quickScriptStyles = [
-  { value: "dễ hiểu, tự nhiên, không dùng thuật ngữ khó", label: "Dễ hiểu" },
-  { value: "kịch tính, nhịp nhanh, mở đầu có hook mạnh", label: "Kịch tính" },
-  { value: "chuyên nghiệp, chắc thông tin, giống bản tin", label: "Chuyên nghiệp" },
-  { value: "cảm xúc, có nhịp kể chuyện và điểm nhấn", label: "Cảm xúc" },
-  { value: "ngắn gọn, mạnh, phù hợp TikTok/Reels", label: "Short video" },
-]
-
 function normalizeVoiceLanguage(language) {
   return voiceLanguageOptions.some((item) => item.value === language) ? language : "en"
 }
@@ -242,22 +218,6 @@ function App() {
   const [assetFilter, setAssetFilter] = useState("all")
   const [presetName, setPresetName] = useState("")
   const [preflight, setPreflight] = useState(null)
-  const [scriptMode, setScriptMode] = useState("paste")
-  const [quickScript, setQuickScript] = useState({
-    category: "football-news",
-    duration: "1 phút",
-    style: "dễ hiểu, tự nhiên, không dùng thuật ngữ khó",
-    topic: "",
-    audience: "người xem phổ thông",
-    mustInclude: "",
-  })
-  const [guidedScript, setGuidedScript] = useState({
-    field: "",
-    audience: "",
-    duration: "1 phút",
-    tone: "dễ hiểu",
-    mustHave: "",
-  })
 
   const [activeScreen, setActiveScreen] = useState("home")
   const logContainerRef = useRef(null)
@@ -587,8 +547,6 @@ function App() {
     setAssetFilter("all")
     setPreflight(null)
     setScriptMode("paste")
-    setQuickScript((current) => ({ ...current, topic: "", mustInclude: "" }))
-    setGuidedScript((current) => ({ ...current, field: "", audience: "", mustHave: "" }))
     setActiveScreen("step1")
   }
 
@@ -717,40 +675,6 @@ function App() {
     })
   }
 
-  function quickScriptPrompt() {
-    const category = quickScriptCategories.find((item) => item.value === quickScript.category)
-    return [
-      `Thể loại video: ${category?.label || quickScript.category}.`,
-      `Chủ đề chính: ${quickScript.topic || "(chưa nhập)"}.`,
-      `Độ dài mong muốn: ${quickScript.duration}.`,
-      `Phong cách lời đọc: ${quickScript.style}.`,
-      `Người xem mục tiêu: ${quickScript.audience || "người xem phổ thông"}.`,
-      quickScript.mustInclude ? `Bắt buộc nhắc tới: ${quickScript.mustInclude}.` : "",
-      "Hãy tạo kịch bản voice-over hoàn chỉnh, tự nhiên, không heading, không bullet, không ghi chú hình ảnh.",
-    ].filter(Boolean).join("\n")
-  }
-
-  function guidedScriptPrompt() {
-    return [
-      `Người dùng chưa có ý tưởng hoàn chỉnh. Hãy biến các câu trả lời sau thành kịch bản voice-over cuối.`,
-      `Lĩnh vực/chủ đề họ muốn làm: ${guidedScript.field || "(chưa nhập)"}.`,
-      `Video dành cho: ${guidedScript.audience || "người xem phổ thông"}.`,
-      `Độ dài: ${guidedScript.duration}.`,
-      `Giọng kể: ${guidedScript.tone}.`,
-      guidedScript.mustHave ? `Điểm bắt buộc phải có: ${guidedScript.mustHave}.` : "",
-      "Nếu thông tin còn thiếu, hãy tự chọn góc khai thác hợp lý nhất. Output chỉ là lời đọc cuối.",
-    ].filter(Boolean).join("\n")
-  }
-
-  async function runScriptBuilder(kind) {
-    const sourceInput = kind === "quick" ? quickScriptPrompt() : kind === "guided" ? guidedScriptPrompt() : workflowInput
-    if (!sourceInput.trim() || sourceInput.includes("(chưa nhập)")) {
-      return setError(kind === "workflow" ? "Hãy nhập ý tưởng hoặc dữ liệu nguồn trước." : "Hãy nhập chủ đề chính trước.")
-    }
-    setWorkflowInput(sourceInput)
-    await startJob("/api/workflow", { source_input: sourceInput, steps: workflowSteps, settings }, "workflow")
-  }
-
   const flowSteps = [
     { code: "1", label: "Nội dung", hint: "Nhập chủ đề hoặc kịch bản", icon: FileText },
     { code: "2", label: "Giọng đọc", hint: "Chọn giọng, clone, tạo voice", icon: FileAudio },
@@ -860,30 +784,14 @@ function App() {
           <ProgressRail steps={stepCards} current={currentStepIndex} done={completedSteps} setActiveScreen={setActiveScreen} />
           <UserProgressPanel progress={userProgress} />
           {activeScreen === "step1" && <ScriptStepScreen
-            mode={scriptMode}
-            setMode={setScriptMode}
             title={title}
             setTitle={setTitle}
             script={script}
             setScript={setScript}
             scriptFileInputRef={scriptFileInputRef}
             uploadTxtFile={uploadTxtFile}
-            createProject={createProject}
             saveScriptStep={saveScriptStep}
-            workflowInput={workflowInput}
-            setWorkflowInput={setWorkflowInput}
-            workflowSteps={workflowSteps}
-            settings={settings}
-            workflowPresets={workflowPresets}
-            applyWorkflowPreset={applyWorkflowPreset}
-            runScriptBuilder={runScriptBuilder}
-            quickScript={quickScript}
-            setQuickScript={setQuickScript}
-            guidedScript={guidedScript}
-            setGuidedScript={setGuidedScript}
             isBusy={isBusy}
-            busyAction={busyAction}
-            setSettingsOpen={setSettingsOpen}
           />}
           {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step3a" && <SceneScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
@@ -1201,57 +1109,20 @@ function StepContentScreen({ title, subtitle, left, right, footerLeft, footerAct
   </div>
 }
 
-function ScriptStepScreen({ mode, setMode, title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, createProject, saveScriptStep, workflowInput, setWorkflowInput, workflowSteps, settings, workflowPresets, applyWorkflowPreset, runScriptBuilder, quickScript, setQuickScript, guidedScript, setGuidedScript, isBusy, busyAction, setSettingsOpen }) {
-  const isPaste = mode === "paste"
-  const isQuick = mode === "quick"
-  const isGuided = mode === "guided"
-  const isWorkflow = mode === "workflow"
-  const aiBusy = isBusy && busyAction === "workflow"
-  return <div className="step-screen beginner-step">
-    <div className="screen-heading">
-      <h1>Bước 1 - Chuẩn bị nội dung</h1>
-      <p>Chọn đúng trường hợp của bạn. Tool sẽ dẫn tiếp từng bước, không cần hiểu kỹ thuật.</p>
-    </div>
-    <div className="beginner-choice-grid">
-      <button className={cn("beginner-choice", isPaste && "active")} onClick={() => setMode("paste")}>
-        <FileText className="h-6 w-6" />
-        <div><b>Tôi đã có kịch bản</b><span>Dán nội dung hoặc tải file TXT, sau đó bấm lưu.</span></div>
-        <CheckCircle2 className="choice-check h-5 w-5" />
-      </button>
-      <button className={cn("beginner-choice", isQuick && "active")} onClick={() => setMode("quick")}>
-        <Sparkles className="h-6 w-6" />
-        <div><b>Tạo nhanh bằng AI</b><span>Chọn thể loại, độ dài, phong cách rồi nhập chủ đề.</span></div>
-        <CheckCircle2 className="choice-check h-5 w-5" />
-      </button>
-      <button className={cn("beginner-choice", isGuided && "active")} onClick={() => setMode("guided")}>
-        <Bot className="h-6 w-6" />
-        <div><b>Tôi chưa có ý tưởng rõ</b><span>Trả lời vài câu đơn giản để AI tự dựng kịch bản.</span></div>
-        <CheckCircle2 className="choice-check h-5 w-5" />
-      </button>
-      <button className={cn("beginner-choice", isWorkflow && "active")} onClick={() => setMode("workflow")}>
-        <WandSparkles className="h-6 w-6" />
-        <div><b>Workflow riêng</b><span>Dùng hoặc tự chỉnh quy trình tạo kịch bản của bạn.</span></div>
-        <CheckCircle2 className="choice-check h-5 w-5" />
-      </button>
-    </div>
-    <div className="glass-panel screen-panel beginner-main-panel">
-      {isPaste
-        ? <ScriptPanel title={title} setTitle={setTitle} script={script} setScript={setScript} scriptFileInputRef={scriptFileInputRef} uploadTxtFile={uploadTxtFile} createProject={createProject} saveScriptStep={saveScriptStep} isBusy={isBusy} />
-        : isQuick
-          ? <QuickScriptPanel quickScript={quickScript} setQuickScript={setQuickScript} script={script} setScript={setScript} title={title} setTitle={setTitle} aiBusy={aiBusy} runScriptBuilder={runScriptBuilder} />
-          : isGuided
-            ? <GuidedScriptPanel guidedScript={guidedScript} setGuidedScript={setGuidedScript} script={script} setScript={setScript} title={title} setTitle={setTitle} aiBusy={aiBusy} runScriptBuilder={runScriptBuilder} />
-            : <WorkflowPanel workflowInput={workflowInput} setWorkflowInput={setWorkflowInput} workflowSteps={workflowSteps} settings={settings} workflowPresets={workflowPresets} applyWorkflowPreset={applyWorkflowPreset} runScriptBuilder={runScriptBuilder} isBusy={isBusy} busyAction={busyAction} setSettingsOpen={setSettingsOpen} />}
-    </div>
-    <div className="screen-footer">
-      <span>{isPaste ? "Việc cần làm: dán kịch bản → bấm Lưu nội dung." : script.trim() ? "AI đã viết kịch bản. Kiểm tra nhanh rồi bấm dùng kịch bản này." : "Việc cần làm: nhập thông tin → bấm AI viết kịch bản."}</span>
-      {isPaste
-        ? <Button onClick={saveScriptStep} disabled={!script.trim() || isBusy}>Lưu nội dung và sang Bước 2 <ArrowRight className="h-4 w-4" /></Button>
-        : script.trim()
-          ? <Button onClick={saveScriptStep} disabled={isBusy}>Dùng kịch bản này và sang Bước 2 <ArrowRight className="h-4 w-4" /></Button>
-          : <Button disabled={isBusy} onClick={() => runScriptBuilder(mode)}>{aiBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} AI viết kịch bản</Button>}
-    </div>
-  </div>
+function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy }) {
+  return <StepContentScreen
+    title="Bước 1 - Chuẩn bị nội dung"
+    subtitle="Dán kịch bản cuối hoặc tải file TXT. Đây là nội dung giọng đọc sẽ đọc ở bước sau."
+    left={<ScriptPanel title={title} setTitle={setTitle} script={script} setScript={setScript} scriptFileInputRef={scriptFileInputRef} uploadTxtFile={uploadTxtFile} />}
+    right={<div className="flex h-full flex-col gap-4">
+      <div className="panel-title"><div><h2>Cách dùng nhanh</h2><p>Chỉ cần chuẩn bị kịch bản final</p></div><CheckCircle2 className="text-emerald-300" /></div>
+      <div className="quick-help"><b>1. Nhập tên project</b><span>Đặt tên dễ nhớ để sau này mở lại đúng project.</span></div>
+      <div className="quick-help"><b>2. Dán kịch bản hoặc tải TXT</b><span>Nội dung nên là lời đọc hoàn chỉnh, không cần ghi chú kỹ thuật.</span></div>
+      <div className="quick-help"><b>3. Lưu và tiếp tục</b><span>Sau khi lưu, tool chuyển sang chọn giọng và tạo voice.</span></div>
+    </div>}
+    footerLeft="Việc cần làm: dán kịch bản final, sau đó bấm lưu để sang bước 2."
+    footerAction={<Button onClick={saveScriptStep} disabled={!script.trim() || isBusy}>Lưu nội dung và sang Bước 2 <ArrowRight className="h-4 w-4" /></Button>}
+  />
 }
 
 function ScriptPanel({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile }) {
@@ -1268,65 +1139,15 @@ function ScriptPanel({ title, setTitle, script, setScript, scriptFileInputRef, u
   </div>
 }
 
-function QuickScriptPanel({ quickScript, setQuickScript, script, setScript, title, setTitle, aiBusy, runScriptBuilder }) {
-  const patch = (value) => setQuickScript((current) => ({ ...current, ...value }))
-  const category = quickScriptCategories.find((item) => item.value === quickScript.category)
-  return <div className="script-builder-grid">
-    <div className="script-builder-form">
-      <div className="panel-title"><div><h2>Tạo nhanh bằng AI</h2><p>Phù hợp khi bạn đã biết chủ đề nhưng chưa biết viết lời đọc.</p></div><Sparkles className="text-emerald-300" /></div>
-      <div className="quick-help"><b>Chỉ cần nhập chủ đề</b><span>AI sẽ đọc các lựa chọn bên dưới để viết thành kịch bản cuối, không xuất dàn ý hay ghi chú kỹ thuật.</span></div>
-      <div className="builder-two-cols">
-        <Field label="Thể loại"><Select value={quickScript.category} onValueChange={(value) => patch({ category: value })} options={quickScriptCategories.map((item) => ({ value: item.value, label: item.label }))} /></Field>
-        <Field label="Độ dài"><Select value={quickScript.duration} onValueChange={(value) => patch({ duration: value })} options={quickScriptDurations} /></Field>
-      </div>
-      <Field label="Phong cách"><Select value={quickScript.style} onValueChange={(value) => patch({ style: value })} options={quickScriptStyles} /></Field>
-      <Field label="Chủ đề video"><Textarea className="min-h-[110px]" value={quickScript.topic} onChange={(event) => patch({ topic: event.target.value })} placeholder="Ví dụ: Argentina thắng trận sáng nay, Messi tạo khác biệt ở cuối trận..." /></Field>
-      <div className="builder-two-cols">
-        <Field label="Người xem"><Input value={quickScript.audience} onChange={(event) => patch({ audience: event.target.value })} placeholder="người xem phổ thông" /></Field>
-        <Field label="Bắt buộc nhắc tới"><Input value={quickScript.mustInclude} onChange={(event) => patch({ mustInclude: event.target.value })} placeholder="tên cầu thủ, tỷ số, địa điểm..." /></Field>
-      </div>
-      <div className="script-builder-note"><b>{category?.label}</b><span>{category?.helper}</span></div>
-      <Button disabled={!quickScript.topic.trim() || aiBusy} onClick={() => runScriptBuilder("quick")}>{aiBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} AI viết kịch bản</Button>
-    </div>
-    <ScriptDraftPreview script={script} setScript={setScript} title={title} setTitle={setTitle} />
-  </div>
-}
-
-function GuidedScriptPanel({ guidedScript, setGuidedScript, script, setScript, title, setTitle, aiBusy, runScriptBuilder }) {
-  const patch = (value) => setGuidedScript((current) => ({ ...current, ...value }))
-  return <div className="script-builder-grid">
-    <div className="script-builder-form">
-      <div className="panel-title"><div><h2>AI hỏi từng bước</h2><p>Dành cho người chưa có ý tưởng rõ. Trả lời ngắn cũng được.</p></div><Bot className="text-violet-300" /></div>
-      <div className="guided-question"><span>1</span><div><b>Bạn muốn video thuộc lĩnh vực gì?</b><Input value={guidedScript.field} onChange={(event) => patch({ field: event.target.value })} placeholder="Ví dụ: bóng đá, khoa học, lịch sử, drama..." /></div></div>
-      <div className="guided-question"><span>2</span><div><b>Video dành cho ai xem?</b><Input value={guidedScript.audience} onChange={(event) => patch({ audience: event.target.value })} placeholder="Ví dụ: fan bóng đá, người mới xem, học sinh..." /></div></div>
-      <div className="guided-question"><span>3</span><div><b>Muốn dài bao lâu?</b><Select value={guidedScript.duration} onValueChange={(value) => patch({ duration: value })} options={quickScriptDurations} /></div></div>
-      <div className="guided-question"><span>4</span><div><b>Muốn giọng kể kiểu nào?</b><Input value={guidedScript.tone} onChange={(event) => patch({ tone: event.target.value })} placeholder="dễ hiểu, kịch tính, cảm xúc..." /></div></div>
-      <div className="guided-question"><span>5</span><div><b>Có gì bắt buộc phải nhắc tới không?</b><Textarea className="min-h-[90px]" value={guidedScript.mustHave} onChange={(event) => patch({ mustHave: event.target.value })} placeholder="Tên nhân vật, sự kiện, tỷ số, địa điểm, thông tin nguồn..." /></div></div>
-      <Button disabled={!guidedScript.field.trim() || aiBusy} onClick={() => runScriptBuilder("guided")}>{aiBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} AI tự dựng kịch bản</Button>
-    </div>
-    <ScriptDraftPreview script={script} setScript={setScript} title={title} setTitle={setTitle} />
-  </div>
-}
-
-function ScriptDraftPreview({ script, setScript, title, setTitle }) {
-  return <div className="script-draft-preview">
-    <div className="panel-title"><div><h2>Kịch bản AI tạo</h2><p>Có thể sửa tay trước khi dùng để tạo voice.</p></div><FileText className="text-violet-300" /></div>
-    <Field label="Tên project"><Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Tool có thể dùng tên này khi tạo project" /></Field>
-    <Textarea className="script-draft-text" value={script} onChange={(event) => setScript(event.target.value)} placeholder="Sau khi AI viết xong, kịch bản cuối sẽ hiện ở đây..." />
-    <div className="script-draft-meta"><span>{script.trim() ? script.trim().split(/\s+/).length : 0} từ</span><span>Output này sẽ được Kokoro đọc ở Bước 2</span></div>
-  </div>
-}
-
-function WorkflowPanel({ workflowInput, setWorkflowInput, workflowSteps, settings, workflowPresets, applyWorkflowPreset, runScriptBuilder, isBusy, busyAction, setSettingsOpen }) {
+function WorkflowPanel({ workflowInput, setWorkflowInput, workflowSteps, settings, workflowPresets, applyWorkflowPreset, startJob, isBusy, busyAction, setSettingsOpen }) {
   const presets = workflowPresets()
-  const aiBusy = isBusy && busyAction === "workflow"
   return <div className="flex h-full flex-col">
     <div className="panel-title"><div><h2>Nhờ AI viết kịch bản</h2><p>Phù hợp khi bạn chỉ có ý tưởng hoặc tài liệu thô</p></div><Sparkles className="text-emerald-300" /></div>
     <div className="quick-help"><b>Nhập đơn giản</b><span>Ví dụ: “Viết video 1 phút về Argentina thắng trận sáng nay, giọng tin tức, dễ hiểu”.</span></div>
     <Field label="Kiểu kịch bản muốn tạo"><Select value={settings.active_workflow_id || presets[0]?.id || ""} onValueChange={applyWorkflowPreset} options={presets.map((x) => ({ value: x.id, label: x.name }))} /></Field>
     <Textarea className="mt-4 min-h-[200px]" value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} placeholder="Nhập chủ đề, dữ liệu nguồn, độ dài video và phong cách mong muốn..." />
     <div className="mt-4 space-y-2">{workflowSteps.filter((x) => x.enabled).map((step, index) => <div className="workflow-row" key={index}><span>{index + 1}</span><div><b>{step.name}</b><p>{step.prompt}</p></div></div>)}</div>
-    <div className="mt-auto flex justify-between pt-4"><Button variant="ghost" onClick={() => setSettingsOpen(true)}><Settings className="h-4 w-4" /> Sửa mẫu flow</Button><Button disabled={!workflowInput.trim() || aiBusy} onClick={() => runScriptBuilder("workflow")}>{aiBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Chạy workflow</Button></div>
+    <div className="mt-auto flex justify-between pt-4"><Button variant="ghost" onClick={() => setSettingsOpen(true)}><Settings className="h-4 w-4" /> Sửa mẫu flow</Button><span className="text-xs leading-8 text-slate-500">Xong phần này bấm nút tím ở dưới cùng.</span></div>
   </div>
 }
 
