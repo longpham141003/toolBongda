@@ -147,6 +147,49 @@ def text_to_voice_python(settings: dict, root: Path | None = None) -> Path:
     return root / ".venv" / "bin" / "python"
 
 
+def bootstrap_text_to_voice(settings: dict, log: Callable[[str], None] | None = None) -> tuple[Path, Path]:
+    root = text_to_voice_root(settings)
+    python = text_to_voice_python(settings, root)
+    if python.exists():
+        return root, python
+    setup_script = root / "setup.ps1" if os.name == "nt" else root / "setup.sh"
+    if not root.exists():
+        raise FileNotFoundError(f"Không thấy thư mục Kokoro: {root}")
+    if not (root / "app.py").exists():
+        raise FileNotFoundError(f"Không thấy Kokoro app.py trong: {root}")
+    if not setup_script.exists():
+        raise FileNotFoundError(f"Không thấy Python venv của Kokoro: {python}. Không có file setup: {setup_script}")
+    if callable(log):
+        log("Lần đầu dùng Kokoro trên máy này: đang cài môi trường voice local...")
+    if os.name == "nt":
+        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(setup_script)]
+    else:
+        cmd = ["sh", str(setup_script)]
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    result = subprocess.run(
+        cmd,
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=max(900, int(settings.get("text_to_voice_timeout") or 1800)),
+        env=env,
+        check=False,
+        **_win_hidden_kwargs(),
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"Cài Kokoro local thất bại. {detail[-1600:]}")
+    if not python.exists():
+        raise FileNotFoundError(f"Cài Kokoro xong nhưng vẫn không thấy Python venv: {python}")
+    if callable(log):
+        log("Đã cài xong môi trường Kokoro local.")
+    return root, python
+
+
 def validate_text_to_voice(settings: dict) -> tuple[Path, Path]:
     root = text_to_voice_root(settings)
     python = text_to_voice_python(settings, root)
@@ -155,7 +198,7 @@ def validate_text_to_voice(settings: dict) -> tuple[Path, Path]:
     if not (root / "app.py").exists():
         raise FileNotFoundError(f"Không thấy Kokoro app.py trong: {root}")
     if not python.exists():
-        raise FileNotFoundError(f"Không thấy Python venv của Kokoro: {python}.")
+        return bootstrap_text_to_voice(settings)
     return root, python
 
 
@@ -200,7 +243,12 @@ def text_to_voice_parallel_jobs(settings: dict, fallback: int = 8) -> int:
 
 
 def ensure_text_to_voice_server(settings: dict, log: Callable[[str], None] | None = None) -> str:
-    root, python = validate_text_to_voice(settings)
+    root = text_to_voice_root(settings)
+    python = text_to_voice_python(settings, root)
+    if not python.exists():
+        root, python = bootstrap_text_to_voice(settings, log=log)
+    else:
+        root, python = validate_text_to_voice(settings)
     url = text_to_voice_url(settings)
     if is_text_to_voice_server_ready(settings):
         if callable(log):

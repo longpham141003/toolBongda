@@ -16,11 +16,11 @@ Tool se mo giao dien web tai:
 http://127.0.0.1:8765
 ```
 
-Lan dau chay, file `.bat` se tu tao `settings.json`, cai dependency backend neu thieu va cai moi truong Kokoro local trong `kokoro-tts-local/.venv`.
+Lan dau chay, file `.bat` se tu tao `settings.json`, cai dependency backend neu thieu va cai moi truong Kokoro local trong `kokoro-tts-local/.venv`. Neu mo backend truc tiep ma chua co `.venv`, tool cung se tu cai khi bam nghe thu hoac tao voice.
 
 ## Cai dat cho may moi
 
-1. Cai Python 3.13 va Node.js.
+1. Cai Python 3.10 tro len. Khuyen nghi Python 3.13. Node.js chi can neu muon sua/build lai UI.
 2. Cai dependency backend:
 
 ```powershell
@@ -48,8 +48,8 @@ cd ..
 Ghi chu:
 
 - Repo co kem `kokoro-tts-local/` va danh sach voice Kokoro.
-- Khong commit model cache, browser profile va project output.
-- Lan dau tao voice co the lau vi may phai load/tai model.
+- Khong commit `.venv`, model cache, browser profile va project output.
+- Lan dau tao voice co the lau vi may phai cai Kokoro, load/tai model.
 
 ## Cau hinh
 

@@ -487,7 +487,15 @@ def _preflight_payload() -> dict[str, Any]:
         python_path = voice_root / ".venv" / "Scripts" / "python.exe"
     elif not python_path.is_absolute():
         python_path = APP_DIR / python_path
-    checks.append({"id": "voice_python", "label": "Python tạo voice", "ok": python_path.is_file(), "detail": str(python_path)})
+    setup_path = voice_root / "setup.ps1"
+    checks.append(
+        {
+            "id": "voice_python",
+            "label": "Python tạo voice",
+            "ok": python_path.is_file() or setup_path.is_file(),
+            "detail": str(python_path) if python_path.is_file() else f"Chưa có .venv, sẽ tự cài lần đầu bằng {setup_path}",
+        }
+    )
     checks.append({"id": "gemini", "label": "Gemini API key", "ok": bool(str(settings.get("gemini_api_key") or "").strip()), "detail": "Dùng để viết script, tạo keyword và kiểm ảnh."})
     checks.append({"id": "capcut_template", "label": "Mẫu CapCut", "ok": (APP_DIR / "capcut_template" / "draft_content.json").is_file(), "detail": str(APP_DIR / "capcut_template")})
     checks.append({"id": "projects", "label": "Thư mục project", "ok": Path(str(settings.get("projects_dir") or "")).exists(), "detail": str(settings.get("projects_dir") or "")})

@@ -8,7 +8,7 @@ if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
 }
 
 function Get-WorkingPython {
-    foreach ($Version in @("3.10", "3.11", "3.12")) {
+    foreach ($Version in @("3.13", "3.12", "3.11", "3.10")) {
         py -$Version --version *> $null
         if ($LASTEXITCODE -eq 0) {
             return @("py", "-$Version")

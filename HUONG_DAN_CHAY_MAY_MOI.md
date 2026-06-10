@@ -8,8 +8,7 @@ Bat buoc:
 
 - Git.
 - CapCut PC da dang nhap va mo duoc binh thuong.
-- Python 3.13, co Python Launcher `py`.
-- Python 3.10 hoac 3.11 khuyen nghi cho Kokoro local. Neu may chi co Python 3.13 va `python` trong PATH van tao venv duoc thi co the chay, nhung 3.10/3.11 on dinh hon cho goi voice.
+- Python 3.10 tro len, co Python Launcher `py`. Khuyen nghi Python 3.13.
 - Internet cho lan chay dau tien de tai thu vien, Chromium Playwright va model Kokoro.
 
 Khong bat buoc:
@@ -42,7 +41,7 @@ File nay se tu lam cac viec sau:
 - Tao `settings.json` tu `settings.example.json` neu chua co.
 - Cai thu vien backend bang `requirements.txt` neu thieu.
 - Cai Chromium cho Playwright de tim anh Google Images.
-- Cai Kokoro local vao `kokoro-tts-local/.venv` neu thieu.
+- Cai Kokoro local vao `kokoro-tts-local/.venv` neu thieu. Neu nguoi dung mo backend truc tiep va chua co `.venv`, tool se tu cai khi bam `Nghe thu` hoac `Tao giong doc`.
 - Mo API local tai `http://127.0.0.1:8765`.
 - Mo giao dien web tren trinh duyet.
 
@@ -102,6 +101,20 @@ py -3.13 -m playwright install chromium
 
 ### Kokoro khong tao voice
 
+Neu bao:
+
+```text
+Khong thay Python venv cua Kokoro
+```
+
+thi thu muc `.venv` chua duoc tao tren may do. Cach dung dung la chay:
+
+```powershell
+run_visual_capcut.bat
+```
+
+Hoac chay setup tay:
+
 Chay thu:
 
 ```powershell
@@ -135,7 +148,7 @@ Repo da ignore san:
 
 Nguoi trong team pull code ve co the chay giong may hien tai neu may do co du:
 
-- Python/Internet de cai dependency lan dau.
+- Python/Internet de cai dependency va Kokoro `.venv` lan dau.
 - Gemini API key hop le.
 - CapCut PC da cai.
 - Quyen chay PowerShell script setup Kokoro.

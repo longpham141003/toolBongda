@@ -153,8 +153,21 @@ def load_settings() -> dict:
     ):
         settings.pop(deprecated_key, None)
     configured_voice_root = str(settings.get("text_to_voice_root") or "").strip().lower()
-    if not configured_voice_root or "chatterbox" in configured_voice_root or configured_voice_root.endswith("\\magic_voice"):
+    configured_voice_root_path = _expand_config_path(settings.get("text_to_voice_root"))
+    if configured_voice_root_path and not configured_voice_root_path.is_absolute():
+        configured_voice_root_path = APP_DIR / configured_voice_root_path
+    if (
+        not configured_voice_root
+        or "chatterbox" in configured_voice_root
+        or configured_voice_root.endswith("\\magic_voice")
+        or not (configured_voice_root_path / "app.py").is_file()
+    ):
         settings["text_to_voice_root"] = str(APP_DIR / "kokoro-tts-local")
+        settings["text_to_voice_python"] = ""
+    configured_voice_python = _expand_config_path(settings.get("text_to_voice_python"))
+    if configured_voice_python and not configured_voice_python.is_absolute():
+        configured_voice_python = APP_DIR / configured_voice_python
+    if configured_voice_python and not configured_voice_python.is_file():
         settings["text_to_voice_python"] = ""
     if str(settings.get("text_to_voice_voice") or "").strip() not in {
         "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore",
@@ -180,6 +193,7 @@ def load_settings() -> dict:
             projects = default_projects_dir()
     except Exception:
         pass
+    projects.mkdir(parents=True, exist_ok=True)
     settings["projects_dir"] = str(projects)
     return settings
 
