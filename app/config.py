@@ -51,7 +51,7 @@ DEFAULT_SETTINGS = {
     "gemini_vision_model": "gemini-2.5-flash",
     "image_ai_validation_enabled": True,
     "image_ai_min_score": 55,
-    "image_search_parallel_jobs": 3,
+    "image_search_parallel_jobs": 1,
     "script_workflow_input": "",
     "script_workflow_steps": [
         {

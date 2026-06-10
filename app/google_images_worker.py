@@ -269,7 +269,7 @@ def download_google_images(
             context = browser.new_context(**context_options)
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(
-            f"https://www.google.com/search?tbm=isch&hl=en&tbs=iar:w&q={quote_plus(query)}",
+            f"https://www.google.com/search?tbm=isch&hl=en&q={quote_plus(query)}",
             wait_until="domcontentloaded",
             timeout=30000,
         )
@@ -306,7 +306,7 @@ def download_google_images(
                 accepted_dhashes.add(perceptual)
             downloaded.append(str(path))
         thumbnails = page.locator("img")
-        max_clicks = min(thumbnails.count(), max(24, count * 6))
+        max_clicks = min(thumbnails.count(), max(60, count * 10))
         eligible_seen = 0
         for i in range(max_clicks):
             if len(downloaded) >= count:
@@ -317,7 +317,6 @@ def download_google_images(
                     not box
                     or box["width"] < 120
                     or box["height"] < 90
-                    or box["x"] > 720
                     or box["y"] < 140
                 ):
                     continue

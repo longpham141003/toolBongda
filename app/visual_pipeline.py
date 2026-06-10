@@ -502,7 +502,8 @@ def keyword_for_text(text: str) -> str:
 def _capitalized_phrases(text: str) -> list[str]:
     ignored = {
         "After", "As", "At", "Before", "For", "From", "He", "His", "In", "It", "Leaving",
-        "One", "That", "The", "Their", "Together", "When",
+        "One", "That", "The", "Their", "They", "This", "Those", "Together", "When",
+        "Now", "But", "Every", "What", "With",
     }
     phrases = []
     for match in re.findall(r"\b[A-Z][A-Za-z']*(?:\s+[A-Z][A-Za-z']*){0,4}\b", str(text or "")):
@@ -517,9 +518,37 @@ def _capitalized_phrases(text: str) -> list[str]:
 
 def _clean_search_keyword(value: str) -> str:
     value = re.sub(r"[\"'`]+", "", str(value or ""))
+    value = re.sub(r"\b(Argentina|Brazil|France|Iceland|England|Spain|Germany|Portugal)s\b", r"\1", value, flags=re.I)
     value = re.sub(r"\b(free|stock|photo|image|picture|real life|high quality|hd|4k)\b", " ", value, flags=re.I)
     value = re.sub(r"\s+", " ", value).strip(" ,;:-")
     return value[:90]
+
+
+def _dedupe_query_words(value: str) -> str:
+    words: list[str] = []
+    seen: set[str] = set()
+    for word in str(value or "").split():
+        key = re.sub(r"[^A-Za-z0-9-]", "", word).lower()
+        if not key or key in STOP_WORDS or key in seen:
+            continue
+        words.append(word)
+        seen.add(key)
+    return _clean_search_keyword(" ".join(words))
+
+
+def _dedupe_query_parts(*values: str) -> str:
+    parts: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = _clean_search_keyword(str(value or ""))
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        parts.append(cleaned)
+        seen.add(key)
+    return _dedupe_query_words(" ".join(parts))
 
 
 def _is_generic_keyword(value: str, scene_text: str = "") -> bool:
@@ -677,7 +706,8 @@ def _scene_match_action(item: dict, teams: list[str]) -> tuple[str, str]:
     phrases = _capitalized_phrases(text)
     ignored = {
         "World Cup", "Les Bleus", "However", "The", "After", "Before", "In",
-        "His", "By", "Every", "Maracana Stadium",
+        "His", "By", "Every", "Maracana Stadium", "They", "Their", "This",
+        "That", "Now", "But", "What", "With", "It", "Its",
     }
     ignored.update(teams)
     candidates = [
@@ -715,6 +745,9 @@ def _apply_match_search_context(items: list[dict], script: str) -> list[dict]:
     )
     if score_match:
         score = f"{score_words[score_match.group(1).lower()]}-{score_words[score_match.group(2).lower()]}"
+    numeric_score = re.search(r"\b(\d+)\s*[-–]\s*(\d+)\b", script)
+    if numeric_score:
+        score = f"{numeric_score.group(1)}-{numeric_score.group(2)}"
     stadium_match = re.search(
         r"\b([A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,3}\s+Stadium)\b",
         script,
@@ -730,30 +763,28 @@ def _apply_match_search_context(items: list[dict], script: str) -> list[dict]:
             action_short = "touchline"
         elif "players competing" in action:
             action_short = "action"
-        query = _clean_search_keyword(
-            " ".join(value for value in (subject, matchup, score, action_short) if value)
-        )
+        query = _clean_search_keyword(_dedupe_query_parts(subject, matchup, score, action_short))
         if not query:
             query = f"{matchup} {score} match".strip()
         existing = item.get("google_queries") if isinstance(item.get("google_queries"), list) else []
         existing = [_clean_search_keyword(str(value)) for value in existing if _clean_search_keyword(str(value))]
         if "coach touchline" in action:
             event_variants = [
-                f"{subject or 'coach'} {matchup} {score} touchline",
-                f"{subject or 'coach'} {matchup} Maracana",
-                f"{matchup} {score} coach bench",
+                _dedupe_query_parts(subject or "coach", matchup, score, "touchline"),
+                _dedupe_query_parts(subject or "coach", matchup, stadium),
+                _dedupe_query_parts(matchup, score, "coach bench"),
             ]
         elif "goal celebration" in action:
             event_variants = [
-                f"{subject} {matchup} {score} celebration",
-                f"{matchup} {score} goal celebration",
-                f"{matchup} {score} players celebrating",
+                _dedupe_query_parts(subject, matchup, score, "celebration"),
+                _dedupe_query_parts(matchup, score, "goal celebration"),
+                _dedupe_query_parts(matchup, score, "players celebrating"),
             ]
         else:
             event_variants = [
-                f"{subject} {matchup} {score} action",
-                f"{matchup} {score} match action",
-                f"{matchup} {stadium} match",
+                _dedupe_query_parts(subject, matchup, score, "action"),
+                _dedupe_query_parts(matchup, score, "match action"),
+                _dedupe_query_parts(matchup, stadium, "match"),
             ]
         normalized = []
         for value in [query, *event_variants, *existing]:
@@ -795,14 +826,14 @@ def _strip_foreign_context_phrases(query: str, script: str, item: dict) -> str:
     kept_words = []
     for word in value.split():
         normalized = re.sub(r"[^A-Za-z0-9-]", "", word).lower()
-        if not normalized or normalized in {"the", "a", "an"}:
+        if not normalized or normalized in STOP_WORDS:
             continue
         is_name_like = bool(re.match(r"^[A-Z][A-Za-z'-]+$", word))
         if is_name_like and normalized not in context and normalized not in keep_action_words:
             continue
         kept_words.append(word)
     cleaned = " ".join(kept_words)
-    return _clean_search_keyword(cleaned)
+    return _dedupe_query_words(cleaned)
 
 
 def _contextual_match_query(item: dict, script: str, teams: list[str]) -> str:
@@ -820,11 +851,26 @@ def _contextual_match_query(item: dict, script: str, teams: list[str]) -> str:
     )
     if score_match:
         score = f"{score_words[score_match.group(1).lower()]}-{score_words[score_match.group(2).lower()]}"
+    numeric_score = re.search(r"\b(\d+)\s*[-–]\s*(\d+)\b", script)
+    if numeric_score:
+        score = f"{numeric_score.group(1)}-{numeric_score.group(2)}"
     subject, action = _scene_match_action(item, teams)
     if not subject:
         subject = str(item.get("main_subject") or "").strip()
+    if subject.lower() in {team.lower() for team in teams}:
+        subject = ""
     action_short = "touchline" if "coach touchline" in action else "celebration" if "goal celebration" in action else "match action"
-    return _concise_match_query(" ".join(value for value in (subject, teams[0], teams[1], score, action_short) if value), item)
+    return _concise_match_query(_dedupe_query_parts(subject, teams[0], teams[1], score, action_short), item)
+
+
+def _is_weak_match_query(query: str, teams: list[str]) -> bool:
+    words = [word.lower() for word in _ascii_words(query)]
+    if not words:
+        return True
+    team_words = {word.lower() for team in teams for word in _ascii_words(team)}
+    useful = [word for word in words if word not in STOP_WORDS]
+    specific = [word for word in useful if word not in team_words and word not in {"match", "action", "team", "football", "soccer"}]
+    return len(specific) == 0 or len(useful) <= max(2, len(team_words) + 1)
 
 
 def _apply_script_visual_context(items: list[dict], script: str) -> list[dict]:
@@ -834,6 +880,8 @@ def _apply_script_visual_context(items: list[dict], script: str) -> list[dict]:
     football_context = _is_football_script(script)
     global_context = _global_visual_context(script)
     for item in items:
+        item_teams = [str(value).strip() for value in item.get("match_teams") or [] if str(value).strip()]
+        local_teams = item_teams if len(item_teams) == 2 else teams
         item["global_visual_context"] = global_context
         raw_queries = []
         for key in ("keyword", "ai_search_keyword"):
@@ -853,18 +901,27 @@ def _apply_script_visual_context(items: list[dict], script: str) -> list[dict]:
                 _is_match_photography_item(item)
                 or any(term in str(item.get("sentence_text") or "").lower() for term in ("argentina", "messi", "football", "match", "team", "world cup", "goal", "penalty"))
             )
-            and (len(teams) != 2 or any(team.lower() in script_lower for team in teams))
+            and (len(local_teams) != 2 or any(team.lower() in script_lower for team in local_teams) or len(item_teams) == 2)
         )
+        if len(item_teams) == 2:
+            is_match_context = True
         if is_match_context:
-            if len(teams) == 2:
-                item["match_teams"] = teams
-            contextual = _contextual_match_query(item, script, teams)
-            if contextual and contextual not in sanitized:
+            if len(local_teams) == 2:
+                item["match_teams"] = local_teams
+                base_match_query = _concise_match_query(_dedupe_query_parts(local_teams[0], local_teams[1], "match action"), item)
+                if base_match_query and base_match_query not in sanitized and (not sanitized or _is_weak_match_query(sanitized[0], local_teams)):
+                    sanitized.insert(0, base_match_query)
+            contextual = _contextual_match_query(item, script, local_teams)
+            if contextual and contextual not in sanitized and (not sanitized or _is_weak_match_query(sanitized[0], local_teams)):
                 sanitized.insert(0, contextual)
+            if len(local_teams) == 2:
+                stable_match_query = _concise_match_query(_dedupe_query_parts(local_teams[0], local_teams[1], "match action"), item)
+                if stable_match_query and stable_match_query not in sanitized:
+                    sanitized.append(stable_match_query)
             item["visual_source_type"] = "match_photography"
             item["sportsdb_queries"] = []
             if not sanitized:
-                subject, action = _scene_match_action(item, teams)
+                subject, action = _scene_match_action(item, local_teams)
                 fallback_subject = subject or str(item.get("main_subject") or "").strip() or "Argentina Messi"
                 fallback_action = "celebration" if "celebration" in action else "match action"
                 sanitized.append(_clean_search_keyword(f"{fallback_subject} Argentina football {fallback_action}"))
@@ -1320,18 +1377,6 @@ def optimize_asset_keywords_with_ai(
     items = load_manifest(project)
     if not items:
         return items
-    if all(
-        item.get("scene_analysis_source") == "gemini"
-        and item.get("keyword_source") == "gemini_scene"
-        and item.get("keyword")
-        for item in items
-    ):
-        if callable(log):
-            log("AI keyword: Gemini đã tạo keyword khi chia cảnh; kiểm tra lại theo toàn bộ script.")
-        if script:
-            items = _apply_script_visual_context(items, script)
-            save_manifest(project, items)
-        return items
     for item in items:
         item.setdefault("keyword_local", item.get("keyword") or "")
 
@@ -1364,31 +1409,7 @@ def optimize_asset_keywords_with_ai(
             row = by_id.get(str(item.get("asset_id") or ""))
             if not row:
                 continue
-            local_keywords = _local_getty_keywords(str(item.get("sentence_text") or ""))
-            search_keyword = _clean_search_keyword(str(row.get("search_keyword") or "").strip())
-            fallbacks = row.get("fallback_keywords") if isinstance(row.get("fallback_keywords"), list) else []
-            fallbacks = [_clean_search_keyword(str(value).strip()) for value in fallbacks if str(value).strip()]
-            sportsdb_queries = row.get("sportsdb_queries") if isinstance(row.get("sportsdb_queries"), list) else []
-            google_queries = row.get("google_queries") if isinstance(row.get("google_queries"), list) else []
-            fallbacks = [
-                value for value in fallbacks
-                if value and not _is_generic_keyword(value, str(item.get("sentence_text") or ""))
-            ]
-            if _is_generic_keyword(search_keyword, str(item.get("sentence_text") or "")):
-                search_keyword = local_keywords[0] if local_keywords else str(item.get("keyword") or "")
-            merged_fallbacks = []
-            for value in [*fallbacks, *local_keywords]:
-                if value and value != search_keyword and value not in merged_fallbacks:
-                    merged_fallbacks.append(value)
-            if search_keyword:
-                item["keyword"] = search_keyword
-                item["ai_search_keyword"] = search_keyword
-            if merged_fallbacks:
-                item["fallback_keywords"] = merged_fallbacks[:5]
-            item["sportsdb_queries"] = [_clean_search_keyword(value) for value in sportsdb_queries if _clean_search_keyword(value)][:6]
-            item["google_queries"] = [_clean_search_keyword(value) for value in google_queries if _clean_search_keyword(value)][:8]
-            item["visual_intent"] = str(row.get("visual_intent") or "").strip()
-            item["keyword_source"] = provider
+            _apply_keyword_ai_row(item, row, provider)
     if script:
         items = _apply_script_visual_context(items, script)
     save_manifest(project, items)
@@ -1499,6 +1520,84 @@ def _call_keyword_ai_gemini(api_key: str, model: str, scenes: list[dict], script
     parts = ((candidates[0].get("content") or {}).get("parts") or [])
     content = "".join(str(part.get("text") or "") for part in parts)
     return _parse_keyword_ai_json(content)
+
+
+def _apply_keyword_ai_row(item: dict, row: dict, provider: str) -> dict:
+    local_keywords = _local_getty_keywords(str(item.get("sentence_text") or ""))
+    search_keyword = _clean_search_keyword(str(row.get("search_keyword") or "").strip())
+    fallbacks = row.get("fallback_keywords") if isinstance(row.get("fallback_keywords"), list) else []
+    fallbacks = [_clean_search_keyword(str(value).strip()) for value in fallbacks if str(value).strip()]
+    sportsdb_queries = row.get("sportsdb_queries") if isinstance(row.get("sportsdb_queries"), list) else []
+    google_queries = row.get("google_queries") if isinstance(row.get("google_queries"), list) else []
+    fallbacks = [
+        value for value in fallbacks
+        if value and not _is_generic_keyword(value, str(item.get("sentence_text") or ""))
+    ]
+    if _is_generic_keyword(search_keyword, str(item.get("sentence_text") or "")):
+        search_keyword = local_keywords[0] if local_keywords else str(item.get("keyword") or "")
+    merged_fallbacks = []
+    for value in [*fallbacks, *local_keywords]:
+        if value and value != search_keyword and value not in merged_fallbacks:
+            merged_fallbacks.append(value)
+    if search_keyword:
+        item["keyword"] = search_keyword
+        item["ai_search_keyword"] = search_keyword
+    if merged_fallbacks:
+        item["fallback_keywords"] = merged_fallbacks[:5]
+    item["sportsdb_queries"] = [_clean_search_keyword(value) for value in sportsdb_queries if _clean_search_keyword(value)][:6]
+    item["google_queries"] = [_clean_search_keyword(value) for value in google_queries if _clean_search_keyword(value)][:8]
+    item["visual_intent"] = str(row.get("visual_intent") or item.get("visual_intent") or "").strip()
+    item["main_subject"] = str(row.get("main_subject") or item.get("main_subject") or "").strip()
+    item["action_context"] = str(row.get("action_context") or item.get("action_context") or "").strip()
+    item["keyword_source"] = provider
+    item["keyword_ai_scene_refreshed"] = True
+    return item
+
+
+def refresh_asset_keyword_with_ai(
+    project: Path,
+    item: dict,
+    settings: dict | None,
+    log: Callable[[str], None] | None = None,
+) -> dict:
+    settings = settings or {}
+    provider = str(settings.get("keyword_ai_provider") or "auto").strip().lower()
+    openai_key = str(settings.get("openai_api_key") or "").strip()
+    gemini_key = str(settings.get("gemini_api_key") or "").strip() or openai_key
+    if provider == "auto":
+        provider = "openai" if openai_key.startswith("sk-") else "gemini" if gemini_key else ""
+    api_key = openai_key if provider == "openai" else gemini_key
+    if not api_key:
+        return item
+    script_path = project / "scripts" / "script_final.txt"
+    script = script_path.read_text(encoding="utf-8", errors="replace").strip() if script_path.exists() else ""
+    payload = [
+        {
+            "asset_id": item.get("asset_id"),
+            "scene_text": item.get("sentence_text"),
+            "timing": f"{item.get('start')} - {item.get('end')}",
+            "main_subject": item.get("main_subject"),
+            "action_context": item.get("action_context"),
+            "visual_intent": item.get("visual_intent"),
+            "current_keyword": item.get("keyword"),
+        }
+    ]
+    try:
+        if provider == "gemini":
+            rows = _call_keyword_ai_gemini(api_key, str(settings.get("gemini_keyword_model") or "gemini-2.5-flash"), payload, script)
+        else:
+            if not api_key.startswith("sk-"):
+                raise RuntimeError("OpenAI key phải bắt đầu bằng sk-.")
+            rows = _call_keyword_ai_openai(api_key, str(settings.get("keyword_ai_model") or "gpt-4.1-mini"), payload, script)
+        row = next((value for value in rows if str(value.get("asset_id") or "") == str(item.get("asset_id") or "")), rows[0] if rows else None)
+        if row:
+            item = _apply_keyword_ai_row(item, row, provider)
+            if callable(log):
+                log(f"{item.get('asset_id')}: AI tạo keyword mới: {item.get('keyword')}")
+    except Exception as exc:
+        if callable(log):
+            log(f"{item.get('asset_id')}: AI keyword lỗi, dùng fallback nội bộ: {exc}")
+    return item
 
 
 def _image_filter_settings(settings: dict | None = None) -> dict:
@@ -1893,7 +1992,7 @@ def _concise_match_query(value: str, item: dict) -> str:
     if not query:
         return ""
     removable_phrases = (
-        "players competing", "match action", "game action", "editorial photography",
+        "players competing", "game action", "editorial photography",
         "editorial photo", "editoria photo", "sports photography", "real photo",
         "after final whistle", "team lineup match",
     )
@@ -1907,7 +2006,7 @@ def _concise_match_query(value: str, item: dict) -> str:
         word for word in query.split()
         if word.lower() not in banned_words and not word.lower().startswith("editori")
     )
-    query = re.sub(r"\s+", " ", query).strip()
+    query = _dedupe_query_words(re.sub(r"\s+", " ", query).strip())
     words = query.split()
     if len(words) > 9:
         query = " ".join(words[:9])
@@ -2074,31 +2173,32 @@ def _fetch_google_images(
     excluded_urls: set[str] | None = None,
     excluded_dhashes: set[int] | None = None,
     skip_results: int = 0,
+    settings: dict | None = None,
 ) -> int:
     worker_path = Path(__file__).with_name("google_images_worker.py")
     downloaded = 0
-    target_count = max(1, min(4, int(count)))
-    for query_index, query in enumerate(queries[:2], start=1):
+    target_count = max(1, min(12, int(count)))
+    configured_profile = str((settings or {}).get("google_images_profile") or "").strip()
+    default_profile = str(Path(__file__).resolve().parents[1] / "chrome_google_images_profile")
+    profile_path = configured_profile or default_profile
+    captcha_seen = False
+    for query_index, query in enumerate(queries[:3], start=1):
         if downloaded >= target_count:
             break
-        query_target = min(2, target_count - downloaded)
+        query_target = min(4, target_count - downloaded)
         query_dir = folder / f"google_{query_index:02d}"
         query_dir.mkdir(parents=True, exist_ok=True)
         run_logs = []
-        for worker_attempt in range(1):
+        for worker_attempt in range(2):
             request_path = query_dir / f"_request_{worker_attempt + 1}.json"
-            profile_path = (
-                ""
-                if worker_attempt == 0
-                else str(Path(__file__).resolve().parents[1] / "chrome_google_images_profile")
-            )
+            attempt_profile = profile_path if worker_attempt == 0 else ""
             write_json(
                 request_path,
                 {
                     "query": query,
                     "output": str(query_dir),
                     "count": query_target,
-                    "profile": profile_path,
+                    "profile": attempt_profile,
                     "headed": False,
                     "exclude_urls": sorted(excluded_urls or set()),
                     "exclude_dhashes": sorted(excluded_dhashes or set()),
@@ -2124,6 +2224,13 @@ def _fetch_google_images(
                     f"attempt={worker_attempt + 1} returncode={result.returncode}\n"
                     f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
                 )
+                try:
+                    worker_data = json.loads(str(result.stdout or "").strip())
+                    if isinstance(worker_data, dict) and worker_data.get("captcha"):
+                        captcha_seen = True
+                except Exception:
+                    if "captcha" in str(result.stdout or "").lower() or "unusual traffic" in str(result.stdout or "").lower():
+                        captcha_seen = True
             except Exception as exc:
                 run_logs.append(f"attempt={worker_attempt + 1} error={exc}")
             image_files = [
@@ -2142,7 +2249,7 @@ def _fetch_google_images(
                 if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
             ]
         )
-    return downloaded
+    return -1 if downloaded <= 0 and captcha_seen else downloaded
 
 
 def crawl_image_candidates(
@@ -2177,6 +2284,11 @@ def crawl_image_candidates(
         if digest:
             excluded_hashes.add(digest)
         existing_path_text = str(existing.get("local_path") or "").strip()
+        existing_path = Path(existing_path_text) if existing_path_text else None
+        if existing_path and existing_path.is_file():
+            perceptual = _image_dhash(existing_path)
+            if perceptual is not None:
+                excluded_dhashes.add(perceptual)
     errors: list[str] = []
 
     match_photography = _is_match_photography_item(item)
@@ -2222,6 +2334,7 @@ def crawl_image_candidates(
                     excluded_urls=excluded_urls,
                     excluded_dhashes=excluded_dhashes,
                     skip_results=0,
+                    settings=settings,
                 ),
             ),
         ]
@@ -2241,6 +2354,7 @@ def crawl_image_candidates(
                     excluded_urls=excluded_urls,
                     excluded_dhashes=excluded_dhashes,
                     skip_results=0,
+                    settings=settings,
                 ),
             ),
         ]
@@ -2298,18 +2412,18 @@ def crawl_image_candidates(
                 ranked = []
                 if log:
                     if vision_required:
-                        log(f"{item.get('asset_id')}: Gemini Vision chậm/lỗi ({exc}); bỏ nguồn ảnh này.")
+                        log(f"{item.get('asset_id')}: Gemini Vision chậm/lỗi ({exc}); sẽ dùng ảnh dự phòng nếu có.")
                     else:
                         log(f"{item.get('asset_id')}: Gemini Vision chậm/lỗi ({exc}); dùng ảnh dự phòng.")
             if not ranked:
-                if vision_required:
-                    errors.append(f"{source_name}: Gemini Vision loại tất cả {len(candidates)} ảnh")
-                    continue
                 candidate = candidates[0]
                 vision_decision = {
                     "accepted": True,
                     "score": 0,
-                    "reason": "Gemini Vision không chọn được ảnh; dùng ứng viên tốt nhất để tránh thiếu media.",
+                    "reason": (
+                        "Gemini Vision không chọn được ảnh đủ điểm; dùng ứng viên tốt nhất "
+                        "để tránh thiếu media. Người dùng có thể bấm Tìm lại nếu chưa phù hợp."
+                    ),
                     "fallback": True,
                 }
                 if log:
@@ -2333,6 +2447,12 @@ def crawl_image_candidates(
             metadata["vision"] = vision_decision
             metadata["aspect_fallback"] = used_aspect_fallback
             return candidate, len(candidates), f"{source_name}: {query_text}", metadata
+        if downloaded < 0:
+            errors.append(
+                f"{source_name}: Google đang bắt captcha/chặn Playwright. "
+                "Hãy chờ vài phút hoặc mở Chrome profile Google Images để xác thực, tool sẽ thử lại bằng keyword đã tạo."
+            )
+            continue
         rejection_summary = _crawled_image_rejection_summary(source_dir, settings=settings)
         errors.append(f"{source_name} tải {downloaded} file nhưng không có ảnh 16:9 hợp lệ ({rejection_summary})")
     raise RuntimeError("Không tìm được ảnh mới. " + "; ".join(errors[-3:]))
@@ -2379,6 +2499,13 @@ def search_and_download_asset(
             f"{item['asset_id']}: đã gắn cờ ảnh cũ "
             f"({len(rejected_dhashes)} perceptual hash, {len(rejected_urls)} URL bị chặn)."
         )
+    if reject_current or not item.get("keyword_ai_scene_refreshed"):
+        item = refresh_asset_keyword_with_ai(project, item, settings, log)
+    script_path = project / "scripts" / "script_final.txt"
+    if script_path.exists():
+        script_text = script_path.read_text(encoding="utf-8", errors="replace").strip()
+        if script_text:
+            item = _apply_script_visual_context([item], script_text)[0]
     if _is_match_photography_item(item):
         concise_keyword = _concise_match_query(str(item.get("keyword") or ""), item)
         if concise_keyword:
@@ -2442,7 +2569,6 @@ def search_and_download_asset(
             not reject_current
             and not (old_path and old_path.is_file())
             and _is_match_photography_item(item)
-            and not bool((settings or {}).get("image_ai_validation_enabled", True))
         ):
             match_teams = {str(value).lower() for value in item.get("match_teams") or [] if str(value).strip()}
             for existing in load_manifest(project):

@@ -20,7 +20,7 @@
   "gemini_vision_model": "gemini-2.5-flash",
   "image_ai_validation_enabled": true,
   "image_ai_min_score": 72,
-  "image_search_parallel_jobs": 3,
+  "image_search_parallel_jobs": 1,
   "keyword_ai_provider": "auto",
   "gemini_keyword_model": "gemini-2.5-flash",
   "active_workflow_id": "general-video",
