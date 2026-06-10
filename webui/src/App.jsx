@@ -546,7 +546,6 @@ function App() {
     setEditingKeywordValue("")
     setAssetFilter("all")
     setPreflight(null)
-    setScriptMode("paste")
     setActiveScreen("step1")
   }
 
