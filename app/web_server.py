@@ -427,6 +427,7 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
         "scene_ai_enabled",
         "scene_min_seconds",
         "scene_target_max_seconds",
+        "scene_hard_max_seconds",
         "capcut_exe_path",
         "image_min_width",
         "image_min_height",

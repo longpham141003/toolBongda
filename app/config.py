@@ -38,6 +38,7 @@ DEFAULT_SETTINGS = {
     "scene_ai_enabled": True,
     "scene_min_seconds": 3.0,
     "scene_target_max_seconds": 10.0,
+    "scene_hard_max_seconds": 15.0,
     "capcut_exe_path": "",
     "google_images_profile": str(APP_DIR / "chrome_google_images_profile"),
     "getty_images_profile": str(APP_DIR / "chrome_getty_images_profile"),

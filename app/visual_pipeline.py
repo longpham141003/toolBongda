@@ -625,6 +625,8 @@ def _infer_match_teams(script: str) -> list[str]:
         r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b[^.!?]{0,30}\b(?:defeat|beat|defeated|beat)\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
         r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b[^.!?]{0,100}\bmatch against\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
         r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b[^.!?]{0,80}\b(?:defeated|beat|lost to|drew with)\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
+        r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b[^.!?]{0,100}\b(?:won|wins|win)\s+(?:over|against)\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
+        r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b[^.!?]{0,100}\b(?:three nil|two nil|one nil|3-0|2-0|1-0)\s+(?:win|victory)\s+(?:over|against)\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
         r"^([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,2})\b[^.!?]{0,140}\bagainst\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b",
     )
     for pattern in patterns:
@@ -641,6 +643,32 @@ def _infer_match_teams(script: str) -> list[str]:
     if opponent and leading:
         return [leading.group(1).strip(), opponent.group(1).strip()]
     return []
+
+
+def _is_football_script(script: str) -> bool:
+    lowered = str(script or "").lower()
+    terms = (
+        "argentina", "brazil", "messi", "football", "soccer", "world cup",
+        "friendly", "match", "goal", "penalty", "midfield", "fullback",
+        "scaloni", "vinicius", "iceland", "national team",
+    )
+    return sum(term in lowered for term in terms) >= 3
+
+
+def _global_visual_context(script: str) -> str:
+    teams = _infer_match_teams(script)
+    lowered = str(script or "").lower()
+    names = []
+    for name in ("Lionel Messi", "Vinicius Junior", "Lionel Scaloni", "Argentina", "Brazil", "Iceland"):
+        if name.lower() in lowered:
+            names.append(name)
+    if _is_football_script(script):
+        subject = " and ".join(teams) if len(teams) == 2 else ", ".join(names[:4]) or "the football match"
+        return (
+            f"Football video about {subject}. Use real football match photography and real team/player images "
+            "connected to this topic. Avoid flags, logos, badges, wallpapers, title cards, thumbnails, and generic graphics."
+        )
+    return "Use visuals that match the full script topic. Avoid logos, title cards, thumbnails, wallpapers, and unrelated generic images."
 
 
 def _scene_match_action(item: dict, teams: list[str]) -> tuple[str, str]:
@@ -803,7 +831,10 @@ def _apply_script_visual_context(items: list[dict], script: str) -> list[dict]:
     script = str(script or "")
     teams = _infer_match_teams(script)
     script_lower = script.lower()
+    football_context = _is_football_script(script)
+    global_context = _global_visual_context(script)
     for item in items:
+        item["global_visual_context"] = global_context
         raw_queries = []
         for key in ("keyword", "ai_search_keyword"):
             if item.get(key):
@@ -817,17 +848,26 @@ def _apply_script_visual_context(items: list[dict], script: str) -> list[dict]:
             if query and query not in sanitized:
                 sanitized.append(query)
         is_match_context = (
-            len(teams) == 2
-            and _is_match_photography_item(item)
-            and any(team.lower() in script_lower for team in teams)
+            football_context
+            and (
+                _is_match_photography_item(item)
+                or any(term in str(item.get("sentence_text") or "").lower() for term in ("argentina", "messi", "football", "match", "team", "world cup", "goal", "penalty"))
+            )
+            and (len(teams) != 2 or any(team.lower() in script_lower for team in teams))
         )
         if is_match_context:
-            item["match_teams"] = teams
+            if len(teams) == 2:
+                item["match_teams"] = teams
             contextual = _contextual_match_query(item, script, teams)
             if contextual and contextual not in sanitized:
                 sanitized.insert(0, contextual)
             item["visual_source_type"] = "match_photography"
             item["sportsdb_queries"] = []
+            if not sanitized:
+                subject, action = _scene_match_action(item, teams)
+                fallback_subject = subject or str(item.get("main_subject") or "").strip() or "Argentina Messi"
+                fallback_action = "celebration" if "celebration" in action else "match action"
+                sanitized.append(_clean_search_keyword(f"{fallback_subject} Argentina football {fallback_action}"))
         if sanitized:
             item["keyword"] = sanitized[0]
             item["ai_search_keyword"] = sanitized[0]
@@ -870,10 +910,11 @@ def group_scenes_with_ai(
         str(settings.get("gemini_keyword_model") or "gemini-2.5-flash"),
         script,
         payload,
-        float(settings.get("scene_min_seconds") or 3.0),
-        float(settings.get("scene_target_max_seconds") or 10.0),
+        10.0,
+        float(settings.get("scene_hard_max_seconds") or 15.0),
     )
     groups = _validate_scene_groups(rows, sentences)
+    groups = _enforce_scene_duration_limit(groups, float(settings.get("scene_hard_max_seconds") or 15.0))
     assets = []
     for index, (row, grouped_sentences) in enumerate(groups, start=1):
         item = _manifest_item(
@@ -919,12 +960,15 @@ def _scene_prompt(
     return (
         "You are a professional video editor and visual researcher.\n"
         "Read the full script and every timed SRT sentence before deciding scene boundaries.\n"
+        f"GLOBAL TOPIC LOCK: {_global_visual_context(script)}\n"
         "Infer the video's topic and genre from the FULL SCRIPT. Do not force a sports interpretation unless the script is clearly about sports.\n"
         "Group consecutive sentence indexes into coherent visual scenes.\n"
         "Scene rules:\n"
         "- Split when the main person, team, location, event, action, or time period changes.\n"
         "- Keep sentences that complete one idea together. Never cut in the middle of an idea.\n"
-        f"- Prefer scenes around {min_seconds:g}-{target_max_seconds:g} seconds, but meaning is more important and longer scenes are allowed.\n"
+        f"- Target every scene at {min_seconds:g}-{target_max_seconds:g} seconds.\n"
+        f"- HARD LIMIT: do not create a scene longer than {target_max_seconds:g} seconds unless a single SRT sentence alone is longer than that.\n"
+        "- If an idea is long, split it into two consecutive scenes with the same topic but different visual intent.\n"
         "- Every sentence must appear exactly once, in original order, with no gaps or overlap.\n"
         "- A scene must contain one continuous sentence_start..sentence_end range.\n"
         "- break_reason must clearly state what changed from the previous scene, such as subject_change, event_change, "
@@ -937,6 +981,7 @@ def _scene_prompt(
         "- search_keyword is a short 4-8 word Google Images query.\n"
         "- Every sports match query must include both teams/opponents when known and use a visible match moment: match action, "
         "goal, celebration, tackle, substitution, coach touchline, players after final whistle.\n"
+        "- For football narration, never use national flags, federation logos, team badges, generic emblems, title graphics, or wallpaper as scene visuals.\n"
         "- Never introduce named people, countries, teams, places, or events that do not appear in the full script or scene.\n"
         "- Avoid abstract/generic queries such as football player, greatest player, famous team, sports scene.\n"
         "- Return 3-5 specific fallback_keywords.\n"
@@ -1039,6 +1084,38 @@ def _call_scene_ai_gemini(
     if not isinstance(rows, list):
         raise RuntimeError("Gemini scene API không trả về scenes list.")
     return rows
+
+
+def _enforce_scene_duration_limit(
+    groups: list[tuple[dict, list[dict]]],
+    max_seconds: float = 15.0,
+) -> list[tuple[dict, list[dict]]]:
+    max_seconds = max(3.0, float(max_seconds or 15.0))
+    result: list[tuple[dict, list[dict]]] = []
+    for row, grouped in groups:
+        if not grouped:
+            continue
+        duration = float(grouped[-1]["end"]) - float(grouped[0]["start"])
+        if duration <= max_seconds or len(grouped) == 1:
+            result.append((row, grouped))
+            continue
+        chunk: list[dict] = []
+        part = 1
+        for sentence in grouped:
+            if chunk:
+                next_duration = float(sentence["end"]) - float(chunk[0]["start"])
+                if next_duration > max_seconds:
+                    next_row = dict(row)
+                    next_row["break_reason"] = str(row.get("break_reason") or "duration_split") if part == 1 else "duration_split"
+                    result.append((next_row, chunk))
+                    chunk = []
+                    part += 1
+            chunk.append(sentence)
+        if chunk:
+            next_row = dict(row)
+            next_row["break_reason"] = str(row.get("break_reason") or "duration_split") if part == 1 else "duration_split"
+            result.append((next_row, chunk))
+    return result
 
 
 def _validate_scene_groups(
@@ -1280,6 +1357,7 @@ def optimize_asset_keywords_with_ai(
 def _keyword_prompt(scenes: list[dict], script: str = "") -> str:
     prompt = (
         "You create visual asset search plans for a video production tool.\n"
+        f"GLOBAL TOPIC LOCK: {_global_visual_context(script)}\n"
         "First read the FULL SCRIPT to understand the topic, genre, real-world context, named entities, location, time, and visual boundaries.\n"
         "Then create precise English search phrases for each scene. Do not mix in people, countries, teams, places, brands, events, or topics that are not present in the full script or the scene.\n"
         "Rules:\n"
@@ -1287,6 +1365,8 @@ def _keyword_prompt(scenes: list[dict], script: str = "") -> str:
         "- Main search_keyword must be 4-8 words and read like a normal Google Images search.\n"
         "- Prefer exact visible subject + event/location/action/time.\n"
         "- If the script is about a specific sports match, queries must stay inside that match and include both opponents when known.\n"
+        "- For football scripts, every query must stay around the football topic, the named national teams, named players, match preparation, match action, celebration, coaching, or tournament context.\n"
+        "- For football scripts, do not use SportsDB logo/badge/flag-style visuals as scene assets; prefer Google match/team/player photography.\n"
         "- If the script is not sports, do not invent sports terms or sports sources.\n"
         "- Never request thumbnails, posters, title cards, wallpapers, logos, badges, collages, or unrelated generic images unless the scene specifically asks for them.\n"
         "- Bad: football player, soccer, sports, famous, real life action scene, dramatic background.\n"
@@ -1503,6 +1583,7 @@ def _rank_images_with_gemini(
     sentence = str(item.get("sentence_text") or "").strip()
     keyword = str(item.get("keyword") or "").strip()
     action = str(item.get("action_context") or "").strip()
+    global_context = str(item.get("global_visual_context") or "").strip()
     required_person = (
         subject
         if len(subject.split()) >= 2
@@ -1524,9 +1605,12 @@ def _rank_images_with_gemini(
                 "scene, the requested player or clearly relevant teams/action must be visible. Do not infer identity "
                 "only from shirt color. When required teams/event are provided, reject club kits, other national "
                 "teams, old tournaments, or unrelated matches even when the named player is correct. "
+                "Reject national flags, federation logos, team badges, emblems, flat icons, and low-information symbolic images "
+                "unless the narration explicitly asks for a flag/logo explanation. "
                 "Return JSON only: {\"items\":[{\"index\":1,\"accepted\":true,"
                 "\"score\":0-100,\"visible_subject\":\"...\",\"reason\":\"...\"}]}. "
                 f"Accept only scores >= {minimum_score}.\n"
+                f"Full video topic/context: {global_context}\n"
                 f"Scene narration: {sentence}\n"
                 f"Required main subject: {subject or 'no single named person'}\n"
                 f"Required teams/event: {', '.join(teams) or 'use narration and keyword'}\n"
@@ -1853,7 +1937,7 @@ def _fetch_sportsdb_images(folder: Path, queries: list[str], count: int = 10) ->
     ]
     image_keys = (
         "strThumb", "strCutout", "strRender", "strFanart1", "strFanart2", "strFanart3",
-        "strFanart4", "strBanner", "strPoster", "strBadge", "strLogo", "strStadiumThumb",
+        "strFanart4", "strStadiumThumb",
     )
     downloaded = 0
     seen: set[str] = set()
@@ -2150,13 +2234,27 @@ def crawl_image_candidates(
             )
             used_aspect_fallback = bool(candidates)
         if candidates:
+            vision_required = (
+                bool((settings or {}).get("image_ai_validation_enabled", True))
+                and bool(str((settings or {}).get("gemini_api_key") or "").strip())
+                and (
+                    match_photography
+                    or "football video" in str(item.get("global_visual_context") or "").lower()
+                )
+            )
             try:
                 ranked = _rank_images_with_gemini(candidates, item, settings, log=log)
             except Exception as exc:
                 ranked = []
                 if log:
-                    log(f"{item.get('asset_id')}: Gemini Vision chậm/lỗi ({exc}); dùng ảnh dự phòng.")
+                    if vision_required:
+                        log(f"{item.get('asset_id')}: Gemini Vision chậm/lỗi ({exc}); bỏ nguồn ảnh này.")
+                    else:
+                        log(f"{item.get('asset_id')}: Gemini Vision chậm/lỗi ({exc}); dùng ảnh dự phòng.")
             if not ranked:
+                if vision_required:
+                    errors.append(f"{source_name}: Gemini Vision loại tất cả {len(candidates)} ảnh")
+                    continue
                 candidate = candidates[0]
                 vision_decision = {
                     "accepted": True,
