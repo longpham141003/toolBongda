@@ -1,6 +1,6 @@
 # Huong dan chay tool tren may moi
 
-File nay danh cho nguoi moi pull repo ve va can chay duoc tu dau den cuoi: tao script, tao voice Kokoro, chia canh, tim anh, duyet anh va xuat CapCut.
+File nay danh cho nguoi moi pull repo ve va can chay duoc tu dau den cuoi: tao script, tao voice Kokoro, chia canh, tim anh, duyet anh va xuat CapCut. Neu nguoi dung khong biet code, chi can doc muc 3.
 
 ## 1. Can cai truoc
 
@@ -8,7 +8,7 @@ Bat buoc:
 
 - Git.
 - CapCut PC da dang nhap va mo duoc binh thuong.
-- Python 3.10 tro len, co Python Launcher `py`. Khuyen nghi Python 3.13.
+- Python 3.10 tro len, co Python Launcher `py`. Khuyen nghi Python 3.13. Neu may co `winget`, launcher se thu cai Python tu dong khi chua co.
 - Internet cho lan chay dau tien de tai thu vien, Chromium Playwright va model Kokoro.
 
 Khong bat buoc:
@@ -36,9 +36,10 @@ Chay file:
 run_visual_capcut.bat
 ```
 
-File nay se tu lam cac viec sau:
+File nay se hien cua so khoi dong va tu lam cac viec sau:
 
 - Tao `settings.json` tu `settings.example.json` neu chua co.
+- Tao moi truong backend `.venv` neu thieu.
 - Cai thu vien backend bang `requirements.txt` neu thieu.
 - Cai Chromium cho Playwright de tim anh Google Images.
 - Cai Kokoro local vao `kokoro-tts-local/.venv` neu thieu. Neu nguoi dung mo backend truc tiep va chua co `.venv`, tool se tu cai khi bam `Nghe thu` hoac `Tao giong doc`.
@@ -46,6 +47,8 @@ File nay se tu lam cac viec sau:
 - Mo giao dien web tren trinh duyet.
 
 Lan dau co the lau vi Kokoro va Playwright phai tai dependency/model. Nhung tu lan sau se nhanh hon.
+
+Trong qua trinh chay, neu thieu thu vien, cua so khoi dong se hien thong bao dang cai. Khong tat cua so do cho den khi trinh duyet mo giao dien tool.
 
 ## 4. Cau hinh trong tool
 
@@ -84,19 +87,20 @@ Khong luu project vao trong repo nua de tranh phinh Git.
 
 ### API khong khoi dong
 
-Chay thu:
+Thong thuong chi can mo lai:
 
 ```powershell
-py -3.13 -m pip install -r requirements.txt
-py -3.13 -m app.web_server
+run_visual_capcut.bat
 ```
+
+Neu van loi, gui file `logs/startup.log` va `logs/api.err.log` cho nguoi phu trach.
 
 ### Playwright khong tim anh
 
-Chay:
+Thong thuong launcher tu cai. Neu can cai tay:
 
 ```powershell
-py -3.13 -m playwright install chromium
+.\.venv\Scripts\python.exe -m playwright install chromium
 ```
 
 ### Kokoro khong tao voice

@@ -2,11 +2,23 @@
 
 Tool tao video tu script, tao voice bang Kokoro local, tu chia SRT thanh canh, tim media va xuat project CapCut.
 
-## Chay nhanh
+## Chay nhanh cho nguoi khong biet code
 
-```powershell
+Double click file:
+
+```text
 run_visual_capcut.bat
 ```
+
+Lan dau mo tool, cua so khoi dong se tu kiem tra va cai cac thanh phan con thieu:
+
+- Python backend environment `.venv`
+- thu vien backend
+- Chromium Playwright de tim anh
+- Kokoro local voice environment
+- file cau hinh rieng `settings.json`
+
+Nguoi dung chi can cho den khi trinh duyet tu mo giao dien `Visual CapCut Studio`.
 
 Huong dan chi tiet cho may moi pull repo: xem `HUONG_DAN_CHAY_MAY_MOI.md`.
 
@@ -16,34 +28,14 @@ Tool se mo giao dien web tai:
 http://127.0.0.1:8765
 ```
 
-Lan dau chay, file `.bat` se tu tao `settings.json`, cai dependency backend neu thieu va cai moi truong Kokoro local trong `kokoro-tts-local/.venv`. Neu mo backend truc tiep ma chua co `.venv`, tool cung se tu cai khi bam nghe thu hoac tao voice.
+Lan dau chay co the mat 5-15 phut tuy toc do mang/may. Tu lan sau se nhanh hon.
 
 ## Cai dat cho may moi
 
-1. Cai Python 3.10 tro len. Khuyen nghi Python 3.13. Node.js chi can neu muon sua/build lai UI.
-2. Cai dependency backend:
-
-```powershell
-py -3.13 -m pip install -r requirements.txt
-py -3.13 -m playwright install chromium
-```
-
-3. Cai dependency frontend neu can build lai UI:
-
-```powershell
-cd webui
-npm install
-npm run build
-cd ..
-```
-
-4. Neu muon cai Kokoro thu cong:
-
-```powershell
-cd kokoro-tts-local
-powershell -ExecutionPolicy Bypass -File setup.ps1
-cd ..
-```
+1. Cai Python 3.10 tro len. Khuyen nghi Python 3.13. Neu may co `winget`, launcher se thu cai Python tu dong khi chua co.
+2. Cai CapCut PC va mo/dang nhap duoc binh thuong.
+3. Clone/pull repo.
+4. Double click `run_visual_capcut.bat`.
 
 Ghi chu:
 
@@ -53,13 +45,7 @@ Ghi chu:
 
 ## Cau hinh
 
-Sao chep:
-
-```powershell
-copy settings.example.json settings.json
-```
-
-Sau do dien API key va duong dan rieng cua may. `settings.json` bi ignore, khong day len Git.
+Launcher se tu tao `settings.json` neu chua co. `settings.json` bi ignore, khong day len Git.
 
 Quan trong:
 
