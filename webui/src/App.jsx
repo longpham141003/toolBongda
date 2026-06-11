@@ -966,38 +966,6 @@ function StepPill({ index, label, active, done }) {
   return <div className={cn("step-pill", active && "active", done && "done")}><span>{done ? <Check className="h-4 w-4" /> : index + 1}</span><b>{label}</b></div>
 }
 
-function ProgressRail({ steps, current, done, setActiveScreen }) {
-  return <div className="workspace-progress">
-    <div className="workspace-rail-line"><div className="workspace-rail-flow" /></div>
-    {steps.map((step, index) => {
-      const locked = index > 0 && !done[index - 1] && index !== current
-      return <button key={step.id} disabled={locked} title={locked ? "Hãy hoàn thành bước trước trước." : ""} onClick={() => !locked && setActiveScreen(step.id)} className={cn("workspace-step", index === current && "active", done[index] && "done", locked && "locked")}>
-      <span>{done[index] ? <Check className="h-4 w-4" /> : index + 1}</span>
-      <div><b>{step.title}</b><small>{index === current ? "Đang thực hiện" : done[index] ? "Hoàn thành" : locked ? "Chưa mở" : "Sẵn sàng"}</small></div>
-    </button>
-    })}
-  </div>
-}
-
-function UserProgressPanel({ progress }) {
-  const percent = Math.max(0, Math.min(100, Math.round(progress.percent || 0)))
-  return <section className={cn("user-progress-panel", progress.running && "running", progress.status === "done" && "done", progress.status === "error" && "error")}>
-    <div className="user-progress-main">
-      <div className="user-progress-icon">{progress.running ? <LoaderCircle className="h-4 w-4 animate-spin" /> : progress.status === "done" ? <CheckCircle2 className="h-4 w-4" /> : progress.status === "error" ? <XCircle className="h-4 w-4" /> : <Activity className="h-4 w-4" />}</div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-3">
-          <h3>{progress.title}</h3>
-          <b>{percent}%</b>
-        </div>
-        <div className="user-progress-track"><i style={{ width: `${percent}%` }} /></div>
-      </div>
-    </div>
-    <div className="user-progress-log">
-      {progress.messages.map((message, index) => <span key={`${message}-${index}`}>{message}</span>)}
-    </div>
-  </section>
-}
-
 function buildUserProgress({ activeScreen, activeJob, busyAction, logs, project, assets, script, completedSteps }) {
   const running = Boolean(activeJob && ["queued", "running"].includes(activeJob.status))
   const failed = activeJob?.status === "failed"
