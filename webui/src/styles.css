@@ -348,11 +348,10 @@ textarea {
 .stitch-home {
   display: flex;
   width: 100%;
-  min-height: calc(100vh - 64px);
+  min-height: calc(100vh - var(--topbar-height));
   flex-direction: column;
   gap: 32px;
   overflow: visible;
-  padding: var(--topbar-height) 0 0;
   margin: var(--topbar-height) 0 0;
   padding: var(--sp-6) var(--sp-6) 84px;
 }
