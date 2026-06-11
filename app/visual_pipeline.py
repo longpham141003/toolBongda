@@ -56,6 +56,7 @@ DEFAULT_IMAGE_MIN_WIDTH = 600
 DEFAULT_IMAGE_MIN_HEIGHT = 330
 DEFAULT_IMAGE_TARGET_WIDTH = 1920
 DEFAULT_IMAGE_TARGET_HEIGHT = 1080
+_VISION_QUOTA_PAUSE_UNTIL = 0.0
 
 
 def _uuid() -> str:
@@ -1708,6 +1709,22 @@ def _vision_sidecar(path: Path) -> Path:
     return path.parent / f"_vision_{digest}.json"
 
 
+def _metadata_ranked_images(candidates: list[Path], reason: str) -> list[tuple[Path, dict]]:
+    return [
+        (
+            path,
+            {
+                "accepted": True,
+                "score": 0,
+                "reason": reason,
+                "fallback": True,
+                "validation_mode": "metadata",
+            },
+        )
+        for path in candidates
+    ]
+
+
 def _rank_images_with_gemini(
     candidates: list[Path],
     item: dict,
@@ -1717,13 +1734,19 @@ def _rank_images_with_gemini(
 ) -> list[tuple[Path, dict]]:
     import requests
 
+    global _VISION_QUOTA_PAUSE_UNTIL
     settings = settings or {}
     api_key = str(settings.get("gemini_api_key") or "").strip()
     enabled = bool(settings.get("image_ai_validation_enabled", True))
     if not enabled or not api_key:
         if enabled and log:
             log(f"{item.get('asset_id')}: chưa có Gemini API key, chỉ chấm theo metadata.")
-        return [(path, {"accepted": True, "score": 0, "reason": "metadata-only"}) for path in candidates]
+        return _metadata_ranked_images(candidates, "metadata-only")
+    if _VISION_QUOTA_PAUSE_UNTIL and time.time() < _VISION_QUOTA_PAUSE_UNTIL:
+        return _metadata_ranked_images(
+            candidates,
+            "Gemini Vision đang hết quota, tool tạm chọn ảnh theo metadata. Nếu ảnh chưa đúng hãy bấm Tìm lại hoặc Tải media thay thế.",
+        )
 
     primary_model = str(settings.get("gemini_vision_model") or settings.get("gemini_keyword_model") or "gemini-2.5-flash")
     models = [primary_model]
@@ -1807,6 +1830,17 @@ def _rank_images_with_gemini(
         if response.status_code < 400:
             break
         errors.append(f"{model}: HTTP {response.status_code}")
+        if response.status_code == 429:
+            _VISION_QUOTA_PAUSE_UNTIL = time.time() + 3600
+            if log:
+                log(
+                    f"{item.get('asset_id')}: Gemini Vision hết quota; "
+                    "tool sẽ tạm chọn ảnh theo metadata, có thể bấm Tìm lại nếu ảnh chưa đúng."
+                )
+            return _metadata_ranked_images(
+                candidates,
+                "Gemini Vision hết quota, đã chuyển sang chọn ảnh thường. Nếu ảnh chưa đúng hãy bấm Tìm lại.",
+            )
         if response.status_code not in {429, 500, 502, 503, 504}:
             break
     if response is None or response.status_code >= 400:
