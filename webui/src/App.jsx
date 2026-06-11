@@ -773,53 +773,29 @@ function App() {
         />
       )}
       {activeScreen === "home" ? (
-        <main className="stitch-home">
-          <section className="grid h-[220px] grid-cols-12 items-center gap-8 fade-in-up">
-            <div className="col-span-7 flex flex-col gap-4">
-              <h1 className="hero-title">Tạo video hoàn chỉnh chỉ trong 4 bước</h1>
-              <p className="max-w-lg text-base leading-7 text-slate-400">Không cần biết AI hay kỹ thuật. Chỉ cần làm lần lượt từ trái sang phải.</p>
+        <main className="stitch-home" style={{ paddingTop: "var(--sp-8)" }}>
+          <div className="home-welcome fade-in-up">
+            <h1>Tạo video AI<br />trong 4 bước đơn giản</h1>
+            <p>Không cần biết AI hay kỹ thuật. Nhập kịch bản, chọn giọng, duyệt ảnh, xuất CapCut.</p>
+            <div className="home-cta-row">
+              <Button onClick={startNewVideo} size="lg">
+                <Plus className="h-4 w-4" /> Tạo video mới
+              </Button>
+              <Button variant="secondary" size="lg" onClick={() => setProjectsOpen(true)}>
+                <FolderOpen className="h-4 w-4" /> Mở project gần đây
+              </Button>
             </div>
-            <div className="glass-panel col-span-5 flex h-full items-center justify-center overflow-hidden p-4">
-              <div className="hero-visual">
-                <div className="hero-orb hero-orb-violet" /><div className="hero-orb hero-orb-emerald" />
-                <Film className="relative z-10 h-24 w-24 text-violet-200/80" />
-                <Sparkles className="absolute right-16 top-12 h-8 w-8 text-emerald-200" />
-              </div>
-            </div>
-          </section>
+          </div>
 
-          <section className="glass-panel progress-rail fade-in-up delay-100">
-            <div className="rail-line"><div className="rail-flow" /></div>
-            {stepCards.map((step, index) => <StepPill key={step.id} index={index} active={index === 0} done={false} label={step.title} />)}
-          </section>
-
-          <section className="grid h-[200px] grid-cols-12 gap-6 fade-in-up delay-200">
-            <button onClick={startNewVideo} className="glass-card-primary col-span-7 flex flex-col justify-between p-8 text-left">
-              <div className="relative z-10 flex justify-between">
-                <div><h2 className="text-[32px] font-semibold text-white">Tạo video mới</h2><p className="mt-2 text-sm text-slate-400">Bắt đầu luồng sáng tạo từ đầu</p></div>
-                <div className="big-icon"><Plus className="h-7 w-7" /></div>
-              </div>
-              <span className="btn-primary w-fit">Bắt đầu ngay <ArrowRight className="h-4 w-4" /></span>
-            </button>
-            <button onClick={() => setProjectsOpen(true)} className="glass-card-secondary col-span-5 flex flex-col justify-between p-8 text-left">
-              <div className="relative z-10 flex justify-between">
-                <div><h2 className="text-[32px] font-semibold text-white">Mở project gần đây</h2><p className="mt-2 text-sm text-slate-400">Tiếp tục công việc đang dang dở</p></div>
-                <div className="big-icon emerald"><FolderOpen className="h-7 w-7" /></div>
-              </div>
-              <span className="btn-secondary w-fit">Tiếp tục</span>
-            </button>
-          </section>
-
-          <section className="flex flex-1 flex-col gap-4 fade-in-up delay-300">
-            <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Mẫu Flow Phổ Biến</h3>
-            <div className="grid flex-1 grid-cols-4 gap-4">
+          <div className="home-flow-section fade-in-up delay-100">
+            <h3>Flow phổ biến</h3>
+            <div className="home-flow-grid">
               <FlowCard icon={Circle} title="Tin tức bóng đá" desc="Cập nhật nhanh trận đấu" />
               <FlowCard icon={Rocket} title="Khoa học & vũ trụ" desc="Kiến thức khám phá" accent="emerald" />
-              <FlowCard icon={FileText} title="Kể chuyện" desc="Truyện cổ tích, tóm tắt" accent="blue" />
+              <FlowCard icon={FileText} title="Kể chuyện" desc="Truyện, tóm tắt sách" accent="blue" />
               <FlowCard icon={Settings} title="Tạo flow riêng" desc="Tuỳ chỉnh mọi bước" dashed onClick={() => setSettingsOpen(true)} />
             </div>
-          </section>
-          <footer className="home-footer"><span>Dễ sử dụng</span><span>Ảnh được AI kiểm tra</span><span>Project mở trực tiếp trong CapCut</span></footer>
+          </div>
         </main>
       ) : (
         <main className="stitch-workspace" style={{ marginLeft: "var(--sidebar-width)" }}>
