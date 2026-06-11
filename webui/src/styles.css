@@ -529,8 +529,7 @@ textarea {
 .screen-heading h1 { font-size: var(--text-lg); line-height: 1.3; font-weight: 700; color: white; }
 .screen-heading p { margin-top: var(--sp-1); color: #cbc3d7; font-size: var(--text-xs); line-height: 1.6; }
 .screen-heading.compact h1 { font-size: var(--text-md); }
-.voice-layout, .scene-layout, .export-layout { display:grid; min-height:auto; flex:0 0 auto; gap:16px; }
-.voice-layout { grid-template-columns: 7fr 5fr; }
+.scene-layout, .export-layout { display:grid; min-height:auto; flex:0 0 auto; gap:16px; }
 .scene-layout, .export-layout { grid-template-columns: 1fr 1fr; }
 .screen-panel { min-height:auto; overflow:visible; padding:20px; }
 .scene-layout .screen-panel { display:flex; flex-direction:column; }
