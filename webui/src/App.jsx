@@ -1278,6 +1278,7 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
   const [cloneName, setCloneName] = useState("")
   const [cloneLanguage, setCloneLanguage] = useState("vi")
   const [pendingCloneFile, setPendingCloneFile] = useState(null)
+  const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
   const cloneInputRef = useRef(null)
   const languageMismatch = looksLikeEnglish(script) && (settings.text_to_voice_language || "en") !== "en"
   const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
@@ -1310,7 +1311,28 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
       <Button variant="secondary" onClick={applyBeginnerVoicePreset} disabled={isBusy}><WandSparkles className="h-4 w-4" /> Dùng cấu hình dễ nhất</Button>
     </div>
     {languageMismatch && <div className="ux-warning"><AlertTriangle className="h-4 w-4" /><span>Script có vẻ là tiếng Anh nhưng ngôn ngữ giọng đang không phải English. Giọng có thể phát âm sai.</span><button onClick={() => setSettings({...settings, text_to_voice_language:"en", text_to_voice_voice:"af_heart"})}>Đổi sang English</button></div>}
-    <div className="voice-layout">
+    <Dialog open={cloneDialogOpen} onOpenChange={setCloneDialogOpen}>
+      <DialogContent>
+        <DialogTitle>Thêm giọng clone mới</DialogTitle>
+        <DialogDescription>Tải file audio mẫu, đặt tên và chọn ngôn ngữ.</DialogDescription>
+        <div className="clone-dialog-grid">
+          <Field label="Tên giọng"><Input value={cloneName} onChange={(e)=>setCloneName(e.target.value)} placeholder="Ví dụ: AnhQuan, GiongKeChuyen..." /></Field>
+          <Field label="Ngôn ngữ"><Input value={cloneLanguage} onChange={(e)=>setCloneLanguage(e.target.value)} placeholder="vi, en, fr..." /></Field>
+        </div>
+        <button type="button" className="clone-upload-zone" onClick={() => cloneInputRef.current?.click()}>
+          <Upload className="h-8 w-8 text-emerald-300" />
+          <b>{pendingCloneFile ? `Đã chọn: ${pendingCloneFile.name}` : "Tải audio mẫu clone"}</b>
+          <span>Nên dùng file WAV/MP3 sạch, chỉ một người nói, dài khoảng 10-30 giây.</span>
+        </button>
+        <input ref={cloneInputRef} type="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg,.webm" className="hidden" onChange={(e)=>setPendingCloneFile(e.target.files?.[0] || null)} />
+        <p className="mt-3 text-xs text-slate-500">Lần đầu clone có thể lâu vì tool tự cài thư viện cần thiết.</p>
+        <Button className="mt-4 w-full" disabled={!pendingCloneFile || isBusy || voicePreviewBusy} onClick={async () => { await cloneVoiceNow(); setCloneDialogOpen(false) }}>
+          {voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}
+          {voicePreviewBusy ? "Đang lưu và tạo nghe thử..." : "Clone voice"}
+        </Button>
+      </DialogContent>
+    </Dialog>
+    <div className="voice-screen-grid">
       <div className="glass-panel screen-panel flex flex-col">
         <div className="panel-title"><h2>Chọn giọng đọc</h2><Button variant="ghost" size="sm" onClick={() => refreshVoices(settings.text_to_voice_language || "en")}><RefreshCw className="h-4 w-4" /> Tải lại</Button></div>
         <Field label="Ngôn ngữ đọc"><Select value={voiceLanguage} onValueChange={changeVoiceLanguage} options={voiceLanguageOptions} /></Field>
@@ -1353,35 +1375,17 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
           </div>}
           <div className="saved-voice-actions">
             <Button variant="secondary" size="sm" disabled={!selectedClone} onClick={() => setSettings({...settings, voice_clone_enabled:false, voice_clone_reference_path:"", voice_clone_reference_name:""})}>Dùng giọng thường</Button>
+            <Button variant="secondary" size="sm" onClick={() => setCloneDialogOpen(true)}><Plus className="h-4 w-4" /> Thêm clone mới</Button>
           </div>
         </div>
-        <div className="audio-preview"><div className="flex justify-between text-xs"><span>Nghe thử giọng đang chọn</span><Button size="sm" variant="ghost" onClick={() => previewVoiceNow()}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button></div>{voicePreviewUrl && <audio controls autoPlay src={voicePreviewUrl} className="mt-2 w-full" />}</div>
       </div>
-      <div className="flex min-h-0 flex-col gap-4">
-        <div className="glass-panel screen-panel flex-1">
-          <div className="panel-title"><div><h3>Cài đặt clone voice</h3><p>Chỉ cần chỉnh khi muốn giọng nhanh hơn, chậm hơn hoặc clone kỹ hơn.</p></div><Settings className="text-emerald-300" /></div>
-          <RangeField label="Tốc độ đọc" value={settings.text_to_voice_speed ?? 1} min={.5} max={2} step={.05} onChange={(v)=>setSettings({...settings,text_to_voice_speed:v})} />
-          <div className="setting-help">0.9-1.0 là tự nhiên. Tăng lên nếu muốn đọc nhanh, giảm xuống nếu muốn chậm và rõ hơn.</div>
-          <RangeField label="Mức xử lý giọng clone" value={settings.magicvoice_steps ?? 16} min={8} max={32} step={1} onChange={(v)=>setSettings({...settings, magicvoice_steps:v})} />
-          <div className="setting-help">16 là cân bằng. Số cao hơn có thể giống giọng mẫu hơn nhưng tạo voice lâu hơn.</div>
-        </div>
-        <div className="glass-panel screen-panel">
-          <div className="panel-title"><div><h3>Clone voice</h3><p>Tải audio mẫu, đặt tên, rồi bấm Clone voice để lưu vào danh sách bên trái.</p></div><Mic className="text-violet-300" /></div>
-          <div className="clone-form-grid">
-            <Field label="Tên giọng"><Input value={cloneName} onChange={(e)=>setCloneName(e.target.value)} placeholder="Ví dụ: AnhQuan, GiongKeChuyen..." /></Field>
-            <Field label="Ngôn ngữ"><Input value={cloneLanguage} onChange={(e)=>setCloneLanguage(e.target.value)} placeholder="vi, en, fr..." /></Field>
-          </div>
-          <button type="button" className="clone-drop mt-3" onClick={() => cloneInputRef.current?.click()}>
-            <Upload className="h-8 w-8 text-emerald-300" />
-            <b>{pendingCloneFile ? `Đã chọn: ${pendingCloneFile.name}` : "Tải audio mẫu clone"}</b>
-            <span>Nên dùng file WAV/MP3 sạch, chỉ một người nói, dài khoảng 10-30 giây.</span>
-          </button>
-          <input ref={cloneInputRef} type="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg,.webm" className="hidden" onChange={(e)=>setPendingCloneFile(e.target.files?.[0] || null)} />
-          <div className="voice-language-note">
-            Lần đầu clone có thể lâu vì tool tự cài thư viện cần thiết. Sau khi clone xong, giọng sẽ nằm trong dropdown bên trái để lần sau chọn lại.
-          </div>
-          <Button className="mt-4 w-full" disabled={!pendingCloneFile || isBusy || voicePreviewBusy} onClick={cloneVoiceNow}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />} {voicePreviewBusy ? "Đang lưu và tạo nghe thử..." : "Clone voice"}</Button>
-        </div>
+      <div className="glass-panel screen-panel flex flex-col">
+        <div className="panel-title"><div><h3>Cài đặt giọng đọc</h3><p>Chỉnh tốc độ, mức clone và nghe thử kết quả.</p></div><Settings className="text-emerald-300" /></div>
+        <RangeField label="Tốc độ đọc" value={settings.text_to_voice_speed ?? 1} min={.5} max={2} step={.05} onChange={(v)=>setSettings({...settings,text_to_voice_speed:v})} />
+        <div className="setting-help">0.9-1.0 là tự nhiên. Tăng lên nếu muốn đọc nhanh, giảm xuống nếu muốn chậm và rõ hơn.</div>
+        <RangeField label="Mức xử lý giọng clone" value={settings.magicvoice_steps ?? 16} min={8} max={32} step={1} onChange={(v)=>setSettings({...settings, magicvoice_steps:v})} />
+        <div className="setting-help">16 là cân bằng. Số cao hơn có thể giống giọng mẫu hơn nhưng tạo voice lâu hơn.</div>
+        <div className="audio-preview"><div className="flex justify-between text-xs"><span>Nghe thử giọng đang chọn</span><Button size="sm" variant="ghost" onClick={() => previewVoiceNow()}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button></div>{voicePreviewUrl && <audio controls autoPlay src={voicePreviewUrl} className="mt-2 w-full" />}</div>
       </div>
     </div>
     <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step1")}><ArrowLeft className="h-4 w-4" /> Quay lại Bước 1</Button><div className="footer-chips"><span>Xuất WAV</span><span>Tạo mốc thời gian</span><span>{project?.voice_path ? "Sẵn sàng tạo cảnh" : "Tạo voice trước"}</span></div>{project?.voice_path
