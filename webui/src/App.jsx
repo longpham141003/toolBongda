@@ -746,29 +746,32 @@ function App() {
       <ParticleCanvas />
       <header className="stitch-topbar">
         {activeScreen !== "home" && (
-          <button className="back-home-button" onClick={goHomeAndStopProject} title="Quay lại trang chủ và dừng project hiện tại">
-            <ArrowLeft className="h-5 w-5" />
+          <button className="back-home-button" onClick={goHomeAndStopProject} title="Quay lại trang chủ">
+            <ArrowLeft className="h-4 w-4" />
           </button>
         )}
-        <button className="flex items-center gap-3" onClick={() => activeScreen === "home" ? undefined : goHomeAndStopProject()}>
-          <div className="logo-mark"><WandSparkles className="h-5 w-5" /></div>
-          <div className="text-left">
-            <div className="text-[22px] font-bold tracking-tight text-white">Visual CapCut <span className="text-emerald-300">Studio</span></div>
-            <div className="text-[10px] uppercase tracking-[0.24em] text-slate-500">AI video production</div>
-          </div>
+        <button className="flex items-center gap-2" onClick={() => activeScreen !== "home" && goHomeAndStopProject()}>
+          <div className="logo-mark"><WandSparkles className="h-4 w-4" /></div>
+          <span className="text-[15px] font-bold text-white">Visual CapCut <span className="text-emerald-300">Studio</span></span>
         </button>
-        <button onClick={() => setProjectsOpen(true)} className="project-pill">
-          <FolderOpen className="h-4 w-4" />
-          <span className="max-w-[300px] truncate">{project?.name || "Dự án của tôi"}</span>
-          <ChevronRight className="h-4 w-4 opacity-50" />
-        </button>
-        <div className="ml-auto flex items-center gap-3">
-          <button className="top-action">Trợ giúp</button>
-          <button className="icon-action" onClick={() => setSettingsOpen(true)}><Settings className="h-5 w-5" /></button>
+        <div className="ml-auto flex items-center gap-2">
+          <button className="icon-action" onClick={() => setSettingsOpen(true)}><Settings className="h-4 w-4" /></button>
           <div className="avatar-dot">L</div>
         </div>
       </header>
 
+      {activeScreen !== "home" && (
+        <Sidebar
+          activeScreen={activeScreen}
+          setActiveScreen={setActiveScreen}
+          completedSteps={completedSteps}
+          project={project}
+          activeJob={activeJob}
+          userProgress={userProgress}
+          setSettingsOpen={setSettingsOpen}
+          setProjectsOpen={setProjectsOpen}
+        />
+      )}
       {activeScreen === "home" ? (
         <main className="stitch-home">
           <section className="grid h-[220px] grid-cols-12 items-center gap-8 fade-in-up">
@@ -819,9 +822,7 @@ function App() {
           <footer className="home-footer"><span>Dễ sử dụng</span><span>Ảnh được AI kiểm tra</span><span>Project mở trực tiếp trong CapCut</span></footer>
         </main>
       ) : (
-        <main className="stitch-workspace">
-          <ProgressRail steps={stepCards} current={currentStepIndex} done={completedSteps} setActiveScreen={setActiveScreen} />
-          <UserProgressPanel progress={userProgress} />
+        <main className="stitch-workspace" style={{ marginLeft: "var(--sidebar-width)" }}>
           {activeScreen === "step1" && <ScriptStepScreen
             title={title}
             setTitle={setTitle}
@@ -873,6 +874,112 @@ function App() {
       {error && <div className="toast-error"><XCircle className="h-4 w-4 shrink-0" /><span>{error}</span><button onClick={() => setError("")}>Đóng</button></div>}
       {toast && <div className="toast-ok"><CheckCircle2 className="h-4 w-4" />{toast}</div>}
     </div>
+  )
+}
+
+function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, activeJob, userProgress, setSettingsOpen, setProjectsOpen }) {
+  const steps = [
+    { id: "step1", label: "Nội dung", hint: "Kịch bản và AI viết" },
+    { id: "step2", label: "Giọng đọc", hint: "Chọn giọng, clone voice" },
+    { id: "step3a", label: "Hình ảnh", hint: "Phân cảnh và duyệt media" },
+    { id: "step4", label: "Xuất CapCut", hint: "Kiểm tra và xuất" },
+  ]
+  const doneMap = { step1: completedSteps[0], step2: completedSteps[1], step3a: completedSteps[2], step4: completedSteps[3] }
+  const isRunning = activeJob && ["queued", "running"].includes(activeJob.status)
+  const percent = Math.max(0, Math.min(100, Math.round(userProgress?.percent || 0)))
+  const latestLog = userProgress?.messages?.[userProgress.messages.length - 1] || ""
+
+  const stepLabel = (id) => {
+    if (doneMap[id]) return "Hoàn thành"
+    if (activeScreen === id || (id === "step3a" && activeScreen === "step3b")) return "Đang thực hiện"
+    const idx = steps.findIndex(s => s.id === id)
+    const prevId = idx > 0 ? steps[idx - 1].id : null
+    if (prevId && !doneMap[prevId] && activeScreen !== id) return "Chưa mở"
+    return "Sẵn sàng"
+  }
+
+  const isLocked = (id) => {
+    const idx = steps.findIndex(s => s.id === id)
+    if (idx === 0) return false
+    const prevId = steps[idx - 1].id
+    const isStep3 = id === "step3a" && (activeScreen === "step3a" || activeScreen === "step3b")
+    return !doneMap[prevId] && !isStep3 && activeScreen !== id
+  }
+
+  const navigateToStep = (id) => {
+    if (id === "step3a") {
+      setActiveScreen(project?.has_scenes ? "step3b" : "step3a")
+    } else {
+      setActiveScreen(id)
+    }
+  }
+
+  return (
+    <aside className="app-sidebar">
+      <div className="sidebar-section">
+        <span className="sidebar-label">Dự án</span>
+        <button className="sidebar-project-name" onClick={() => setProjectsOpen(true)}>
+          <FolderOpen className="h-4 w-4 flex-shrink-0 text-violet-400" />
+          <span>{project?.name || "Chưa có project"}</span>
+        </button>
+        {project && (
+          <div className="sidebar-project-status">
+            {completedSteps.filter(Boolean).length} / 4 bước hoàn thành
+          </div>
+        )}
+      </div>
+
+      <hr className="sidebar-divider" />
+
+      <div className="sidebar-section">
+        <span className="sidebar-label">Các bước</span>
+      </div>
+      <nav className="sidebar-steps">
+        {steps.map((step, idx) => {
+          const done = doneMap[step.id]
+          const active = activeScreen === step.id || (step.id === "step3a" && activeScreen === "step3b")
+          const locked = isLocked(step.id)
+          return (
+            <button
+              key={step.id}
+              className={cn("sidebar-step", active && "active", done && !active && "done", locked && "locked")}
+              disabled={locked}
+              onClick={() => !locked && navigateToStep(step.id)}
+            >
+              <span className="sidebar-step-num">
+                {done && !active ? <Check className="h-3 w-3" /> : idx + 1}
+              </span>
+              <span className="sidebar-step-text">
+                <b>{step.label}</b>
+                <small>{stepLabel(step.id)}</small>
+              </span>
+            </button>
+          )
+        })}
+      </nav>
+
+      {isRunning && (
+        <>
+          <hr className="sidebar-divider" />
+          <div className="sidebar-job">
+            <div className="sidebar-job-title">{userProgress?.title || "Đang xử lý..."}</div>
+            <div className="sidebar-job-bar">
+              <div className="sidebar-job-bar-fill" style={{ width: `${percent}%` }} />
+            </div>
+            <div className="sidebar-job-log">{latestLog || "Đang xử lý..."}</div>
+          </div>
+        </>
+      )}
+
+      <div className="sidebar-bottom">
+        <button className="sidebar-bottom-btn" onClick={() => setSettingsOpen(true)}>
+          <Settings className="h-4 w-4" /> Cài đặt
+        </button>
+        <button className="sidebar-bottom-btn">
+          <Bot className="h-4 w-4" /> Trợ giúp
+        </button>
+      </div>
+    </aside>
   )
 }
 
