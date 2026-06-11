@@ -607,6 +607,32 @@ function App() {
     input.click()
   }
 
+  async function uploadKokoroVoice(file) {
+    if (!file) return
+    setError("")
+    try {
+      const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
+      const form = new FormData()
+      form.append("file", file)
+      const response = await fetch(`/api/voices/upload?language=${encodeURIComponent(voiceLanguage)}`, { method: "POST", body: form })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`)
+      setVoiceOptions(data.options || [])
+      setSettings((current) => ({ ...current, text_to_voice_language: voiceLanguage, text_to_voice_voice: data.voice }))
+      setToast(`Đã import giọng riêng: ${data.label}`)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  function chooseKokoroVoicePack() {
+    const input = document.createElement("input")
+    input.type = "file"
+    input.accept = ".pt"
+    input.onchange = () => uploadKokoroVoice(input.files?.[0])
+    input.click()
+  }
+
   async function runPreflight() {
     try {
       const data = await api("/api/preflight")
@@ -792,7 +818,7 @@ function App() {
             saveScriptStep={saveScriptStep}
             isBusy={isBusy}
           />}
-          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
+          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} chooseKokoroVoicePack={chooseKokoroVoicePack} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step3a" && <SceneScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step3b" && <MediaReviewScreen assets={assets} filteredAssets={filteredAssets} assetFilter={assetFilter} setAssetFilter={setAssetFilter} project={project} assetJobs={assetJobs} statusBadge={statusBadge} setLightboxIndex={setLightboxIndex} startJob={startJob} approveAsset={approveAsset} chooseAssetMedia={chooseAssetMedia} bulkRetryAssets={bulkRetryAssets} isBusy={isBusy} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step4" && <ExportScreen project={project} assets={assets} preflight={preflight} runPreflight={runPreflight} startJob={startJob} title={title} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
@@ -1150,7 +1176,7 @@ function WorkflowPanel({ workflowInput, setWorkflowInput, workflowSteps, setting
   </div>
 }
 
-function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, isBusy, busyAction, setActiveScreen }) {
+function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, chooseKokoroVoicePack, isBusy, busyAction, setActiveScreen }) {
   const languageMismatch = looksLikeEnglish(script) && (settings.text_to_voice_language || "en") !== "en"
   const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
   const changeVoiceLanguage = (language) => setSettings({
@@ -1170,7 +1196,7 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
         <Field label="Ngôn ngữ đọc"><Select value={voiceLanguage} onValueChange={changeVoiceLanguage} options={voiceLanguageOptions} /></Field>
         <div className="voice-auto-mode"><Sparkles className="h-4 w-4" /><span>Đang dùng Kokoro local: tạo giọng nhanh, ổn định và không cần API.</span></div>
         <div className="voice-language-note">Kokoro hiện chưa hỗ trợ tiếng Việt. Chỉ các ngôn ngữ thực sự dùng được mới xuất hiện trong danh sách.</div>
-        <div className="voice-list">{voiceOptions.map((voice) => <button key={voice.value} onClick={() => setSettings({...settings,text_to_voice_voice:voice.value})} className={cn("voice-row", settings.text_to_voice_voice === voice.value && "active")}><div className="voice-avatar"><Mic className="h-5 w-5" /></div><div><b>{voice.label}</b><small>Giọng đã sẵn sàng</small></div><Play className="ml-auto h-4 w-4" /></button>)}</div>
+        <div className="voice-list">{voiceOptions.map((voice) => <button key={voice.value} onClick={() => setSettings({...settings,text_to_voice_voice:voice.value})} className={cn("voice-row", settings.text_to_voice_voice === voice.value && "active")}><div className="voice-avatar"><Mic className="h-5 w-5" /></div><div><b>{voice.label}</b><small>{voice.custom ? "Giọng riêng Kokoro .pt" : "Preset Kokoro có sẵn"}</small></div><Play className="ml-auto h-4 w-4" /></button>)}</div>
         <div className="audio-preview"><div className="flex justify-between text-xs"><span>Nghe thử 5-10 giây</span><Button size="sm" variant="ghost" onClick={previewVoiceNow}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button></div>{voicePreviewUrl && <audio controls autoPlay src={voicePreviewUrl} className="mt-2 w-full" />}</div>
       </div>
       <div className="flex min-h-0 flex-col gap-4">
@@ -1179,6 +1205,17 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
           <Field label="Phong cách đọc"><Select value={settings.text_to_voice_delivery || "natural"} onValueChange={(v)=>setSettings({...settings,text_to_voice_delivery:v})} options={deliveryOptions} /></Field>
           <div className="mt-5"><RangeField label="Tốc độ đọc" value={settings.text_to_voice_speed ?? 1} min={.5} max={2} step={.05} onChange={(v)=>setSettings({...settings,text_to_voice_speed:v})} /></div>
           <div className="voice-language-note">Chỉ những tùy chọn Kokoro thực sự hỗ trợ mới được hiển thị tại đây.</div>
+        </div>
+        <div className="glass-panel screen-panel">
+          <div className="panel-title"><div><h3>Giọng riêng Kokoro</h3><p>Import voice pack .pt để dùng như một giọng đọc riêng.</p></div><Mic className="text-violet-300" /></div>
+          <button type="button" className="clone-drop" onClick={chooseKokoroVoicePack}>
+            <Upload className="h-8 w-8 text-violet-300" />
+            <b>Tải voice pack .pt</b>
+            <span>File sẽ được lưu vào Kokoro local và xuất hiện trong danh sách giọng.</span>
+          </button>
+          <div className="voice-language-note">
+            Kokoro không clone trực tiếp từ mp3/wav hoặc ghi âm mẫu. Nếu muốn clone từ audio 10-20 giây thì cần model voice-clone khác; Kokoro chỉ nhận preset hoặc voice embedding .pt.
+          </div>
         </div>
       </div>
     </div>

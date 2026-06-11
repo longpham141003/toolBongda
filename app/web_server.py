@@ -23,6 +23,7 @@ from .config import APP_DIR, load_settings, save_settings
 from .script_workflow import default_workflow_steps, normalize_workflow_steps, run_script_workflow
 from .text_to_voice_queue import (
     TextToVoiceRunner,
+    kokoro_custom_voice_dir,
     kokoro_voice_choices,
     normalize_kokoro_language,
     warm_kokoro_server,
@@ -636,7 +637,52 @@ def voices(language: str = "en") -> dict[str, Any]:
         "items": items,
         "language": normalized_language,
         "warning": warning,
-        "options": [{"value": item, "label": item} for item in items],
+        "options": [
+            {
+                "value": item,
+                "label": Path(item).stem if str(item).lower().endswith(".pt") else item,
+                "custom": str(item).lower().endswith(".pt"),
+            }
+            for item in items
+        ],
+    }
+
+
+@app.post("/api/voices/upload")
+async def upload_kokoro_voice(file: UploadFile = File(...), language: str = "en") -> dict[str, Any]:
+    settings = load_settings()
+    normalized_language, warning = normalize_kokoro_language(language)
+    filename = Path(file.filename or "custom_voice.pt").name
+    if not filename.lower().endswith(".pt"):
+        raise HTTPException(
+            status_code=400,
+            detail="Kokoro không clone từ mp3/wav. Chỉ có thể import voice embedding dạng .pt.",
+        )
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).stem).strip("._-") or "custom_voice"
+    target_dir = kokoro_custom_voice_dir(settings, normalized_language)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"{stem}.pt"
+    suffix = 1
+    while target.exists():
+        target = target_dir / f"{stem}_{suffix}.pt"
+        suffix += 1
+    with target.open("wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+    items = kokoro_voice_choices(settings, normalized_language)
+    return {
+        "ok": True,
+        "voice": str(target.resolve()),
+        "label": target.stem,
+        "language": normalized_language,
+        "warning": warning,
+        "options": [
+            {
+                "value": item,
+                "label": Path(item).stem if str(item).lower().endswith(".pt") else item,
+                "custom": str(item).lower().endswith(".pt"),
+            }
+            for item in items
+        ],
     }
 
 

@@ -147,6 +147,12 @@ def text_to_voice_python(settings: dict, root: Path | None = None) -> Path:
     return root / ".venv" / "bin" / "python"
 
 
+def kokoro_custom_voice_dir(settings: dict, language: str = "en") -> Path:
+    root = text_to_voice_root(settings)
+    normalized, _ = normalize_kokoro_language(language)
+    return root / "custom_voices" / normalized
+
+
 def bootstrap_text_to_voice(settings: dict, log: Callable[[str], None] | None = None) -> tuple[Path, Path]:
     root = text_to_voice_root(settings)
     python = text_to_voice_python(settings, root)
@@ -203,9 +209,12 @@ def validate_text_to_voice(settings: dict) -> tuple[Path, Path]:
 
 
 def kokoro_voice_choices(settings: dict, language: str = "en") -> list[str]:
-    del settings
     normalized, _ = normalize_kokoro_language(language)
-    return list(KOKORO_VOICES.get(normalized) or KOKORO_VOICES["en"])
+    voices = list(KOKORO_VOICES.get(normalized) or KOKORO_VOICES["en"])
+    custom_dir = kokoro_custom_voice_dir(settings, normalized)
+    if custom_dir.exists():
+        voices.extend(str(path.resolve()) for path in sorted(custom_dir.glob("*.pt")))
+    return voices
 
 
 def text_to_voice_url(settings: dict) -> str:

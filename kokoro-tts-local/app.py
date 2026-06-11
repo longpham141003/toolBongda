@@ -29,6 +29,7 @@ from huggingface_hub.utils import close_session
 
 WEB_ROOT = ROOT / "web"
 OUTPUTS_DIR = Path(os.environ.get("KOKORO_OUTPUTS_DIR") or ROOT / "outputs")
+CUSTOM_VOICES_DIR = ROOT / "custom_voices"
 SAMPLE_RATE = 24000
 REPO_ID = "hexgrad/Kokoro-82M"
 
@@ -326,7 +327,15 @@ def list_outputs(limit: int = 24, include_previews: bool = False) -> list[dict[s
 
 def resolve_voice_path(voice: str) -> str:
     if voice.endswith(".pt"):
-        return voice
+        path = Path(voice).resolve()
+        custom_root = CUSTOM_VOICES_DIR.resolve()
+        try:
+            path.relative_to(custom_root)
+        except ValueError as exc:
+            raise RuntimeError("Custom voice .pt phải nằm trong thư mục custom_voices của Kokoro.") from exc
+        if not path.is_file():
+            raise RuntimeError(f"Không tìm thấy custom voice: {path}")
+        return str(path)
 
     try:
         close_session()
@@ -353,7 +362,7 @@ def synthesize(
         raise ValueError("Kokoro hiện chưa có giọng tiếng Việt native. Hãy chọn ngôn ngữ khác.")
     if lang not in LANGUAGES:
         raise ValueError("Ngôn ngữ không hợp lệ.")
-    if voice not in VOICES.get(lang, []):
+    if voice not in VOICES.get(lang, []) and not voice.endswith(".pt"):
         raise ValueError("Voice không hợp lệ với ngôn ngữ đang chọn.")
     if not 0.5 <= speed <= 2.0:
         raise ValueError("Tốc độ phải nằm trong khoảng 0.5 đến 2.0.")
