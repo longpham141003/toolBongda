@@ -23,7 +23,9 @@ BAD_TITLE_TERMS = (
     "thumbnail", "youtube", "highlights", "reaction", "watch live", "livestream",
     "preview", "prediction", "lineup", "line-up", "starting xi", "vs poster",
     "match poster", "wallpaper", "graphic", "template", "banner", "cover",
-    "scorecard", "full match", "video", "stream",
+    "scorecard", "full match", "video", "stream", "replay",
+    "tactical analysis", "analysis", "fox sports", "sportv", "maxresdefault",
+    "hqdefault", "shorts", "live score",
 )
 
 
@@ -268,11 +270,22 @@ def download_google_images(
             )
             context = browser.new_context(**context_options)
         page = context.pages[0] if context.pages else context.new_page()
-        page.goto(
-            f"https://www.google.com/search?tbm=isch&hl=en&q={quote_plus(query)}",
-            wait_until="domcontentloaded",
-            timeout=30000,
-        )
+        try:
+            page.goto(
+                f"https://www.google.com/search?tbm=isch&hl=en&q={quote_plus(query)}",
+                wait_until="domcontentloaded",
+                timeout=18000,
+            )
+        except Exception as exc:
+            context.close()
+            if browser:
+                browser.close()
+            return {
+                "ok": False,
+                "network_error": True,
+                "message": str(exc),
+                "downloaded": [],
+            }
         page.wait_for_timeout(1400)
         if _is_captcha(page):
             context.close()

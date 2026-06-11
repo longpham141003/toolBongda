@@ -1634,6 +1634,14 @@ def _valid_crawled_images(
 ) -> list[Path]:
     from PIL import Image
 
+    bad_visual_terms = (
+        "thumbnail", "youtube", "ytimg", "highlights", "highlight", "full match",
+        "replay", "watch live", "livestream", "live stream", "preview", "prediction",
+        "lineup", "line-up", "starting xi", "vs poster", "match poster", "wallpaper",
+        "graphic", "template", "banner", "cover", "scorecard",
+        "tactical analysis", "analysis", "fox sports", "sportv", "maxresdefault",
+        "hqdefault", "shorts", "live score",
+    )
     excluded_hashes = excluded_hashes or set()
     excluded_dhashes = excluded_dhashes or set()
     options = _image_filter_settings(settings)
@@ -1670,6 +1678,8 @@ def _valid_crawled_images(
                     str(metadata.get("page") or ""),
                 ]
             )
+            if any(term in searchable_text.lower() for term in bad_visual_terms):
+                continue
             candidate_tokens = set(_ascii_words(searchable_text))
             keyword_score = len(query_tokens & candidate_tokens)
             if keyword_score < int(min_keyword_score):
@@ -2182,6 +2192,7 @@ def _fetch_google_images(
     default_profile = str(Path(__file__).resolve().parents[1] / "chrome_google_images_profile")
     profile_path = configured_profile or default_profile
     captcha_seen = False
+    network_seen = False
     for query_index, query in enumerate(queries[:3], start=1):
         if downloaded >= target_count:
             break
@@ -2190,8 +2201,10 @@ def _fetch_google_images(
         query_dir.mkdir(parents=True, exist_ok=True)
         run_logs = []
         for worker_attempt in range(2):
+            if captcha_seen:
+                break
             request_path = query_dir / f"_request_{worker_attempt + 1}.json"
-            attempt_profile = profile_path if worker_attempt == 0 else ""
+            attempt_profile = "" if worker_attempt == 0 else profile_path
             write_json(
                 request_path,
                 {
@@ -2217,7 +2230,7 @@ def _fetch_google_images(
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=45,
+                    timeout=25,
                     check=False,
                 )
                 run_logs.append(
@@ -2228,17 +2241,25 @@ def _fetch_google_images(
                     worker_data = json.loads(str(result.stdout or "").strip())
                     if isinstance(worker_data, dict) and worker_data.get("captcha"):
                         captcha_seen = True
+                    if isinstance(worker_data, dict) and worker_data.get("network_error"):
+                        network_seen = True
                 except Exception:
                     if "captcha" in str(result.stdout or "").lower() or "unusual traffic" in str(result.stdout or "").lower():
                         captcha_seen = True
+                    if "err_name_not_resolved" in str(result.stderr or "").lower() or "net::err" in str(result.stderr or "").lower():
+                        network_seen = True
             except Exception as exc:
                 run_logs.append(f"attempt={worker_attempt + 1} error={exc}")
+                if "timed out" in str(exc).lower():
+                    network_seen = True
             image_files = [
                 path
                 for path in query_dir.glob("*")
                 if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
             ]
             if len(image_files) >= query_target:
+                break
+            if captcha_seen:
                 break
             time.sleep(0.2)
         (query_dir / "_worker.log").write_text("\n\n".join(run_logs), encoding="utf-8")
@@ -2249,7 +2270,11 @@ def _fetch_google_images(
                 if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
             ]
         )
-    return -1 if downloaded <= 0 and captcha_seen else downloaded
+    if downloaded <= 0 and captcha_seen:
+        return -1
+    if downloaded <= 0 and network_seen:
+        return -2
+    return downloaded
 
 
 def crawl_image_candidates(
@@ -2330,7 +2355,7 @@ def crawl_image_candidates(
                     project,
                     folder,
                     queries,
-                    count=10,
+                    count=4,
                     excluded_urls=excluded_urls,
                     excluded_dhashes=excluded_dhashes,
                     skip_results=0,
@@ -2448,10 +2473,15 @@ def crawl_image_candidates(
             metadata["aspect_fallback"] = used_aspect_fallback
             return candidate, len(candidates), f"{source_name}: {query_text}", metadata
         if downloaded < 0:
-            errors.append(
-                f"{source_name}: Google đang bắt captcha/chặn Playwright. "
-                "Hãy chờ vài phút hoặc mở Chrome profile Google Images để xác thực, tool sẽ thử lại bằng keyword đã tạo."
-            )
+            if downloaded == -1:
+                errors.append(
+                    f"{source_name}: Google đang bắt captcha/chặn Playwright. "
+                    "Hãy chờ vài phút hoặc mở Chrome profile Google Images để xác thực, tool sẽ thử lại bằng keyword đã tạo."
+                )
+            else:
+                errors.append(
+                    f"{source_name}: lỗi mạng/DNS hoặc Google phản hồi quá chậm, chưa tải được file ảnh nào."
+                )
             continue
         rejection_summary = _crawled_image_rejection_summary(source_dir, settings=settings)
         errors.append(f"{source_name} tải {downloaded} file nhưng không có ảnh 16:9 hợp lệ ({rejection_summary})")
@@ -2566,25 +2596,42 @@ def search_and_download_asset(
         old_path = Path(old_path_text) if old_path_text else None
         reusable = None
         if (
-            not reject_current
-            and not (old_path and old_path.is_file())
-            and _is_match_photography_item(item)
+            _is_match_photography_item(item)
+            and (reject_current or not (old_path and old_path.is_file()))
         ):
             match_teams = {str(value).lower() for value in item.get("match_teams") or [] if str(value).strip()}
+            rejected_hashes = {
+                str(value).strip() for value in item.get("rejected_hashes") or [] if str(value).strip()
+            }
+            rejected_dhashes = {
+                int(value) for value in item.get("rejected_dhashes") or [] if str(value).strip()
+            }
+            rejected_current_path = str(item.get("rejected_current_path") or "").strip()
             for existing in load_manifest(project):
                 existing_path_text = str(existing.get("local_path") or "").strip()
                 existing_path = Path(existing_path_text) if existing_path_text else None
                 existing_teams = {
                     str(value).lower() for value in existing.get("match_teams") or [] if str(value).strip()
                 }
-                if (
-                    str(existing.get("asset_id") or "") != str(item.get("asset_id") or "")
-                    and existing_path
-                    and existing_path.is_file()
-                    and (not match_teams or existing_teams == match_teams)
-                ):
-                    reusable = (existing, existing_path)
-                    break
+                if str(existing.get("asset_id") or "") == str(item.get("asset_id") or ""):
+                    continue
+                if not existing_path or not existing_path.is_file():
+                    continue
+                if rejected_current_path and str(existing_path) == rejected_current_path:
+                    continue
+                if match_teams and existing_teams and existing_teams != match_teams:
+                    continue
+                try:
+                    digest = hashlib.sha256(existing_path.read_bytes()).hexdigest()
+                except Exception:
+                    digest = ""
+                if digest and digest in rejected_hashes:
+                    continue
+                perceptual = _image_dhash(existing_path)
+                if perceptual is not None and any((perceptual ^ old).bit_count() <= 6 for old in rejected_dhashes):
+                    continue
+                reusable = (existing, existing_path)
+                break
         if reusable:
             existing, existing_path = reusable
             downloads_dir = project / "assets" / "downloads"
@@ -2604,10 +2651,10 @@ def search_and_download_asset(
                     "image_height": height,
                     "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
                     "reused_from_asset": str(existing.get("asset_id") or ""),
-                    "error": f"Không có ảnh 16:9 mới; đã dùng lại ảnh dùng tràn. {exc}",
+                    "error": f"Google chưa tải được ảnh mới; đã dùng tạm ảnh cùng trận từ {existing.get('asset_id')}. {exc}",
                 }
             )
-            log(f"{item['asset_id']}: không có ảnh 16:9 mới, dùng lại ảnh dùng tràn từ {existing.get('asset_id')}.")
+            log(f"{item['asset_id']}: Google chưa tải được ảnh mới, dùng tạm ảnh cùng trận từ {existing.get('asset_id')}.")
             return item
         item.update(
             {
