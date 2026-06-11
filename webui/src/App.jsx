@@ -1223,28 +1223,26 @@ function FlowCard({ icon: Icon, title, desc, accent = "violet", dashed, onClick 
   </button>
 }
 
-function StepContentScreen({ title, subtitle, left, right, footerLeft, footerAction }) {
+function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob }) {
   return <div className="step-screen">
-    <div className="screen-heading"><h1>{title}</h1><p>{subtitle}</p></div>
-    <div className="screen-columns"><div className="glass-panel screen-panel">{left}</div><div className="glass-panel screen-panel">{right}</div></div>
-    <div className="screen-footer"><span>{footerLeft}</span>{footerAction}</div>
+    <div className="screen-heading"><h1>Bước 1 - Chuẩn bị nội dung</h1><p>Dán kịch bản cuối hoặc tải file TXT. Đây là nội dung giọng đọc sẽ đọc ở bước sau.</p></div>
+    <div className="panel">
+      <div className="panel-title"><div><h2>Kịch bản cuối</h2><p>Nội dung giọng đọc sẽ đọc</p></div><FileText className="text-violet-300" /></div>
+      <Field label="Tên project"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ví dụ: Brazil vs Panama" /></Field>
+      <div className="mt-4 flex-1"><Textarea className="h-full min-h-[400px]" value={script} onChange={(e) => setScript(e.target.value)} placeholder="Dán kịch bản cuối vào đây..." /></div>
+      <div className="mt-4 flex items-center gap-2">
+        <input ref={scriptFileInputRef} type="file" accept=".txt,text/plain" className="hidden" onChange={(e) => uploadTxtFile(e.target.files?.[0])} />
+        <Button variant="secondary" onClick={() => scriptFileInputRef.current?.click()}><Upload className="h-4 w-4" /> Tải file TXT</Button>
+        <span className="ml-auto text-xs text-slate-500">{script.trim() ? script.trim().split(/\s+/).length : 0} từ</span>
+      </div>
+      <div className="ai-row-divider">Hoặc nhờ AI viết</div>
+      <div className="flex gap-2">
+        <Input className="flex-1" value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} placeholder="Chủ đề, ý tưởng, tài liệu thô..." />
+        <Button onClick={() => startJob("/api/run-workflow", { input: workflowInput }, "workflow")} disabled={!workflowInput.trim() || isBusy}><Sparkles className="h-4 w-4" /> Chạy AI</Button>
+      </div>
+    </div>
+    <div className="screen-footer"><span>Việc cần làm: dán kịch bản final, sau đó bấm lưu để sang bước 2.</span><Button onClick={saveScriptStep} disabled={!script.trim() || isBusy}>Lưu nội dung và sang Bước 2 <ArrowRight className="h-4 w-4" /></Button></div>
   </div>
-}
-
-function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy }) {
-  return <StepContentScreen
-    title="Bước 1 - Chuẩn bị nội dung"
-    subtitle="Dán kịch bản cuối hoặc tải file TXT. Đây là nội dung giọng đọc sẽ đọc ở bước sau."
-    left={<ScriptPanel title={title} setTitle={setTitle} script={script} setScript={setScript} scriptFileInputRef={scriptFileInputRef} uploadTxtFile={uploadTxtFile} />}
-    right={<div className="flex h-full flex-col gap-4">
-      <div className="panel-title"><div><h2>Cách dùng nhanh</h2><p>Chỉ cần chuẩn bị kịch bản final</p></div><CheckCircle2 className="text-emerald-300" /></div>
-      <div className="quick-help"><b>1. Nhập tên project</b><span>Đặt tên dễ nhớ để sau này mở lại đúng project.</span></div>
-      <div className="quick-help"><b>2. Dán kịch bản hoặc tải TXT</b><span>Nội dung nên là lời đọc hoàn chỉnh, không cần ghi chú kỹ thuật.</span></div>
-      <div className="quick-help"><b>3. Lưu và tiếp tục</b><span>Sau khi lưu, tool chuyển sang chọn giọng và tạo voice.</span></div>
-    </div>}
-    footerLeft="Việc cần làm: dán kịch bản final, sau đó bấm lưu để sang bước 2."
-    footerAction={<Button onClick={saveScriptStep} disabled={!script.trim() || isBusy}>Lưu nội dung và sang Bước 2 <ArrowRight className="h-4 w-4" /></Button>}
-  />
 }
 
 function ScriptPanel({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile }) {
