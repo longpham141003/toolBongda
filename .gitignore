@@ -51,3 +51,6 @@ webui/node_modules/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Claude Code tooling (agent worktrees, local state)
+.claude/
