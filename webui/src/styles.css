@@ -534,10 +534,36 @@ textarea {
 .scene-layout, .export-layout { grid-template-columns: 1fr 1fr; }
 .screen-panel { min-height:auto; overflow:visible; padding:20px; }
 .scene-layout .screen-panel { display:flex; flex-direction:column; }
-.panel-title { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:16px; }
-.panel-title h2, .panel-title h3 { color:white; font-size:20px; font-weight:800; }
-.panel-title p { color:#94a3b8; font-size:12px; }
-.screen-footer { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:12px; border-radius:18px; background:rgba(19,19,21,.78); padding:10px 4px; color:#94a3b8; }
+.panel-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+.panel-title h2, .panel-title h3 {
+  color: white;
+  font-size: var(--text-md);
+  font-weight: 700;
+}
+.panel-title p {
+  color: #94a3b8;
+  font-size: var(--text-xs);
+  margin-top: var(--sp-1);
+  line-height: 1.5;
+}
+.screen-footer {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  border-radius: 16px;
+  background: rgba(19,19,21,0.78);
+  padding: var(--sp-3) var(--sp-4);
+  color: #94a3b8;
+  font-size: var(--text-xs);
+}
 
 .workflow-row, .scene-row, .project-row, .check-row { display:flex; align-items:flex-start; gap:12px; border:1px solid rgba(255,255,255,.1); border-radius:14px; background:rgba(255,255,255,.035); padding:12px; }
 .quick-help { display:flex; align-items:flex-start; gap:10px; margin-bottom:14px; border:1px solid rgba(208,188,255,.16); border-radius:14px; background:rgba(160,120,255,.07); padding:10px 12px; }
