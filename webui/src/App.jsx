@@ -808,6 +808,9 @@ function App() {
             uploadTxtFile={uploadTxtFile}
             saveScriptStep={saveScriptStep}
             isBusy={isBusy}
+            workflowInput={workflowInput}
+            setWorkflowInput={setWorkflowInput}
+            startJob={startJob}
           />}
           {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step3a" && <SceneScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
