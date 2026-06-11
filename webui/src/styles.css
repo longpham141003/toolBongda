@@ -843,6 +843,19 @@ textarea {
 .stitch-range { width:100%; accent-color:#a078ff; }
 .clone-visual, .clone-drop { display:flex; min-height:150px; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:8px; border:2px dashed rgba(255,255,255,.12); border-radius:18px; background:rgba(19,19,21,.55); color:#94a3b8; text-align:center; }
 .clone-drop { cursor:pointer; padding:26px; }
+.saved-voice-box { margin-top:14px; display:flex; flex-direction:column; gap:12px; border:1px solid rgba(255,255,255,.09); border-radius:18px; background:linear-gradient(135deg,rgba(139,92,246,.12),rgba(16,185,129,.08)); padding:14px; }
+.saved-voice-box b { color:#fff; font-size:14px; }
+.saved-voice-box p { margin-top:2px; color:#94a3b8; font-size:12px; }
+.saved-voice-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.saved-voice-list { display:flex; flex-direction:column; gap:8px; }
+.saved-voice-row { display:flex; width:100%; align-items:center; justify-content:space-between; gap:10px; border:1px solid rgba(255,255,255,.1); border-radius:14px; background:rgba(15,15,18,.72); padding:10px 12px; text-align:left; color:#cbd5e1; transition:.2s; }
+.saved-voice-row:hover { border-color:rgba(167,139,250,.45); background:rgba(255,255,255,.07); }
+.saved-voice-row.active { border-color:rgba(52,211,153,.7); background:linear-gradient(135deg,rgba(16,185,129,.2),rgba(20,83,45,.18)); color:#d1fae5; box-shadow:0 0 0 1px rgba(52,211,153,.16), inset 0 0 22px rgba(16,185,129,.1); }
+.saved-voice-row small { display:block; margin-top:2px; color:#94a3b8; font-size:11px; }
+.saved-voice-row.active small { color:#a7f3d0; }
+.clone-form-grid { display:grid; grid-template-columns:1.4fr .7fr; gap:12px; }
+.quick-help.compact { margin:12px 0 0; padding:12px 14px; }
+.setting-help { margin:-10px 0 18px; border-left:3px solid rgba(167,139,250,.55); padding-left:10px; color:#9ca3af; font-size:12px; line-height:1.5; }
 .footer-chips { display:flex; gap:8px; }
 .footer-chips span { border:1px solid rgba(78,222,163,.2); border-radius:999px; background:rgba(78,222,163,.08); padding:6px 12px; color:#4edea3; font-size:12px; }
 

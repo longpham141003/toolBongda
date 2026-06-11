@@ -317,6 +317,43 @@ def _clone_reference_path(settings: dict) -> Path | None:
     return path if path.is_file() else None
 
 
+def _script_sentences_for_timing(text: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not normalized:
+        return []
+    parts = re.split(r"(?<=[.!?])(?:[\"')\]]+)?\s+", normalized)
+    return [part.strip() for part in parts if is_voice_segment_text(part)]
+
+
+def _estimated_segments_from_text(text: str, duration: float) -> list[dict]:
+    sentences = _script_sentences_for_timing(text)
+    if not sentences:
+        return []
+    total_duration = max(0.5, float(duration or 0.0))
+    weights = [max(1, len(re.findall(r"\S+", sentence))) for sentence in sentences]
+    total_weight = max(1, sum(weights))
+    segments: list[dict] = []
+    cursor = 0.0
+    for index, (sentence, weight) in enumerate(zip(sentences, weights), start=1):
+        if index == len(sentences):
+            end = total_duration
+        else:
+            end = min(total_duration, cursor + total_duration * (weight / total_weight))
+        end = max(cursor + 0.05, end)
+        segments.append(
+            {
+                "text": sentence,
+                "start": round(cursor, 4),
+                "end": round(end, 4),
+                "duration": round(end - cursor, 4),
+                "script_sentence_index": index,
+                "timing_source": "estimated_magicvoice",
+            }
+        )
+        cursor = end
+    return segments
+
+
 def text_to_voice_url(settings: dict) -> str:
     host = str(settings.get("text_to_voice_host") or "127.0.0.1")
     port = int(settings.get("text_to_voice_port") or 7860)
@@ -653,6 +690,7 @@ class TextToVoiceRunner:
                     pass
             else:
                 duration = combine_wavs(generated_paths, output_path)
+            estimated_segments = _estimated_segments_from_text(text, duration)
 
             output_path.with_suffix(".segments.json").write_text(
                 json.dumps(
@@ -665,7 +703,8 @@ class TextToVoiceRunner:
                         "speed": 1.0,
                         "delivery": "magicvoice-clone",
                         "engine": "magicvoice",
-                        "segments": [],
+                        "segments": estimated_segments,
+                        "timing_source": "estimated_magicvoice",
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -785,7 +824,7 @@ class TextToVoiceRunner:
             "engine": "magicvoice" if bool(self.settings.get("voice_clone_enabled")) and _clone_reference_path(self.settings) else "kokoro",
             "voice_clone_reference_path": str(self.settings.get("voice_clone_reference_path") or ""),
             "voice_clone_engine": str(self.settings.get("voice_clone_engine") or ""),
-            "segment_cleaner": "tts_clean_v6",
+            "segment_cleaner": "tts_clean_v7_magicvoice_estimated_timing",
         }
 
     @staticmethod
@@ -800,6 +839,9 @@ class TextToVoiceRunner:
         ):
             return False
         try:
+            timing = json.loads(timing_path.read_text(encoding="utf-8"))
+            if not isinstance(timing, dict) or not timing.get("segments"):
+                return False
             data = json.loads(meta_path.read_text(encoding="utf-8"))
             return data == cache_key
         except Exception:

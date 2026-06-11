@@ -397,6 +397,52 @@ def normalize_voice_segments(timing: dict) -> list[dict]:
     return result
 
 
+def estimate_timing_from_script(project: Path, timing: dict | None = None) -> dict:
+    script_path = project / "scripts" / "script_final.txt"
+    audio_path = project / "voices" / "voice.wav"
+    script = script_path.read_text(encoding="utf-8", errors="replace").strip()
+    sentences = _script_sentences(script)
+    if not sentences:
+        return timing or {}
+    duration = float((timing or {}).get("duration") or 0.0)
+    if duration <= 0 and audio_path.exists():
+        duration = probe_duration(audio_path)
+    duration = max(0.5, duration)
+    weights = [max(1, len(re.findall(r"\S+", sentence))) for sentence in sentences]
+    total_weight = max(1, sum(weights))
+    segments: list[dict] = []
+    cursor = 0.0
+    for index, (sentence, weight) in enumerate(zip(sentences, weights), start=1):
+        if index == len(sentences):
+            end = duration
+        else:
+            end = min(duration, cursor + duration * (weight / total_weight))
+        end = max(cursor + 0.05, end)
+        segments.append(
+            {
+                "text": sentence,
+                "start": round(cursor, 4),
+                "end": round(end, 4),
+                "duration": round(end - cursor, 4),
+                "script_sentence_index": index,
+                "timing_source": "estimated_from_script",
+            }
+        )
+        cursor = end
+    repaired = dict(timing or {})
+    repaired.update(
+        {
+            "audio": str(audio_path),
+            "duration": round(duration, 4),
+            "engine": str(repaired.get("engine") or "estimated"),
+            "timing_source": "estimated_from_script",
+            "segments": segments,
+        }
+    )
+    write_json(project / "voices" / "voice.segments.json", repaired)
+    return repaired
+
+
 def merge_segments_into_sentences(segments: list[dict]) -> list[dict]:
     sentences: list[dict] = []
     pending: list[dict] = []
@@ -612,6 +658,11 @@ def build_asset_manifest(
         if callable(log):
             log(f"Whisper timing lỗi, dùng timing voice hiện tại: {exc}")
     segments = normalize_voice_segments(timing)
+    if not segments:
+        timing = estimate_timing_from_script(project, timing)
+        segments = normalize_voice_segments(timing)
+        if segments and callable(log):
+            log("Timing voice bị rỗng, đã tạo timing tạm từ script để tiếp tục phân cảnh.")
     if not segments:
         raise RuntimeError("Timing không có câu thoại.")
     sentences = merge_segments_into_sentences(segments)

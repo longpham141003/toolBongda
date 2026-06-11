@@ -108,8 +108,10 @@ export function Select({ value, onValueChange, options, placeholder = "Chọn" }
 export function Switch({ checked, onCheckedChange, label }) {
   return (
     <button type="button" onClick={() => onCheckedChange(!checked)} className="flex items-center gap-2 text-sm text-zinc-300">
-      <span className={cn("relative h-6 w-11 rounded-full border transition", checked ? "border-violet-400/40 bg-violet-500" : "border-white/10 bg-white/10")}>
-        <span className={cn("absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow transition-all", checked ? "left-[21px]" : "left-0.5")} />
+      <span className={cn("relative h-7 w-14 rounded-full border-2 transition shadow-inner", checked ? "border-emerald-400 bg-emerald-500/18" : "border-rose-400 bg-rose-500/14")}>
+        <span className={cn("absolute top-0.5 flex h-[22px] w-[22px] items-center justify-center rounded-full text-white shadow transition-all", checked ? "left-[27px] bg-emerald-500" : "left-0.5 bg-rose-500")}>
+          {checked ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
+        </span>
       </span>
       {label && <span>{label}</span>}
     </button>

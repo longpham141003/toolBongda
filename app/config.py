@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 
 
@@ -35,6 +36,8 @@ DEFAULT_SETTINGS = {
     "voice_clone_engine": "magicvoice",
     "voice_clone_reference_path": "",
     "voice_clone_reference_name": "",
+    "voice_clone_profiles": [],
+    "voice_clone_default_id": "",
     "voice_clone_max_chars": 900,
     "voice_clone_timeout": 3600,
     "voice_clone_setup_timeout": 3600,
@@ -168,6 +171,28 @@ def load_settings() -> dict:
     old_clone_engine = "koko" + "clone"
     if str(settings.get("voice_clone_engine") or "").strip().lower() in {"", old_clone_engine}:
         settings["voice_clone_engine"] = "magicvoice"
+    profiles = settings.get("voice_clone_profiles")
+    if not isinstance(profiles, list):
+        profiles = []
+    profiles = [
+        item for item in profiles
+        if isinstance(item, dict) and _expand_config_path(item.get("path")).exists()
+    ]
+    legacy_ref = _expand_config_path(settings.get("voice_clone_reference_path"))
+    if legacy_ref.exists() and not any(_expand_config_path(item.get("path")).resolve() == legacy_ref.resolve() for item in profiles):
+        legacy_name = str(settings.get("voice_clone_reference_name") or legacy_ref.stem).strip() or legacy_ref.stem
+        legacy_profile = {
+            "id": uuid.uuid5(uuid.NAMESPACE_URL, str(legacy_ref.resolve())).hex[:12],
+            "name": legacy_name,
+            "language": str(settings.get("text_to_voice_language") or "vi"),
+            "country": "",
+            "path": str(legacy_ref.resolve()),
+            "file_name": legacy_ref.name,
+            "created_at": int(legacy_ref.stat().st_mtime),
+        }
+        profiles.insert(0, legacy_profile)
+        settings["voice_clone_default_id"] = legacy_profile["id"]
+    settings["voice_clone_profiles"] = profiles
     configured_voice_root = str(settings.get("text_to_voice_root") or "").strip().lower()
     configured_voice_root_path = _expand_config_path(settings.get("text_to_voice_root"))
     if configured_voice_root_path and not configured_voice_root_path.is_absolute():

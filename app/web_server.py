@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import shutil
 import subprocess
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -302,6 +303,12 @@ class RuntimeState:
                 active.current_label = "Đang dừng tác vụ..."
                 active.log("Người dùng yêu cầu dừng tác vụ.")
                 active.updated_at = time.time()
+                # UI action "Back home" must behave like a fresh start. Some
+                # voice engines can only notice cancellation after a subprocess
+                # returns, so remove the active lock immediately and let the old
+                # worker finish in the background without blocking the new flow.
+                if clear_project:
+                    self.active_job_ids.pop(client_id, None)
             pending = self.pending_jobs_by_client.get(client_id, [])
             for job, _callback in pending:
                 job.cancel_requested = True
@@ -312,6 +319,13 @@ class RuntimeState:
             pending.clear()
             if clear_project:
                 self.current_projects.pop(client_id, None)
+                self.default_project = None
+                try:
+                    STATE_PATH.unlink()
+                except FileNotFoundError:
+                    pass
+                except Exception:
+                    pass
             return active
 
 
@@ -363,11 +377,21 @@ def _project_payload(project: Path | None) -> dict[str, Any] | None:
         if local_path.is_file():
             item["media_version"] = f"{item.get('sha256') or ''}-{local_path.stat().st_mtime_ns}"
     voice_path = project / "voices" / "voice.wav"
+    timing_path = project / "voices" / "voice.segments.json"
     manifest_path = project / "assets" / "asset_manifest.json"
     script_mtime = script_path.stat().st_mtime
     voice_mtime = voice_path.stat().st_mtime if voice_path.exists() else 0
+    timing_mtime = timing_path.stat().st_mtime if timing_path.exists() else 0
     manifest_mtime = manifest_path.stat().st_mtime if manifest_path.exists() else 0
-    has_voice = voice_path.exists() and voice_mtime >= script_mtime
+    timing_segments = []
+    if timing_path.exists() and timing_mtime >= script_mtime:
+        try:
+            timing_data = json.loads(timing_path.read_text(encoding="utf-8-sig"))
+            if isinstance(timing_data, dict) and isinstance(timing_data.get("segments"), list):
+                timing_segments = [item for item in timing_data.get("segments") or [] if isinstance(item, dict) and str(item.get("text") or "").strip()]
+        except Exception:
+            timing_segments = []
+    has_voice = voice_path.exists() and voice_mtime >= script_mtime and bool(timing_segments)
     has_scenes = bool(manifest) and manifest_mtime >= voice_mtime and has_voice
     capcut_dir = project / "capcut"
     capcut_files = [path for path in capcut_dir.rglob("*") if path.is_file()] if capcut_dir.exists() else []
@@ -396,6 +420,33 @@ def _public_settings() -> dict[str, Any]:
     if not presets:
         presets = _normalize_workflow_presets(load_settings().get("workflow_presets"))
     settings["workflow_presets"] = presets
+    profiles = settings.get("voice_clone_profiles")
+    if not isinstance(profiles, list):
+        profiles = []
+    profiles = [
+        item for item in profiles
+        if isinstance(item, dict) and Path(str(item.get("path") or "")).exists()
+    ]
+    legacy_ref = Path(str(settings.get("voice_clone_reference_path") or ""))
+    if legacy_ref.exists() and not any(Path(str(item.get("path") or "")) == legacy_ref for item in profiles):
+        legacy_name = str(settings.get("voice_clone_reference_name") or legacy_ref.stem).strip() or legacy_ref.stem
+        legacy_profile = {
+            "id": uuid.uuid5(uuid.NAMESPACE_URL, str(legacy_ref.resolve())).hex[:12],
+            "name": legacy_name,
+            "language": str(settings.get("text_to_voice_language") or "vi"),
+            "country": "",
+            "path": str(legacy_ref.resolve()),
+            "file_name": legacy_ref.name,
+            "created_at": int(legacy_ref.stat().st_mtime),
+        }
+        profiles.insert(0, legacy_profile)
+        settings["voice_clone_default_id"] = legacy_profile["id"]
+    settings["voice_clone_profiles"] = profiles
+    default_id = str(settings.get("voice_clone_default_id") or "")
+    default_profile = next((item for item in profiles if str(item.get("id") or "") == default_id), None)
+    if default_profile and not str(settings.get("voice_clone_reference_path") or "").strip():
+        settings["voice_clone_reference_path"] = str(default_profile.get("path") or "")
+        settings["voice_clone_reference_name"] = str(default_profile.get("name") or "")
     return settings
 
 
@@ -426,6 +477,8 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
         "voice_clone_engine",
         "voice_clone_reference_path",
         "voice_clone_reference_name",
+        "voice_clone_profiles",
+        "voice_clone_default_id",
         "voice_clone_max_chars",
         "voice_clone_timeout",
         "voice_clone_setup_timeout",
@@ -698,32 +751,58 @@ async def upload_kokoro_voice(file: UploadFile = File(...), language: str = "en"
 
 
 @app.post("/api/voice-clone/reference")
-async def upload_voice_clone_reference(file: UploadFile = File(...)) -> dict[str, Any]:
+async def upload_voice_clone_reference(
+    file: UploadFile = File(...),
+    name: str = Form(""),
+    language: str = Form(""),
+    country: str = Form(""),
+    set_default: bool = Form(False),
+) -> dict[str, Any]:
     settings = load_settings()
     filename = Path(file.filename or "reference.wav").name
     suffix = Path(filename).suffix.lower()
     if suffix not in {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"}:
         raise HTTPException(status_code=400, detail="File mẫu phải là audio: wav, mp3, m4a, flac, ogg hoặc webm.")
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).stem).strip("._-") or "reference"
+    profile_id = uuid.uuid4().hex[:12]
+    display_name = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9À-ỹ._ -]+", " ", str(name or "").strip())).strip()
+    if not display_name:
+        display_name = Path(filename).stem[:48] or "Giọng clone"
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", display_name).strip("._-") or "clone_voice"
     settings = load_settings()
     magic_root = Path(str(settings.get("magicvoice_root") or APP_DIR / "magic_voice"))
     if not magic_root.is_absolute():
         magic_root = APP_DIR / magic_root
     ref_dir = magic_root / "clone_refs"
     ref_dir.mkdir(parents=True, exist_ok=True)
-    target = ref_dir / f"{stem}{suffix}"
-    counter = 1
-    while target.exists():
-        target = ref_dir / f"{stem}_{counter}{suffix}"
-        counter += 1
+    target = ref_dir / f"{stem}_{profile_id}{suffix}"
     with target.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
+    profiles = settings.get("voice_clone_profiles")
+    if not isinstance(profiles, list):
+        profiles = []
+    profiles = [
+        item for item in profiles
+        if isinstance(item, dict) and Path(str(item.get("path") or "")).exists()
+    ]
+    profile = {
+        "id": profile_id,
+        "name": display_name,
+        "language": str(language or "").strip() or str(settings.get("text_to_voice_language") or "vi"),
+        "country": str(country or "").strip(),
+        "path": str(target.resolve()),
+        "file_name": filename,
+        "created_at": int(time.time()),
+    }
+    profiles.insert(0, profile)
+    default_id = profile_id if set_default or not settings.get("voice_clone_default_id") else str(settings.get("voice_clone_default_id") or "")
     settings.update(
         {
             "voice_clone_enabled": True,
             "voice_clone_engine": "magicvoice",
             "voice_clone_reference_path": str(target.resolve()),
-            "voice_clone_reference_name": filename,
+            "voice_clone_reference_name": display_name,
+            "voice_clone_profiles": profiles,
+            "voice_clone_default_id": default_id,
         }
     )
     save_settings(settings)
@@ -731,7 +810,8 @@ async def upload_voice_clone_reference(file: UploadFile = File(...)) -> dict[str
         "ok": True,
         "settings": _public_settings(),
         "reference_path": str(target.resolve()),
-        "reference_name": filename,
+        "reference_name": display_name,
+        "profile": profile,
     }
 
 

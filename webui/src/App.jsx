@@ -74,16 +74,6 @@ const voiceLanguageOptions = [
   { value: "zh", label: "Chinese" },
 ]
 
-const deliveryOptions = [
-  { value: "plain", label: "Mặc định" },
-  { value: "natural", label: "Tự nhiên" },
-  { value: "expressive", label: "Nhấn nhá" },
-  { value: "dramatic", label: "Diễn cảm" },
-  { value: "heavy_drama", label: "Kịch tính mạnh" },
-  { value: "storytelling", label: "Kể chuyện" },
-  { value: "calm", label: "Điềm tĩnh" },
-]
-
 function normalizeVoiceLanguage(language) {
   return voiceLanguageOptions.some((item) => item.value === language) ? language : "en"
 }
@@ -505,7 +495,7 @@ function App() {
 
   async function openProject(path) {
     try {
-      await bestEffortCancel(false)
+      await bestEffortCancel(true)
       const data = await api("/api/projects/open", { method: "POST", body: JSON.stringify({ path }) })
       setState((current) => ({ ...current, project: data.project }))
       setActiveJob(null)
@@ -522,11 +512,13 @@ function App() {
 
   async function goHomeAndStopProject() {
     await bestEffortCancel(true)
-    setState((current) => ({ ...(current || {}), project: null, active_job: null, queued_jobs: [] }))
+    setState((current) => ({ ...(current || {}), project: null, active_job: null, queued_jobs: [], jobs: [] }))
     setActiveJob(null)
+    setBusyAction("")
     setLogs([])
     setScript("")
     setTitle("")
+    setVoicePreviewUrl("")
     setLightboxIndex(null)
     setActiveScreen("home")
     setToast("Đã dừng tác vụ và thoát project hiện tại")
@@ -534,13 +526,16 @@ function App() {
 
   async function startNewVideo() {
     await bestEffortCancel(true)
-    setState((current) => ({ ...(current || {}), project: null }))
+    setState((current) => ({ ...(current || {}), project: null, active_job: null, queued_jobs: [], jobs: [] }))
+    setActiveJob(null)
+    setBusyAction("")
     setScript("")
     setTitle("")
     setWorkflowInput("")
     setLogs([])
     setError("")
     setToast("")
+    setVoicePreviewUrl("")
     setLightboxIndex(null)
     setEditingAssetId(null)
     setEditingKeywordValue("")
@@ -607,54 +602,43 @@ function App() {
     input.click()
   }
 
-  async function uploadKokoroVoice(file) {
-    if (!file) return
-    setError("")
-    try {
-      const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
-      const form = new FormData()
-      form.append("file", file)
-      const response = await fetch(`/api/voices/upload?language=${encodeURIComponent(voiceLanguage)}`, { method: "POST", body: form })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`)
-      setVoiceOptions(data.options || [])
-      setSettings((current) => ({ ...current, text_to_voice_language: voiceLanguage, text_to_voice_voice: data.voice }))
-      setToast(`Đã import giọng riêng: ${data.label}`)
-    } catch (err) {
-      setError(err.message)
-    }
-  }
-
-  function chooseKokoroVoicePack() {
-    const input = document.createElement("input")
-    input.type = "file"
-    input.accept = ".pt"
-    input.onchange = () => uploadKokoroVoice(input.files?.[0])
-    input.click()
-  }
-
-  async function uploadVoiceCloneReference(file) {
+  async function uploadVoiceCloneReference(file, meta = {}) {
     if (!file) return
     setError("")
     try {
       const form = new FormData()
       form.append("file", file)
+      form.append("name", meta.name || "")
+      form.append("language", meta.language || "")
+      form.append("country", "")
+      form.append("set_default", meta.setDefault ? "true" : "false")
       const response = await fetch("/api/voice-clone/reference", { method: "POST", body: form })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`)
-      setSettings(data.settings)
-      setToast(`Đã tải audio mẫu clone: ${data.reference_name}`)
+      const latest = await loadState(true)
+      setSettings(latest.settings || data.settings || {})
+      setToast(`Đã lưu giọng clone: ${data.reference_name}`)
+      return latest.settings || data.settings || {}
     } catch (err) {
       setError(err.message)
+      throw err
     }
   }
 
-  function chooseVoiceCloneReference() {
-    const input = document.createElement("input")
-    input.type = "file"
-    input.accept = "audio/*,.wav,.mp3,.m4a,.flac,.ogg,.webm"
-    input.onchange = () => uploadVoiceCloneReference(input.files?.[0])
-    input.click()
+  async function selectSavedCloneVoice(profile, makeDefault = false) {
+    if (!profile) return
+    const profiles = Array.isArray(settings.voice_clone_profiles) ? settings.voice_clone_profiles : []
+    const payload = {
+      voice_clone_enabled: true,
+      voice_clone_engine: "magicvoice",
+      voice_clone_reference_path: profile.path || "",
+      voice_clone_reference_name: profile.name || profile.file_name || "Giọng clone",
+      voice_clone_profiles: profiles,
+      voice_clone_default_id: makeDefault ? profile.id : (settings.voice_clone_default_id || ""),
+    }
+    const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: payload }) })
+    setSettings(data.settings)
+    setToast(makeDefault ? `Đã đặt mặc định: ${payload.voice_clone_reference_name}` : `Đã chọn giọng clone: ${payload.voice_clone_reference_name}`)
   }
 
   async function runPreflight() {
@@ -670,6 +654,7 @@ function App() {
   async function createVoiceWithQuickSettings() {
     setError("")
     try {
+      setVoicePreviewUrl("")
       const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
       const voiceSettings = {
         text_to_voice_language: voiceLanguage,
@@ -689,20 +674,21 @@ function App() {
     }
   }
 
-  async function previewVoiceNow() {
+  async function previewVoiceNow(settingsOverride = null, textOverride = "") {
     try {
       setVoicePreviewBusy(true)
       setVoicePreviewUrl("")
-      const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
+      const sourceSettings = settingsOverride && !settingsOverride?.nativeEvent ? settingsOverride : settings
+      const voiceLanguage = normalizeVoiceLanguage(sourceSettings.text_to_voice_language || "en")
       const safeSettings = {
-        ...settings,
+        ...sourceSettings,
         text_to_voice_language: voiceLanguage,
       }
       const data = await api("/api/voice-preview", {
         method: "POST",
         body: JSON.stringify({
           settings: safeSettings,
-          text: "",
+          text: textOverride || "",
         }),
       })
       if (data.warning) setToast(data.warning)
@@ -846,7 +832,7 @@ function App() {
             saveScriptStep={saveScriptStep}
             isBusy={isBusy}
           />}
-          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} chooseKokoroVoicePack={chooseKokoroVoicePack} chooseVoiceCloneReference={chooseVoiceCloneReference} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
+          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step3a" && <SceneScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step3b" && <MediaReviewScreen assets={assets} filteredAssets={filteredAssets} assetFilter={assetFilter} setAssetFilter={setAssetFilter} project={project} assetJobs={assetJobs} statusBadge={statusBadge} setLightboxIndex={setLightboxIndex} startJob={startJob} approveAsset={approveAsset} chooseAssetMedia={chooseAssetMedia} bulkRetryAssets={bulkRetryAssets} isBusy={isBusy} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step4" && <ExportScreen project={project} assets={assets} preflight={preflight} runPreflight={runPreflight} startJob={startJob} title={title} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
@@ -1180,7 +1166,7 @@ function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputR
 
 function ScriptPanel({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile }) {
   return <div className="flex h-full flex-col">
-    <div className="panel-title"><div><h2>Kịch bản cuối</h2><p>Nội dung Kokoro sẽ đọc</p></div><FileText className="text-violet-300" /></div>
+    <div className="panel-title"><div><h2>Kịch bản cuối</h2><p>Nội dung giọng đọc sẽ đọc</p></div><FileText className="text-violet-300" /></div>
     <div className="quick-help"><b>Bắt đầu nhanh</b><span>Dán nguyên văn nội dung muốn đọc. Không cần ghi chú hình ảnh, không cần chia cảnh, tool sẽ tự làm ở bước sau.</span></div>
     <Field label="Tên project"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ví dụ: Brazil vs Panama" /></Field>
     <div className="mt-4 flex-1"><Textarea className="h-full min-h-[360px]" value={script} onChange={(e) => setScript(e.target.value)} placeholder="Dán kịch bản cuối vào đây..." /></div>
@@ -1204,13 +1190,35 @@ function WorkflowPanel({ workflowInput, setWorkflowInput, workflowSteps, setting
   </div>
 }
 
-function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, chooseKokoroVoicePack, chooseVoiceCloneReference, isBusy, busyAction, setActiveScreen }) {
+function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, saveCloneVoice, selectSavedCloneVoice, isBusy, busyAction, setActiveScreen }) {
+  const [cloneName, setCloneName] = useState("")
+  const [cloneLanguage, setCloneLanguage] = useState("vi")
+  const [pendingCloneFile, setPendingCloneFile] = useState(null)
+  const cloneInputRef = useRef(null)
   const languageMismatch = looksLikeEnglish(script) && (settings.text_to_voice_language || "en") !== "en"
   const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
+  const cloneProfiles = Array.isArray(settings.voice_clone_profiles) ? settings.voice_clone_profiles : []
+  const selectedClone = cloneProfiles.find((item) => item.path === settings.voice_clone_reference_path)
+  const selectedCloneId = selectedClone?.id || ""
   const changeVoiceLanguage = (language) => setSettings({
     ...settings,
     text_to_voice_language: language,
   })
+  const cloneVoiceNow = async () => {
+    if (!pendingCloneFile) return
+    const latestSettings = await saveCloneVoice(pendingCloneFile, {
+      name: cloneName,
+      language: cloneLanguage,
+      setDefault: true,
+    })
+    setPendingCloneFile(null)
+    await previewVoiceNow(
+      latestSettings,
+      cloneLanguage.toLowerCase().startsWith("vi")
+        ? "Đây là đoạn nghe thử giọng vừa lưu. Hãy kiểm tra độ giống giọng, tốc độ đọc và độ rõ của âm thanh."
+        : "This is a short preview of the saved cloned voice. Check the tone, pace, and clarity."
+    )
+  }
   return <div className="step-screen">
     <div className="screen-heading"><h1>Bước 2 - Chọn giọng đọc cho video</h1><p>Chọn giọng, nghe thử, rồi tạo file đọc để bước sau tự chia cảnh.</p></div>
     <div className="recommended-action">
@@ -1222,41 +1230,77 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
       <div className="glass-panel screen-panel flex flex-col">
         <div className="panel-title"><h2>Chọn giọng đọc</h2><Button variant="ghost" size="sm" onClick={() => refreshVoices(settings.text_to_voice_language || "en")}><RefreshCw className="h-4 w-4" /> Tải lại</Button></div>
         <Field label="Ngôn ngữ đọc"><Select value={voiceLanguage} onValueChange={changeVoiceLanguage} options={voiceLanguageOptions} /></Field>
-        <div className="voice-auto-mode"><Sparkles className="h-4 w-4" /><span>Đang dùng Kokoro local: tạo giọng nhanh, ổn định và không cần API.</span></div>
-        <div className="voice-language-note">Kokoro hiện chưa hỗ trợ tiếng Việt. Chỉ các ngôn ngữ thực sự dùng được mới xuất hiện trong danh sách.</div>
-        <div className="voice-list">{voiceOptions.map((voice) => <button key={voice.value} onClick={() => setSettings({...settings,text_to_voice_voice:voice.value})} className={cn("voice-row", settings.text_to_voice_voice === voice.value && "active")}><div className="voice-avatar"><Mic className="h-5 w-5" /></div><div><b>{voice.label}</b><small>{voice.custom ? "Giọng riêng Kokoro .pt" : "Preset Kokoro có sẵn"}</small></div><Play className="ml-auto h-4 w-4" /></button>)}</div>
-        <div className="audio-preview"><div className="flex justify-between text-xs"><span>Nghe thử 5-10 giây</span><Button size="sm" variant="ghost" onClick={previewVoiceNow}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button></div>{voicePreviewUrl && <audio controls autoPlay src={voicePreviewUrl} className="mt-2 w-full" />}</div>
+        <Field label="Giọng thường">
+          <Select
+            value={settings.text_to_voice_voice || voiceOptions[0]?.value || "af_heart"}
+            onValueChange={(value) => setSettings({...settings, text_to_voice_voice:value, voice_clone_enabled:false})}
+            options={voiceOptions.map((voice) => ({ value: voice.value, label: voice.label }))}
+          />
+        </Field>
+        <div className="saved-voice-box">
+          <div className="flex items-center justify-between gap-3">
+            <div><b>Giọng clone đã lưu</b><p>Chọn giọng nào thì video sẽ dùng giọng đó.</p></div>
+          </div>
+          <Select
+            value={selectedCloneId}
+            placeholder={cloneProfiles.length ? "Chọn giọng clone" : "Chưa có giọng clone"}
+            onValueChange={(id) => {
+              const profile = cloneProfiles.find((item) => item.id === id)
+              selectSavedCloneVoice(profile, false).catch((err) => setSettings({...settings, voice_clone_enabled:false, voice_clone_reference_path:"", voice_clone_reference_name:""}))
+            }}
+            options={cloneProfiles.length ? cloneProfiles.map((item) => ({
+              value: item.id,
+              label: `${item.name}${item.language ? ` · ${item.language}` : ""}`,
+            })) : [{ value: "__none", label: "Chưa có giọng clone đã lưu" }]}
+          />
+          {cloneProfiles.length > 0 && <div className="saved-voice-list">
+            {cloneProfiles.map((item) => {
+              const active = item.id === selectedCloneId
+              return <button
+                type="button"
+                key={item.id}
+                className={cn("saved-voice-row", active && "active")}
+                onClick={() => selectSavedCloneVoice(item, false)}
+              >
+                <span><b>{item.name}</b><small>{item.language || "voice clone"}</small></span>
+                {active && <Check className="h-5 w-5" />}
+              </button>
+            })}
+          </div>}
+          <div className="saved-voice-actions">
+            <Button variant="secondary" size="sm" disabled={!selectedClone} onClick={() => setSettings({...settings, voice_clone_enabled:false, voice_clone_reference_path:"", voice_clone_reference_name:""})}>Dùng giọng thường</Button>
+          </div>
+        </div>
+        <div className="audio-preview"><div className="flex justify-between text-xs"><span>Nghe thử giọng đang chọn</span><Button size="sm" variant="ghost" onClick={() => previewVoiceNow()}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button></div>{voicePreviewUrl && <audio controls autoPlay src={voicePreviewUrl} className="mt-2 w-full" />}</div>
       </div>
       <div className="flex min-h-0 flex-col gap-4">
         <div className="glass-panel screen-panel flex-1">
-          <div className="panel-title"><div><h3>Điều chỉnh cách đọc</h3><p>Các tùy chọn Kokoro có tác dụng trực tiếp lên audio.</p></div><Settings className="text-emerald-300" /></div>
-          <Field label="Phong cách đọc"><Select value={settings.text_to_voice_delivery || "natural"} onValueChange={(v)=>setSettings({...settings,text_to_voice_delivery:v})} options={deliveryOptions} /></Field>
-          <div className="mt-5"><RangeField label="Tốc độ đọc" value={settings.text_to_voice_speed ?? 1} min={.5} max={2} step={.05} onChange={(v)=>setSettings({...settings,text_to_voice_speed:v})} /></div>
-          <div className="voice-language-note">Chỉ những tùy chọn Kokoro thực sự hỗ trợ mới được hiển thị tại đây.</div>
+          <div className="panel-title"><div><h3>Cài đặt clone voice</h3><p>Chỉ cần chỉnh khi muốn giọng nhanh hơn, chậm hơn hoặc clone kỹ hơn.</p></div><Settings className="text-emerald-300" /></div>
+          <RangeField label="Tốc độ đọc" value={settings.text_to_voice_speed ?? 1} min={.5} max={2} step={.05} onChange={(v)=>setSettings({...settings,text_to_voice_speed:v})} />
+          <div className="setting-help">0.9-1.0 là tự nhiên. Tăng lên nếu muốn đọc nhanh, giảm xuống nếu muốn chậm và rõ hơn.</div>
+          <RangeField label="Mức xử lý giọng clone" value={settings.magicvoice_steps ?? 16} min={8} max={32} step={1} onChange={(v)=>setSettings({...settings, magicvoice_steps:v})} />
+          <div className="setting-help">16 là cân bằng. Số cao hơn có thể giống giọng mẫu hơn nhưng tạo voice lâu hơn.</div>
         </div>
         <div className="glass-panel screen-panel">
-          <div className="panel-title"><div><h3>Clone giọng bằng MagicVoice</h3><p>Upload audio mẫu tiếng Việt/đa ngôn ngữ, tool sẽ tạo voice theo giọng đó.</p></div><Mic className="text-violet-300" /></div>
-          <Switch checked={!!settings.voice_clone_enabled} onCheckedChange={(v)=>setSettings({...settings,voice_clone_enabled:v,voice_clone_engine:"magicvoice"})} label="Dùng clone giọng cho video này"/>
-          <button type="button" className="clone-drop mt-3" onClick={chooseVoiceCloneReference}>
+          <div className="panel-title"><div><h3>Clone voice</h3><p>Tải audio mẫu, đặt tên, rồi bấm Clone voice để lưu vào danh sách bên trái.</p></div><Mic className="text-violet-300" /></div>
+          <div className="clone-form-grid">
+            <Field label="Tên giọng"><Input value={cloneName} onChange={(e)=>setCloneName(e.target.value)} placeholder="Ví dụ: AnhQuan, GiongKeChuyen..." /></Field>
+            <Field label="Ngôn ngữ"><Input value={cloneLanguage} onChange={(e)=>setCloneLanguage(e.target.value)} placeholder="vi, en, fr..." /></Field>
+          </div>
+          <button type="button" className="clone-drop mt-3" onClick={() => cloneInputRef.current?.click()}>
             <Upload className="h-8 w-8 text-emerald-300" />
-            <b>{settings.voice_clone_reference_name ? settings.voice_clone_reference_name : "Tải audio mẫu clone"}</b>
+            <b>{pendingCloneFile ? `Đã chọn: ${pendingCloneFile.name}` : "Tải audio mẫu clone"}</b>
             <span>Nên dùng file WAV/MP3 sạch, chỉ một người nói, dài khoảng 10-30 giây.</span>
           </button>
+          <input ref={cloneInputRef} type="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg,.webm" className="hidden" onChange={(e)=>setPendingCloneFile(e.target.files?.[0] || null)} />
           <div className="voice-language-note">
-            Lần đầu dùng MagicVoice sẽ cài Python 3.11, Torch và OmniVoice nên có thể lâu. Nếu chưa upload audio mẫu, tool tự quay về giọng Kokoro thường.
+            Lần đầu clone có thể lâu vì tool tự cài thư viện cần thiết. Sau khi clone xong, giọng sẽ nằm trong dropdown bên trái để lần sau chọn lại.
           </div>
-        </div>
-        <div className="glass-panel screen-panel">
-          <div className="panel-title"><div><h3>Voice pack Kokoro nâng cao</h3><p>Dùng khi bạn đã có file embedding .pt.</p></div><FileAudio className="text-violet-300" /></div>
-          <button type="button" className="clone-drop" onClick={chooseKokoroVoicePack}>
-            <Upload className="h-8 w-8 text-violet-300" />
-            <b>Tải voice pack .pt</b>
-            <span>File sẽ được lưu vào Kokoro local và xuất hiện trong danh sách giọng.</span>
-          </button>
+          <Button className="mt-4 w-full" disabled={!pendingCloneFile || isBusy || voicePreviewBusy} onClick={cloneVoiceNow}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />} {voicePreviewBusy ? "Đang lưu và tạo nghe thử..." : "Clone voice"}</Button>
         </div>
       </div>
     </div>
-    <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step1")}><ArrowLeft className="h-4 w-4" /> Quay lại Bước 1</Button><div className="footer-chips"><span>Xuất WAV</span><span>Tạo mốc thời gian</span><span>{project?.has_voice ? "Sẵn sàng tạo cảnh" : "Tạo voice trước"}</span></div>{project?.has_voice
+    <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step1")}><ArrowLeft className="h-4 w-4" /> Quay lại Bước 1</Button><div className="footer-chips"><span>Xuất WAV</span><span>Tạo mốc thời gian</span><span>{project?.voice_path ? "Sẵn sàng tạo cảnh" : "Tạo voice trước"}</span></div>{project?.voice_path
       ? <Button onClick={()=>{setActiveScreen("step3a");startJob("/api/analyze-search",undefined,"analyze-search")}} disabled={isBusy}>{busyAction==="analyze-search"?<LoaderCircle className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} Tạo cảnh và tìm ảnh</Button>
       : <Button onClick={createVoiceWithQuickSettings} disabled={isBusy}>{busyAction==="voice"?<LoaderCircle className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} Tạo giọng đọc</Button>}</div>
   </div>
@@ -1402,8 +1446,7 @@ function SettingsModal({ open, onOpenChange, settings, setSettings, workflowStep
       <TabsContent value="basic"><div className="settings-grid">
         <SettingSection title="Giọng đọc mặc định" icon={FileAudio}>
           <Field label="Ngôn ngữ hay dùng"><Select value={normalizeVoiceLanguage(settings.text_to_voice_language||"en")} onValueChange={v=>setSettings({...settings,text_to_voice_language:v})} options={voiceLanguageOptions}/></Field>
-          <Field label="Phong cách đọc"><Select value={settings.text_to_voice_delivery||"natural"} onValueChange={v=>setSettings({...settings,text_to_voice_delivery:v})} options={deliveryOptions}/></Field>
-          <div className="setting-note">Tool dùng Kokoro local và không cần API voice.</div>
+          <div className="setting-note">Nếu không chắc, giữ nguyên. Người dùng vẫn có thể chọn giọng cụ thể ở Bước 2.</div>
         </SettingSection>
         <SettingSection title="Ảnh và video" icon={Image}>
           <Switch checked={settings.image_ai_validation_enabled!==false} onCheckedChange={v=>setSettings({...settings,image_ai_validation_enabled:v})} label="AI kiểm tra ảnh có đúng nội dung"/>
@@ -1414,7 +1457,6 @@ function SettingsModal({ open, onOpenChange, settings, setSettings, workflowStep
       <TabsContent value="flow"><SettingSection title="Flow tạo kịch bản" icon={Bot}><Field label="Flow đang dùng"><Select value={settings.active_workflow_id||presets[0]?.id||""} onValueChange={applyWorkflowPreset} options={presets.map(x=>({value:x.id,label:x.name}))}/></Field>{workflowSteps.map((step,i)=><div className="workflow-edit" key={i}><Switch checked={step.enabled} onCheckedChange={v=>updateStep(i,{enabled:v})}/><Input value={step.name} onChange={e=>updateStep(i,{name:e.target.value})}/><Textarea value={step.prompt} onChange={e=>updateStep(i,{prompt:e.target.value})}/></div>)}<Button variant="secondary" onClick={()=>setWorkflowSteps(x=>[...x,{enabled:true,name:`Bước ${x.length+1}`,prompt:""}])}><Plus className="h-4 w-4"/> Thêm bước</Button><div className="flex gap-2"><Input value={presetName} onChange={e=>setPresetName(e.target.value)} placeholder="Tên flow mới"/><Button onClick={saveCurrentWorkflowAsPreset}>Lưu flow</Button></div></SettingSection></TabsContent>
       <TabsContent value="ai"><SettingSection title="AI dùng để hiểu nội dung và kiểm ảnh" icon={Bot}><Field label="Nhà cung cấp"><Select value={settings.keyword_ai_provider||"auto"} onValueChange={v=>setSettings({...settings,keyword_ai_provider:v})} options={[{value:"auto",label:"Tự động"},{value:"gemini",label:"Gemini"},{value:"openai",label:"OpenAI"}]}/></Field><Field label="Gemini API key"><Input type="password" value={settings.gemini_api_key||""} onChange={e=>setSettings({...settings,gemini_api_key:e.target.value})}/></Field><div className="setting-note">Nếu không biết chọn gì, để Tự động và chỉ nhập Gemini API key.</div></SettingSection></TabsContent>
       <TabsContent value="advanced"><div className="settings-grid">
-        <SettingSection title="Kokoro nâng cao" icon={FileAudio}><RangeField label="Tốc độ đọc" value={settings.text_to_voice_speed??1} min={.5} max={2} step={.05} onChange={v=>setSettings({...settings,text_to_voice_speed:v})}/><Field label="Số ký tự tối đa mỗi phần"><Input type="number" value={settings.text_to_voice_max_chars||10000} onChange={e=>setSettings({...settings,text_to_voice_max_chars:Number(e.target.value)})}/></Field><div className="setting-note">Giữ 10.000 nếu không có nhu cầu đặc biệt. Script dài sẽ tự được chia và ghép lại.</div></SettingSection>
         <SettingSection title="Cảnh và chất lượng ảnh" icon={Aperture}><Switch checked={!!settings.whisper_timing_enabled} onCheckedChange={v=>setSettings({...settings,whisper_timing_enabled:v})} label="Căn thời gian bằng Whisper"/><Switch checked={!!settings.scene_ai_enabled} onCheckedChange={v=>setSettings({...settings,scene_ai_enabled:v})} label="AI gom câu thành cảnh"/><div className="grid grid-cols-2 gap-4"><Field label="Cảnh tối thiểu"><Input type="number" value={settings.scene_min_seconds||3} onChange={e=>setSettings({...settings,scene_min_seconds:Number(e.target.value)})}/></Field><Field label="Cảnh mục tiêu"><Input type="number" value={settings.scene_target_max_seconds||10} onChange={e=>setSettings({...settings,scene_target_max_seconds:Number(e.target.value)})}/></Field><Field label="Output width"><Input type="number" value={settings.image_target_width||1920} onChange={e=>setSettings({...settings,image_target_width:Number(e.target.value)})}/></Field><Field label="Output height"><Input type="number" value={settings.image_target_height||1080} onChange={e=>setSettings({...settings,image_target_height:Number(e.target.value)})}/></Field></div></SettingSection>
       </div></TabsContent>
       <TabsContent value="validate"><SettingSection title="Kiểm tra cấu hình máy" icon={CheckCircle2}><Button onClick={runPreflight}>Chạy kiểm tra</Button><div className="grid grid-cols-2 gap-3">{(preflight?.checks||[]).map(x=><CheckRow key={x.id} ok={x.ok} label={x.label}/>)}</div></SettingSection></TabsContent>
