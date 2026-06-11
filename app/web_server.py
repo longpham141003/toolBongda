@@ -422,6 +422,14 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
         "active_workflow_id",
         "text_to_voice_root",
         "text_to_voice_python",
+        "voice_clone_enabled",
+        "voice_clone_engine",
+        "voice_clone_reference_path",
+        "voice_clone_reference_name",
+        "voice_clone_max_chars",
+        "voice_clone_timeout",
+        "voice_clone_setup_timeout",
+        "kokoclone_root",
         "whisper_python",
         "whisper_timing_enabled",
         "whisper_timing_model",
@@ -686,6 +694,40 @@ async def upload_kokoro_voice(file: UploadFile = File(...), language: str = "en"
     }
 
 
+@app.post("/api/voice-clone/reference")
+async def upload_voice_clone_reference(file: UploadFile = File(...)) -> dict[str, Any]:
+    settings = load_settings()
+    filename = Path(file.filename or "reference.wav").name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"}:
+        raise HTTPException(status_code=400, detail="File mẫu phải là audio: wav, mp3, m4a, flac, ogg hoặc webm.")
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).stem).strip("._-") or "reference"
+    ref_dir = APP_DIR / "kokoclone-local" / "references"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    target = ref_dir / f"{stem}{suffix}"
+    counter = 1
+    while target.exists():
+        target = ref_dir / f"{stem}_{counter}{suffix}"
+        counter += 1
+    with target.open("wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+    settings.update(
+        {
+            "voice_clone_enabled": True,
+            "voice_clone_engine": "kokoclone",
+            "voice_clone_reference_path": str(target.resolve()),
+            "voice_clone_reference_name": filename,
+        }
+    )
+    save_settings(settings)
+    return {
+        "ok": True,
+        "settings": _public_settings(),
+        "reference_path": str(target.resolve()),
+        "reference_name": filename,
+    }
+
+
 @app.post("/api/settings")
 def update_settings(request: SettingsRequest) -> dict[str, Any]:
     return {"settings": _save_partial_settings(request.settings)}
@@ -815,6 +857,14 @@ def preview_voice(request: VoicePreviewRequest) -> dict[str, Any]:
             "text_to_voice_speed",
             "text_to_voice_root",
             "text_to_voice_python",
+            "voice_clone_enabled",
+            "voice_clone_engine",
+            "voice_clone_reference_path",
+            "voice_clone_reference_name",
+            "voice_clone_max_chars",
+            "voice_clone_timeout",
+            "voice_clone_setup_timeout",
+            "kokoclone_root",
         ):
             if key in request.settings:
                 settings[key] = request.settings[key]

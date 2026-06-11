@@ -633,6 +633,30 @@ function App() {
     input.click()
   }
 
+  async function uploadVoiceCloneReference(file) {
+    if (!file) return
+    setError("")
+    try {
+      const form = new FormData()
+      form.append("file", file)
+      const response = await fetch("/api/voice-clone/reference", { method: "POST", body: form })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`)
+      setSettings(data.settings)
+      setToast(`Đã tải audio mẫu clone: ${data.reference_name}`)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  function chooseVoiceCloneReference() {
+    const input = document.createElement("input")
+    input.type = "file"
+    input.accept = "audio/*,.wav,.mp3,.m4a,.flac,.ogg,.webm"
+    input.onchange = () => uploadVoiceCloneReference(input.files?.[0])
+    input.click()
+  }
+
   async function runPreflight() {
     try {
       const data = await api("/api/preflight")
@@ -652,6 +676,10 @@ function App() {
         text_to_voice_voice: settings.text_to_voice_voice || "af_heart",
         text_to_voice_delivery: settings.text_to_voice_delivery || "natural",
         text_to_voice_speed: Number(settings.text_to_voice_speed || 1),
+        voice_clone_enabled: Boolean(settings.voice_clone_enabled && settings.voice_clone_reference_path),
+        voice_clone_engine: settings.voice_clone_engine || "kokoclone",
+        voice_clone_reference_path: settings.voice_clone_reference_path || "",
+        voice_clone_reference_name: settings.voice_clone_reference_name || "",
       }
       const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: voiceSettings }) })
       setSettings(data.settings)
@@ -818,7 +846,7 @@ function App() {
             saveScriptStep={saveScriptStep}
             isBusy={isBusy}
           />}
-          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} chooseKokoroVoicePack={chooseKokoroVoicePack} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
+          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} chooseKokoroVoicePack={chooseKokoroVoicePack} chooseVoiceCloneReference={chooseVoiceCloneReference} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step3a" && <SceneScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step3b" && <MediaReviewScreen assets={assets} filteredAssets={filteredAssets} assetFilter={assetFilter} setAssetFilter={setAssetFilter} project={project} assetJobs={assetJobs} statusBadge={statusBadge} setLightboxIndex={setLightboxIndex} startJob={startJob} approveAsset={approveAsset} chooseAssetMedia={chooseAssetMedia} bulkRetryAssets={bulkRetryAssets} isBusy={isBusy} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step4" && <ExportScreen project={project} assets={assets} preflight={preflight} runPreflight={runPreflight} startJob={startJob} title={title} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
@@ -1176,7 +1204,7 @@ function WorkflowPanel({ workflowInput, setWorkflowInput, workflowSteps, setting
   </div>
 }
 
-function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, chooseKokoroVoicePack, isBusy, busyAction, setActiveScreen }) {
+function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, chooseKokoroVoicePack, chooseVoiceCloneReference, isBusy, busyAction, setActiveScreen }) {
   const languageMismatch = looksLikeEnglish(script) && (settings.text_to_voice_language || "en") !== "en"
   const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
   const changeVoiceLanguage = (language) => setSettings({
@@ -1207,15 +1235,24 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
           <div className="voice-language-note">Chỉ những tùy chọn Kokoro thực sự hỗ trợ mới được hiển thị tại đây.</div>
         </div>
         <div className="glass-panel screen-panel">
-          <div className="panel-title"><div><h3>Giọng riêng Kokoro</h3><p>Import voice pack .pt để dùng như một giọng đọc riêng.</p></div><Mic className="text-violet-300" /></div>
+          <div className="panel-title"><div><h3>Clone giọng bằng KokoClone</h3><p>Upload audio mẫu 3-10 giây, tool sẽ tạo voice theo giọng đó.</p></div><Mic className="text-violet-300" /></div>
+          <Switch checked={!!settings.voice_clone_enabled} onCheckedChange={(v)=>setSettings({...settings,voice_clone_enabled:v,voice_clone_engine:"kokoclone"})} label="Dùng clone giọng cho video này"/>
+          <button type="button" className="clone-drop mt-3" onClick={chooseVoiceCloneReference}>
+            <Upload className="h-8 w-8 text-emerald-300" />
+            <b>{settings.voice_clone_reference_name ? settings.voice_clone_reference_name : "Tải audio mẫu clone"}</b>
+            <span>Nên dùng file WAV/MP3 sạch, chỉ một người nói, dài khoảng 3-10 giây.</span>
+          </button>
+          <div className="voice-language-note">
+            Lần đầu dùng KokoClone sẽ cài thêm Torch/Kanade và tải model từ Hugging Face nên có thể lâu. Nếu chưa upload audio mẫu, tool tự quay về giọng Kokoro thường.
+          </div>
+        </div>
+        <div className="glass-panel screen-panel">
+          <div className="panel-title"><div><h3>Voice pack Kokoro nâng cao</h3><p>Dùng khi bạn đã có file embedding .pt.</p></div><FileAudio className="text-violet-300" /></div>
           <button type="button" className="clone-drop" onClick={chooseKokoroVoicePack}>
             <Upload className="h-8 w-8 text-violet-300" />
             <b>Tải voice pack .pt</b>
             <span>File sẽ được lưu vào Kokoro local và xuất hiện trong danh sách giọng.</span>
           </button>
-          <div className="voice-language-note">
-            Kokoro không clone trực tiếp từ mp3/wav hoặc ghi âm mẫu. Nếu muốn clone từ audio 10-20 giây thì cần model voice-clone khác; Kokoro chỉ nhận preset hoặc voice embedding .pt.
-          </div>
         </div>
       </div>
     </div>

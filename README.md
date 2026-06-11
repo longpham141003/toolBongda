@@ -16,6 +16,7 @@ Lan dau mo tool, cua so khoi dong se tu kiem tra va cai cac thanh phan con thieu
 - thu vien backend
 - Chromium Playwright de tim anh
 - Kokoro local voice environment
+- KokoClone local voice clone environment, chi cai khi nguoi dung bat clone giong va tai audio mau
 - file cau hinh rieng `settings.json`
 
 Nguoi dung chi can cho den khi trinh duyet tu mo giao dien `Visual CapCut Studio`.
@@ -40,6 +41,7 @@ Lan dau chay co the mat 5-15 phut tuy toc do mang/may. Tu lan sau se nhanh hon.
 Ghi chu:
 
 - Repo co kem `kokoro-tts-local/` va danh sach voice Kokoro.
+- Repo co kem `kokoclone-local/` de clone giong tu audio mau 3-10 giay. Lan dau dung clone se tai/cai Torch, Kokoro-ONNX, Kanade va model Hugging Face nen co the lau hon Kokoro preset.
 - Khong commit `.venv`, model cache, browser profile va project output.
 - Lan dau tao voice co the lau vi may phai cai Kokoro, load/tai model.
 
@@ -58,7 +60,7 @@ Quan trong:
 ## Pipeline
 
 1. Nhap script hoac tao script bang workflow AI.
-2. Tao voice bang Kokoro, sinh WAV + timing + SRT.
+2. Tao voice bang Kokoro preset hoac KokoClone neu bat clone giong, sinh WAV + timing + SRT.
 3. Whisper/Gemini gom SRT thanh canh.
 4. Tao keyword va tim anh/video cho tung canh.
 5. Duyet/tim lai/tai media local cho tung canh.
@@ -73,6 +75,11 @@ Quan trong:
 - `kokoro-tts-local/.venv/`
 - `kokoro-tts-local/.hf_cache/`
 - `kokoro-tts-local/outputs/`
+- `kokoclone-local/.venv/`
+- `kokoclone-local/model/`
+- `kokoclone-local/voice/`
+- `kokoclone-local/references/`
+- `kokoclone-local/outputs/`
 - `.hf-cache/`
 - `chrome_*_profile/`
 - log/cache/temp/output sinh ra khi chay tool

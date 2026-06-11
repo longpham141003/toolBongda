@@ -147,6 +147,58 @@ def text_to_voice_python(settings: dict, root: Path | None = None) -> Path:
     return root / ".venv" / "bin" / "python"
 
 
+def kokoclone_root(settings: dict) -> Path:
+    raw = str(settings.get("kokoclone_root") or "").strip()
+    if raw:
+        path = Path(raw)
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parents[1] / path
+        return path
+    return Path(__file__).resolve().parents[1] / "kokoclone-local"
+
+
+def kokoclone_python(settings: dict, root: Path | None = None) -> Path:
+    root = root or kokoclone_root(settings)
+    if os.name == "nt":
+        return root / ".venv" / "Scripts" / "python.exe"
+    return root / ".venv" / "bin" / "python"
+
+
+def bootstrap_kokoclone(settings: dict, log: Callable[[str], None] | None = None) -> tuple[Path, Path]:
+    root = kokoclone_root(settings)
+    python = kokoclone_python(settings, root)
+    if python.exists():
+        return root, python
+    setup_script = root / "setup.ps1" if os.name == "nt" else root / "setup.sh"
+    if not setup_script.exists():
+        raise FileNotFoundError(f"Không thấy setup KokoClone: {setup_script}")
+    if callable(log):
+        log("Lần đầu dùng clone giọng: đang cài KokoClone local. Bước này có thể lâu vì cần Torch và model.")
+    if os.name == "nt":
+        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(setup_script)]
+    else:
+        cmd = ["sh", str(setup_script)]
+    result = subprocess.run(
+        cmd,
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=max(1800, int(settings.get("voice_clone_setup_timeout") or 3600)),
+        check=False,
+        **_win_hidden_kwargs(),
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"Cài KokoClone thất bại. {detail[-2000:]}")
+    if not python.exists():
+        raise FileNotFoundError(f"Cài KokoClone xong nhưng không thấy Python venv: {python}")
+    if callable(log):
+        log("Đã cài xong KokoClone local.")
+    return root, python
+
+
 def kokoro_custom_voice_dir(settings: dict, language: str = "en") -> Path:
     root = text_to_voice_root(settings)
     normalized, _ = normalize_kokoro_language(language)
@@ -215,6 +267,16 @@ def kokoro_voice_choices(settings: dict, language: str = "en") -> list[str]:
     if custom_dir.exists():
         voices.extend(str(path.resolve()) for path in sorted(custom_dir.glob("*.pt")))
     return voices
+
+
+def _clone_reference_path(settings: dict) -> Path | None:
+    raw = str(settings.get("voice_clone_reference_path") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parents[1] / path
+    return path if path.is_file() else None
 
 
 def text_to_voice_url(settings: dict) -> str:
@@ -349,6 +411,11 @@ class TextToVoiceRunner:
         self._last_sampling_log = ""
 
     def start(self) -> None:
+        if bool(self.settings.get("voice_clone_enabled")) and _clone_reference_path(self.settings):
+            self.root = text_to_voice_root(self.settings)
+            self.python = text_to_voice_python(self.settings, self.root)
+            self.log("KokoClone mode: dùng audio mẫu để clone giọng, không khởi động Kokoro preset.")
+            return
         self.root, self.python = validate_text_to_voice(self.settings)
         ensure_text_to_voice_server(self.settings, log=self.log)
         self.log(f"Kokoro TTS đã sẵn sàng: {self.root}")
@@ -394,6 +461,12 @@ class TextToVoiceRunner:
         if self._can_reuse_output(output_path, cache_key):
             self.log(f"Text to Voice {label}: dùng lại audio đã có {output_path.name}")
             return str(output_path)
+
+        if bool(self.settings.get("voice_clone_enabled")):
+            reference_path = _clone_reference_path(self.settings)
+            if reference_path:
+                return self._submit_file_kokoclone(text, label, output_path, cache_key, reference_path)
+            self.log(f"Text to Voice {label}: clone giọng đang bật nhưng chưa có audio mẫu, dùng Kokoro preset.")
 
         voices = kokoro_voice_choices(self.settings, language)
         voice = str(self.settings.get("text_to_voice_voice") or "").strip()
@@ -475,6 +548,105 @@ class TextToVoiceRunner:
         self._write_cache_meta(final_path, cache_key)
         self.log(f"Text to Voice {label}: đã lưu audio {final_path.name}{suffix}")
         return str(final_path)
+
+    def _submit_file_kokoclone(self, text: str, label: str, output_path: Path, cache_key: dict, reference_path: Path) -> str:
+        root, python = bootstrap_kokoclone(self.settings, log=self.log)
+        requested_language = str(self.settings.get("text_to_voice_language") or "en").lower()
+        language, language_warning = normalize_kokoro_language(requested_language)
+        if language_warning:
+            self.log(f"Text to Voice {label}: {language_warning}")
+        clone_lang = {
+            "en": "en",
+            "en-gb": "en",
+            "hi": "hi",
+            "fr": "fr",
+            "ja": "ja",
+            "zh": "zh",
+            "it": "it",
+            "pt": "pt",
+            "es": "es",
+        }.get(language, "en")
+        max_chars = max(600, min(int(self.settings.get("voice_clone_max_chars") or 900), 1800))
+        chunks = split_text_for_text_to_voice(text, max_chars)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        generated_paths: list[Path] = []
+        timeout_seconds = max(900, int(self.settings.get("voice_clone_timeout") or 3600))
+        try:
+            for index, chunk in enumerate(chunks, start=1):
+                if self.stop_check():
+                    raise RuntimeError("Stopped.")
+                part_path = output_path.with_name(f"{output_path.stem}.clone{index:03d}.wav")
+                stdout_path = output_path.with_name(f"{output_path.stem}.clone{index:03d}.stdout.log")
+                stderr_path = output_path.with_name(f"{output_path.stem}.clone{index:03d}.stderr.log")
+                self.log(f"Text to Voice {label}: KokoClone đang tạo đoạn {index}/{len(chunks)}")
+                command = [
+                    str(python),
+                    str(root / "cli.py"),
+                    "--text",
+                    chunk,
+                    "--lang",
+                    clone_lang,
+                    "--ref",
+                    str(reference_path),
+                    "--out",
+                    str(part_path),
+                ]
+                with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout, stderr_path.open("w", encoding="utf-8", errors="replace") as stderr:
+                    result = subprocess.run(
+                        command,
+                        cwd=str(root),
+                        stdout=stdout,
+                        stderr=stderr,
+                        text=True,
+                        timeout=timeout_seconds,
+                        check=False,
+                        **_win_hidden_kwargs(),
+                    )
+                if result.returncode != 0 or not part_path.exists():
+                    detail = ""
+                    for path in (stderr_path, stdout_path):
+                        if path.exists():
+                            detail += "\n" + path.read_text(encoding="utf-8", errors="replace")[-1600:]
+                    raise RuntimeError(f"KokoClone tạo voice thất bại ở đoạn {index}/{len(chunks)}.{detail}")
+                generated_paths.append(part_path)
+
+            if len(generated_paths) == 1:
+                shutil.copy2(generated_paths[0], output_path)
+                duration = 0.0
+                try:
+                    import wave
+                    with wave.open(str(output_path), "rb") as wav:
+                        duration = wav.getnframes() / max(1, wav.getframerate())
+                except Exception:
+                    pass
+            else:
+                duration = combine_wavs(generated_paths, output_path)
+
+            output_path.with_suffix(".segments.json").write_text(
+                json.dumps(
+                    {
+                        "audio": str(output_path),
+                        "duration": round(float(duration), 4),
+                        "sampleRate": 24000,
+                        "lang": clone_lang,
+                        "voice": str(reference_path),
+                        "speed": 1.0,
+                        "delivery": "kokoclone",
+                        "engine": "kokoclone",
+                        "segments": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        finally:
+            for part_path in generated_paths:
+                part_path.unlink(missing_ok=True)
+
+        self._write_cache_meta(output_path, cache_key)
+        self.log(f"Text to Voice {label}: đã lưu audio clone {output_path.name} ({len(chunks)} phần)")
+        return str(output_path)
 
     def _adaptive_timeout_seconds(self, chunk_estimate: int) -> int:
         configured = max(300, int(self.settings.get("text_to_voice_timeout") or 1800))
@@ -578,7 +750,9 @@ class TextToVoiceRunner:
             "speed": str(float(self.settings.get("text_to_voice_speed") or 1.0)),
             "delivery": str(self.settings.get("text_to_voice_delivery") or "dramatic"),
             "max_chars": str(int(self.settings.get("text_to_voice_max_chars") or 10000)),
-            "engine": "kokoro",
+            "engine": "kokoclone" if bool(self.settings.get("voice_clone_enabled")) and _clone_reference_path(self.settings) else "kokoro",
+            "voice_clone_reference_path": str(self.settings.get("voice_clone_reference_path") or ""),
+            "voice_clone_engine": str(self.settings.get("voice_clone_engine") or ""),
             "segment_cleaner": "tts_clean_v6",
         }
 
