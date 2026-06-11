@@ -677,7 +677,7 @@ function App() {
         text_to_voice_delivery: settings.text_to_voice_delivery || "natural",
         text_to_voice_speed: Number(settings.text_to_voice_speed || 1),
         voice_clone_enabled: Boolean(settings.voice_clone_enabled && settings.voice_clone_reference_path),
-        voice_clone_engine: settings.voice_clone_engine || "kokoclone",
+        voice_clone_engine: settings.voice_clone_engine || "magicvoice",
         voice_clone_reference_path: settings.voice_clone_reference_path || "",
         voice_clone_reference_name: settings.voice_clone_reference_name || "",
       }
@@ -1235,15 +1235,15 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
           <div className="voice-language-note">Chỉ những tùy chọn Kokoro thực sự hỗ trợ mới được hiển thị tại đây.</div>
         </div>
         <div className="glass-panel screen-panel">
-          <div className="panel-title"><div><h3>Clone giọng bằng KokoClone</h3><p>Upload audio mẫu 3-10 giây, tool sẽ tạo voice theo giọng đó.</p></div><Mic className="text-violet-300" /></div>
-          <Switch checked={!!settings.voice_clone_enabled} onCheckedChange={(v)=>setSettings({...settings,voice_clone_enabled:v,voice_clone_engine:"kokoclone"})} label="Dùng clone giọng cho video này"/>
+          <div className="panel-title"><div><h3>Clone giọng bằng MagicVoice</h3><p>Upload audio mẫu tiếng Việt/đa ngôn ngữ, tool sẽ tạo voice theo giọng đó.</p></div><Mic className="text-violet-300" /></div>
+          <Switch checked={!!settings.voice_clone_enabled} onCheckedChange={(v)=>setSettings({...settings,voice_clone_enabled:v,voice_clone_engine:"magicvoice"})} label="Dùng clone giọng cho video này"/>
           <button type="button" className="clone-drop mt-3" onClick={chooseVoiceCloneReference}>
             <Upload className="h-8 w-8 text-emerald-300" />
             <b>{settings.voice_clone_reference_name ? settings.voice_clone_reference_name : "Tải audio mẫu clone"}</b>
-            <span>Nên dùng file WAV/MP3 sạch, chỉ một người nói, dài khoảng 3-10 giây.</span>
+            <span>Nên dùng file WAV/MP3 sạch, chỉ một người nói, dài khoảng 10-30 giây.</span>
           </button>
           <div className="voice-language-note">
-            Lần đầu dùng KokoClone sẽ cài thêm Torch/Kanade và tải model từ Hugging Face nên có thể lâu. Nếu chưa upload audio mẫu, tool tự quay về giọng Kokoro thường.
+            Lần đầu dùng MagicVoice sẽ cài Python 3.11, Torch và OmniVoice nên có thể lâu. Nếu chưa upload audio mẫu, tool tự quay về giọng Kokoro thường.
           </div>
         </div>
         <div className="glass-panel screen-panel">

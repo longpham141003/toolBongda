@@ -1,0 +1,73 @@
+╔══════════════════════════════════════════════════════════╗
+║         MAGICVOICE TTS STUDIO v3.4 — HUONG DAN          ║
+╚══════════════════════════════════════════════════════════╝
+
+CAI DAT (Lan dau — mat 10-20 phut)
+──────────────────────────────────
+1. Giai nen thu muc MagicVoice ra bat ky dau (VD: D:\MagicVoice)
+2. Double-click "CaiDat_MagicVoice.bat"
+   → Tu dong kiem tra va chi cai phan con thieu
+   → Tu dong cai: Python 3.11, PyTorch, thu vien, cap nhat tu GitHub
+3. Xong → double-click "Chay_MagicVoice.bat" hoac icon tren Desktop
+
+MO APP (Sau khi da cai)
+────────────────────────
+• Double-click "Chay_MagicVoice.bat"
+• Hoac icon "MagicVoice TTS Studio" tren Desktop
+
+DANG NHAP & LICENSE (v3.4 MOI)
+───────────────────────────────
+• Dung tai khoan duoc cap boi admin
+• Tick "Ghi nho tai khoan" de khong phai nhap lai
+• License duoc kiem tra online lan dau
+• Sau do offline dung duoc trong 3 ngay (khong can internet)
+• Qua 3 ngay hoac doi may -> phai online kiem tra lai
+
+YEU CAU KET NOI INTERNET
+─────────────────────────
+• Lan cai dat: CAN internet (tai Python, thu vien, PyTorch)
+• Moi ngay su dung: NEN co internet (kiem tra license + auto-update)
+• Neu mat mang: dung duoc toi 3 ngay, sau do bat buoc online
+
+TU DONG CAP NHAT (MOI v3.3)
+────────────────────────────
+• App tu dong kiem tra ban moi tu GitHub khi khoi dong
+• Neu co ban moi: popup se hoi co muon cap nhat khong
+• Chi can bam "Co" → app tu tai ve va yeu cau restart
+
+DAT TEN FILE OUTPUT (MOI v3.3)
+───────────────────────────────
+• Bam nut 🏷 tren thanh duoi cua app de cau hinh
+• Ap dung cho MOI tab (Van Ban, SRT, Hang Loat)
+• Mac dinh: tien to "voice_" + so thu tu (voice_01, voice_02, ...)
+• Co the doi sang "Giu ten goc" hoac tu dat ten cho tung file
+
+HANG LOAT (.txt + .srt)
+───────────────────────
+• Tab "Hang Loat" nhan CA 2 loai file: .txt va .srt
+• Click vao file trong danh sach → hien noi dung preview ben duoi
+• File dang xu ly se duoc highlight sang mau xanh
+
+CLONE VOICE
+────────────
+• Tab "Clone Voice" → "+ Them Voice Moi"
+• Chon file MP3/WAV co san: nhan "Chon"
+• GHI AM TRUC TIEP:
+  - Nhan "Ghi Am"
+  - Chon nguon: "Thu am dang phat tren may" (YouTube, nhac...)
+               hoac "Thu tu Micro" (tu doc)
+  - Chon thoi gian 3-60 giay
+  - Phat nhac/giong → nhan "Dung Luu"
+  - File MP3 320kbps tu dong luu vao clone_refs/
+
+YEU CAU HE THONG
+─────────────────
+• Windows 10/11 (64-bit)
+• GPU NVIDIA 6GB VRAM tro len (khuyen nghi)
+• RAM 8GB+, O cung 10GB+
+• Internet (dang nhap + Edge TTS + tai model + tu dong cap nhat)
+
+LIEN HE & HO TRO
+─────────────────
+• Zalo: 0985 483 623
+• Nhom ho tro: https://zalo.me/g/bqroiqc6wbcpph3s6sdd

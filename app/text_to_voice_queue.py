@@ -147,33 +147,61 @@ def text_to_voice_python(settings: dict, root: Path | None = None) -> Path:
     return root / ".venv" / "bin" / "python"
 
 
-def kokoclone_root(settings: dict) -> Path:
-    raw = str(settings.get("kokoclone_root") or "").strip()
+def magicvoice_root(settings: dict) -> Path:
+    raw = str(settings.get("magicvoice_root") or "").strip()
     if raw:
         path = Path(raw)
         if not path.is_absolute():
             path = Path(__file__).resolve().parents[1] / path
         return path
-    return Path(__file__).resolve().parents[1] / "kokoclone-local"
+    return Path(__file__).resolve().parents[1] / "magic_voice"
 
 
-def kokoclone_python(settings: dict, root: Path | None = None) -> Path:
-    root = root or kokoclone_root(settings)
+def magicvoice_python(settings: dict, root: Path | None = None) -> Path:
+    root = root or magicvoice_root(settings)
+    raw = str(settings.get("magicvoice_python") or "").strip()
+    if raw:
+        path = Path(raw)
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parents[1] / path
+        return path
+    candidates: list[Path] = []
     if os.name == "nt":
-        return root / ".venv" / "Scripts" / "python.exe"
-    return root / ".venv" / "bin" / "python"
+        candidates.extend(
+            [
+                Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "Python311" / "python.exe",
+                Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "Python310" / "python.exe",
+                Path("C:/Python311/python.exe"),
+                Path("C:/Python310/python.exe"),
+                Path("C:/Program Files/Python311/python.exe"),
+                Path("C:/Program Files/Python310/python.exe"),
+                Path.home() / "AppData" / "Local" / "Programs" / "Python" / "Python311" / "python.exe",
+                Path.home() / "AppData" / "Local" / "Programs" / "Python" / "Python310" / "python.exe",
+            ]
+        )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return Path("py")
 
 
-def bootstrap_kokoclone(settings: dict, log: Callable[[str], None] | None = None) -> tuple[Path, Path]:
-    root = kokoclone_root(settings)
-    python = kokoclone_python(settings, root)
-    if python.exists():
-        return root, python
-    setup_script = root / "setup.ps1" if os.name == "nt" else root / "setup.sh"
+def bootstrap_magicvoice(settings: dict, log: Callable[[str], None] | None = None) -> tuple[Path, list[str]]:
+    root = magicvoice_root(settings)
+    python = magicvoice_python(settings, root)
+    setup_script = root / "setup_visual_capcut.ps1" if os.name == "nt" else root / "setup.sh"
     if not setup_script.exists():
-        raise FileNotFoundError(f"Không thấy setup KokoClone: {setup_script}")
+        raise FileNotFoundError(f"Không thấy bộ cài MagicVoice: {setup_script}")
+    if python == Path("py"):
+        for version_arg in ("-3.11", "-3.10"):
+            probe = subprocess.run(["py", version_arg, "-c", "import omnivoice"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
+            if probe.returncode == 0:
+                return root, ["py", version_arg]
+    elif python.is_file():
+        probe = subprocess.run([str(python), "-c", "import omnivoice"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
+        if probe.returncode == 0:
+            return root, [str(python)]
     if callable(log):
-        log("Lần đầu dùng clone giọng: đang cài KokoClone local. Bước này có thể lâu vì cần Torch và model.")
+        log("Lần đầu dùng clone giọng: đang cài MagicVoice local. Bước này có thể lâu vì cần Python 3.11, Torch và OmniVoice.")
     if os.name == "nt":
         cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(setup_script)]
     else:
@@ -191,12 +219,22 @@ def bootstrap_kokoclone(settings: dict, log: Callable[[str], None] | None = None
     )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"Cài KokoClone thất bại. {detail[-2000:]}")
-    if not python.exists():
-        raise FileNotFoundError(f"Cài KokoClone xong nhưng không thấy Python venv: {python}")
-    if callable(log):
-        log("Đã cài xong KokoClone local.")
-    return root, python
+        raise RuntimeError(f"Cài MagicVoice thất bại. {detail[-2000:]}")
+    python = magicvoice_python(settings, root)
+    if python == Path("py"):
+        for version_arg in ("-3.11", "-3.10"):
+            probe = subprocess.run(["py", version_arg, "-c", "import omnivoice"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
+            if probe.returncode == 0:
+                if callable(log):
+                    log("Đã cài xong MagicVoice local.")
+                return root, ["py", version_arg]
+    elif python.is_file():
+        probe = subprocess.run([str(python), "-c", "import omnivoice"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
+        if probe.returncode == 0:
+            if callable(log):
+                log("Đã cài xong MagicVoice local.")
+            return root, [str(python)]
+    raise FileNotFoundError("Cài MagicVoice xong nhưng vẫn không gọi được Python 3.11/3.10 có omnivoice.")
 
 
 def kokoro_custom_voice_dir(settings: dict, language: str = "en") -> Path:
@@ -414,7 +452,7 @@ class TextToVoiceRunner:
         if bool(self.settings.get("voice_clone_enabled")) and _clone_reference_path(self.settings):
             self.root = text_to_voice_root(self.settings)
             self.python = text_to_voice_python(self.settings, self.root)
-            self.log("KokoClone mode: dùng audio mẫu để clone giọng, không khởi động Kokoro preset.")
+            self.log("MagicVoice clone mode: dùng audio mẫu để clone giọng tiếng Việt/đa ngôn ngữ.")
             return
         self.root, self.python = validate_text_to_voice(self.settings)
         ensure_text_to_voice_server(self.settings, log=self.log)
@@ -465,7 +503,7 @@ class TextToVoiceRunner:
         if bool(self.settings.get("voice_clone_enabled")):
             reference_path = _clone_reference_path(self.settings)
             if reference_path:
-                return self._submit_file_kokoclone(text, label, output_path, cache_key, reference_path)
+                return self._submit_file_magicvoice(text, label, output_path, cache_key, reference_path)
             self.log(f"Text to Voice {label}: clone giọng đang bật nhưng chưa có audio mẫu, dùng Kokoro preset.")
 
         voices = kokoro_voice_choices(self.settings, language)
@@ -549,23 +587,8 @@ class TextToVoiceRunner:
         self.log(f"Text to Voice {label}: đã lưu audio {final_path.name}{suffix}")
         return str(final_path)
 
-    def _submit_file_kokoclone(self, text: str, label: str, output_path: Path, cache_key: dict, reference_path: Path) -> str:
-        root, python = bootstrap_kokoclone(self.settings, log=self.log)
-        requested_language = str(self.settings.get("text_to_voice_language") or "en").lower()
-        language, language_warning = normalize_kokoro_language(requested_language)
-        if language_warning:
-            self.log(f"Text to Voice {label}: {language_warning}")
-        clone_lang = {
-            "en": "en",
-            "en-gb": "en",
-            "hi": "hi",
-            "fr": "fr",
-            "ja": "ja",
-            "zh": "zh",
-            "it": "it",
-            "pt": "pt",
-            "es": "es",
-        }.get(language, "en")
+    def _submit_file_magicvoice(self, text: str, label: str, output_path: Path, cache_key: dict, reference_path: Path) -> str:
+        root, python_cmd = bootstrap_magicvoice(self.settings, log=self.log)
         max_chars = max(600, min(int(self.settings.get("voice_clone_max_chars") or 900), 1800))
         chunks = split_text_for_text_to_voice(text, max_chars)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -575,26 +598,34 @@ class TextToVoiceRunner:
             for index, chunk in enumerate(chunks, start=1):
                 if self.stop_check():
                     raise RuntimeError("Stopped.")
-                part_path = output_path.with_name(f"{output_path.stem}.clone{index:03d}.wav")
-                stdout_path = output_path.with_name(f"{output_path.stem}.clone{index:03d}.stdout.log")
-                stderr_path = output_path.with_name(f"{output_path.stem}.clone{index:03d}.stderr.log")
-                self.log(f"Text to Voice {label}: KokoClone đang tạo đoạn {index}/{len(chunks)}")
+                part_path = output_path.with_name(f"{output_path.stem}.magicvoice{index:03d}.wav")
+                text_part_path = output_path.with_name(f"{output_path.stem}.magicvoice{index:03d}.txt")
+                stdout_path = output_path.with_name(f"{output_path.stem}.magicvoice{index:03d}.stdout.log")
+                stderr_path = output_path.with_name(f"{output_path.stem}.magicvoice{index:03d}.stderr.log")
+                text_part_path.write_text(chunk, encoding="utf-8")
+                self.log(f"Text to Voice {label}: MagicVoice đang clone đoạn {index}/{len(chunks)}")
                 command = [
-                    str(python),
-                    str(root / "cli.py"),
-                    "--text",
-                    chunk,
-                    "--lang",
-                    clone_lang,
+                    *python_cmd,
+                    str(Path(__file__).resolve().parent / "magicvoice_clone_cli.py"),
+                    "--text-file",
+                    str(text_part_path),
                     "--ref",
                     str(reference_path),
                     "--out",
                     str(part_path),
+                    "--steps",
+                    str(int(self.settings.get("magicvoice_steps") or 16)),
+                    "--speed",
+                    str(float(self.settings.get("text_to_voice_speed") or 1.0)),
+                    "--device",
+                    str(self.settings.get("magicvoice_device") or "auto"),
+                    "--dtype",
+                    str(self.settings.get("magicvoice_dtype") or "float16"),
                 ]
                 with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout, stderr_path.open("w", encoding="utf-8", errors="replace") as stderr:
                     result = subprocess.run(
                         command,
-                        cwd=str(root),
+                        cwd=str(Path(__file__).resolve().parents[1]),
                         stdout=stdout,
                         stderr=stderr,
                         text=True,
@@ -607,8 +638,9 @@ class TextToVoiceRunner:
                     for path in (stderr_path, stdout_path):
                         if path.exists():
                             detail += "\n" + path.read_text(encoding="utf-8", errors="replace")[-1600:]
-                    raise RuntimeError(f"KokoClone tạo voice thất bại ở đoạn {index}/{len(chunks)}.{detail}")
+                    raise RuntimeError(f"MagicVoice clone thất bại ở đoạn {index}/{len(chunks)}.{detail}")
                 generated_paths.append(part_path)
+                text_part_path.unlink(missing_ok=True)
 
             if len(generated_paths) == 1:
                 shutil.copy2(generated_paths[0], output_path)
@@ -628,11 +660,11 @@ class TextToVoiceRunner:
                         "audio": str(output_path),
                         "duration": round(float(duration), 4),
                         "sampleRate": 24000,
-                        "lang": clone_lang,
+                        "lang": str(self.settings.get("text_to_voice_language") or "vi"),
                         "voice": str(reference_path),
                         "speed": 1.0,
-                        "delivery": "kokoclone",
-                        "engine": "kokoclone",
+                        "delivery": "magicvoice-clone",
+                        "engine": "magicvoice",
                         "segments": [],
                     },
                     ensure_ascii=False,
@@ -645,7 +677,7 @@ class TextToVoiceRunner:
                 part_path.unlink(missing_ok=True)
 
         self._write_cache_meta(output_path, cache_key)
-        self.log(f"Text to Voice {label}: đã lưu audio clone {output_path.name} ({len(chunks)} phần)")
+        self.log(f"Text to Voice {label}: đã lưu audio clone MagicVoice {output_path.name} ({len(chunks)} phần)")
         return str(output_path)
 
     def _adaptive_timeout_seconds(self, chunk_estimate: int) -> int:
@@ -750,7 +782,7 @@ class TextToVoiceRunner:
             "speed": str(float(self.settings.get("text_to_voice_speed") or 1.0)),
             "delivery": str(self.settings.get("text_to_voice_delivery") or "dramatic"),
             "max_chars": str(int(self.settings.get("text_to_voice_max_chars") or 10000)),
-            "engine": "kokoclone" if bool(self.settings.get("voice_clone_enabled")) and _clone_reference_path(self.settings) else "kokoro",
+            "engine": "magicvoice" if bool(self.settings.get("voice_clone_enabled")) and _clone_reference_path(self.settings) else "kokoro",
             "voice_clone_reference_path": str(self.settings.get("voice_clone_reference_path") or ""),
             "voice_clone_engine": str(self.settings.get("voice_clone_engine") or ""),
             "segment_cleaner": "tts_clean_v6",

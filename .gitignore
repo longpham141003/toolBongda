@@ -6,6 +6,7 @@ settings.json
 # Generated projects and runtime state
 Projects/
 .webui_state
+.voice_preview/
 tmp_*/
 *.log
 
@@ -22,6 +23,19 @@ kokoro-tts-local/outputs/
 kokoro-tts-local/.voice_preview/
 kokoro-tts-local/__pycache__/
 kokoro-tts-local/*.log
+magic_voice/__pycache__/
+magic_voice/.deps_installed
+magic_voice/.cache_cleared_*
+magic_voice/.ffmpeg_bin_dir
+magic_voice/.login_cache
+magic_voice/.offline_auth
+magic_voice/.license
+magic_voice/app_config.json
+magic_voice/error_log.txt
+magic_voice/clone_refs/
+magic_voice/ffmpeg_portable/
+magic_voice/*.bak
+magic_voice/files.zip
 .venv/
 venv/
 

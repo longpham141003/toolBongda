@@ -429,7 +429,10 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
         "voice_clone_max_chars",
         "voice_clone_timeout",
         "voice_clone_setup_timeout",
-        "kokoclone_root",
+        "magicvoice_root",
+        "magicvoice_steps",
+        "magicvoice_dtype",
+        "magicvoice_device",
         "whisper_python",
         "whisper_timing_enabled",
         "whisper_timing_model",
@@ -702,7 +705,11 @@ async def upload_voice_clone_reference(file: UploadFile = File(...)) -> dict[str
     if suffix not in {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"}:
         raise HTTPException(status_code=400, detail="File mẫu phải là audio: wav, mp3, m4a, flac, ogg hoặc webm.")
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).stem).strip("._-") or "reference"
-    ref_dir = APP_DIR / "kokoclone-local" / "references"
+    settings = load_settings()
+    magic_root = Path(str(settings.get("magicvoice_root") or APP_DIR / "magic_voice"))
+    if not magic_root.is_absolute():
+        magic_root = APP_DIR / magic_root
+    ref_dir = magic_root / "clone_refs"
     ref_dir.mkdir(parents=True, exist_ok=True)
     target = ref_dir / f"{stem}{suffix}"
     counter = 1
@@ -714,7 +721,7 @@ async def upload_voice_clone_reference(file: UploadFile = File(...)) -> dict[str
     settings.update(
         {
             "voice_clone_enabled": True,
-            "voice_clone_engine": "kokoclone",
+            "voice_clone_engine": "magicvoice",
             "voice_clone_reference_path": str(target.resolve()),
             "voice_clone_reference_name": filename,
         }
@@ -864,7 +871,10 @@ def preview_voice(request: VoicePreviewRequest) -> dict[str, Any]:
             "voice_clone_max_chars",
             "voice_clone_timeout",
             "voice_clone_setup_timeout",
-            "kokoclone_root",
+            "magicvoice_root",
+            "magicvoice_steps",
+            "magicvoice_dtype",
+            "magicvoice_device",
         ):
             if key in request.settings:
                 settings[key] = request.settings[key]

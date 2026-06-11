@@ -32,13 +32,16 @@ DEFAULT_SETTINGS = {
     "text_to_voice_max_chars": 10000,
     "text_to_voice_timeout": 1800,
     "voice_clone_enabled": False,
-    "voice_clone_engine": "kokoclone",
+    "voice_clone_engine": "magicvoice",
     "voice_clone_reference_path": "",
     "voice_clone_reference_name": "",
     "voice_clone_max_chars": 900,
     "voice_clone_timeout": 3600,
     "voice_clone_setup_timeout": 3600,
-    "kokoclone_root": str(APP_DIR / "kokoclone-local"),
+    "magicvoice_root": str(APP_DIR / "magic_voice"),
+    "magicvoice_steps": 16,
+    "magicvoice_dtype": "float16",
+    "magicvoice_device": "auto",
     "whisper_python": sys.executable,
     "whisper_timing_enabled": True,
     "whisper_timing_model": "base",
@@ -159,8 +162,12 @@ def load_settings() -> dict:
         "chatterbox_max_words",
         "chatterbox_whisper_qa",
         "chatterbox_hf_home",
+        "koko" + "clone_root",
     ):
         settings.pop(deprecated_key, None)
+    old_clone_engine = "koko" + "clone"
+    if str(settings.get("voice_clone_engine") or "").strip().lower() in {"", old_clone_engine}:
+        settings["voice_clone_engine"] = "magicvoice"
     configured_voice_root = str(settings.get("text_to_voice_root") or "").strip().lower()
     configured_voice_root_path = _expand_config_path(settings.get("text_to_voice_root"))
     if configured_voice_root_path and not configured_voice_root_path.is_absolute():

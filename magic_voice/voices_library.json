@@ -1,0 +1,41 @@
+[
+  {
+    "name": "Auto",
+    "mode": "auto",
+    "ref_audio": "",
+    "ref_text": "",
+    "instruct": "",
+    "lang": "vi",
+    "speed": 1.0,
+    "volume": 1.0,
+    "pitch": 1.0,
+    "note": "Giọng tự động",
+    "created": ""
+  },
+  {
+    "name": "Nữ trẻ Anh",
+    "mode": "design",
+    "ref_audio": "",
+    "ref_text": "",
+    "instruct": "female, young, british accent",
+    "lang": "en",
+    "speed": 1.0,
+    "volume": 1.0,
+    "pitch": 1.0,
+    "note": "British English",
+    "created": ""
+  },
+  {
+    "name": "Nam trưởng thành",
+    "mode": "design",
+    "ref_audio": "",
+    "ref_text": "",
+    "instruct": "male, middle aged, american accent",
+    "lang": "en",
+    "speed": 1.0,
+    "volume": 1.0,
+    "pitch": 1.0,
+    "note": "American English",
+    "created": ""
+  }
+]

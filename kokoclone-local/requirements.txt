@@ -1,6 +1,0 @@
-﻿soundfile
-huggingface_hub
-kokoro-onnx
-misaki[en,ja,zh]
-numpy
-git+https://github.com/frothywater/kanade-tokenizer
