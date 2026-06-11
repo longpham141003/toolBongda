@@ -928,7 +928,7 @@ textarea {
 .media-filter-actions small { margin-right:4px; white-space:nowrap; }
 .media-grid {
   display:grid;
-  grid-template-columns:repeat(5,minmax(0,1fr));
+  grid-template-columns:repeat(4,minmax(0,1fr));
   gap:12px;
   overflow:visible;
   padding:2px 4px 12px;

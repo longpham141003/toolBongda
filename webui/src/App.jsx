@@ -1471,9 +1471,18 @@ function MediaReviewScreen({ assets, filteredAssets, assetFilter, setAssetFilter
       </div>
     </div>
     <div className="media-filter-row">
-      <div>
-        <span>Hiển thị</span>
-        <Select value={assetFilter} onValueChange={changeFilter} options={filterOptions.map(([value,label])=>({value,label:`${label} (${counts[value]})`}))}/>
+      <div className="media-filter-tabs">
+        {filterOptions.map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            className={cn("media-filter-tab", assetFilter === value && "active")}
+            onClick={() => changeFilter(value)}
+          >
+            {label}
+            <span className="tab-count">{counts[value]}</span>
+          </button>
+        ))}
       </div>
       <div className="media-filter-actions">
         <small>{filteredAssets.length} cảnh · trang {currentPage}/{pageCount}</small>
