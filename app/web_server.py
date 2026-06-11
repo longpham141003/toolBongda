@@ -425,10 +425,13 @@ def _public_settings() -> dict[str, Any]:
         profiles = []
     profiles = [
         item for item in profiles
-        if isinstance(item, dict) and Path(str(item.get("path") or "")).exists()
+        if isinstance(item, dict)
+        and str(item.get("path") or "").strip()
+        and Path(str(item.get("path"))).is_file()
     ]
-    legacy_ref = Path(str(settings.get("voice_clone_reference_path") or ""))
-    if legacy_ref.exists() and not any(Path(str(item.get("path") or "")) == legacy_ref for item in profiles):
+    legacy_raw = str(settings.get("voice_clone_reference_path") or "").strip()
+    legacy_ref = Path(legacy_raw) if legacy_raw else None
+    if legacy_ref is not None and legacy_ref.is_file() and not any(Path(str(item.get("path") or "")) == legacy_ref for item in profiles):
         legacy_name = str(settings.get("voice_clone_reference_name") or legacy_ref.stem).strip() or legacy_ref.stem
         legacy_profile = {
             "id": uuid.uuid5(uuid.NAMESPACE_URL, str(legacy_ref.resolve())).hex[:12],

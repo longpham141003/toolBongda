@@ -176,10 +176,13 @@ def load_settings() -> dict:
         profiles = []
     profiles = [
         item for item in profiles
-        if isinstance(item, dict) and _expand_config_path(item.get("path")).exists()
+        if isinstance(item, dict)
+        and str(item.get("path") or "").strip()
+        and _expand_config_path(item.get("path")).is_file()
     ]
-    legacy_ref = _expand_config_path(settings.get("voice_clone_reference_path"))
-    if legacy_ref.exists() and not any(_expand_config_path(item.get("path")).resolve() == legacy_ref.resolve() for item in profiles):
+    legacy_raw = str(settings.get("voice_clone_reference_path") or "").strip()
+    legacy_ref = _expand_config_path(legacy_raw)
+    if legacy_raw and legacy_ref.is_file() and not any(_expand_config_path(item.get("path")).resolve() == legacy_ref.resolve() for item in profiles):
         legacy_name = str(settings.get("voice_clone_reference_name") or legacy_ref.stem).strip() or legacy_ref.stem
         legacy_profile = {
             "id": uuid.uuid5(uuid.NAMESPACE_URL, str(legacy_ref.resolve())).hex[:12],
