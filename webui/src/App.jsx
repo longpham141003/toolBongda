@@ -1700,7 +1700,7 @@ function SettingSection({ title, icon: Icon, children }) {
 }
 
 function Field({ label, children }) {
-  return <label className="block"><span className="mb-1.5 block text-[11px] font-medium text-zinc-500">{label}</span>{children}</label>
+  return <label className="block min-w-0"><span className="mb-1.5 block text-[11px] font-medium text-zinc-500">{label}</span>{children}</label>
 }
 
 export default App

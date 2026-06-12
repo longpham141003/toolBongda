@@ -531,7 +531,7 @@ textarea {
 .screen-heading.compact h1 { font-size: var(--text-md); }
 .scene-layout, .export-layout { display:grid; min-height:auto; flex:0 0 auto; gap:16px; }
 .scene-layout, .export-layout { grid-template-columns: 1fr 1fr; }
-.screen-panel { min-height:auto; overflow:visible; padding:20px; }
+.screen-panel { min-width:0; min-height:auto; overflow:visible; padding:20px; }
 .scene-layout .screen-panel { display:flex; flex-direction:column; }
 .panel-title {
   display: flex;
@@ -1469,13 +1469,16 @@ textarea {
 
 .clone-dialog-grid {
   display: grid;
-  grid-template-columns: 1.4fr 0.7fr;
+  grid-template-columns: minmax(0, 1.4fr) minmax(112px, 0.7fr);
   gap: var(--sp-3);
   margin-bottom: var(--sp-3);
 }
 
 .clone-upload-zone {
   display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -1487,6 +1490,7 @@ textarea {
   color: #94a3b8;
   text-align: center;
   cursor: pointer;
+  overflow: hidden;
   padding: var(--sp-5);
   transition: border-color 0.2s, background 0.2s;
 }
@@ -1497,18 +1501,28 @@ textarea {
 }
 
 .clone-upload-zone b {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
   color: #e5e1e4;
   font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .clone-upload-zone span {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
   font-size: var(--text-xs);
   line-height: 1.5;
+  text-overflow: ellipsis;
 }
 
 .voice-screen-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--sp-4);
 }
 .voice-progress-panel { border:1px solid rgba(208,188,255,.22); border-radius:18px; background:rgba(160,120,255,.08); padding:14px 16px; }

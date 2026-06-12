@@ -83,19 +83,20 @@ export const DialogTitle = ({ className, ...props }) => <DialogPrimitive.Title c
 export const DialogDescription = ({ className, ...props }) => <DialogPrimitive.Description className={cn("mt-1 text-sm text-zinc-500", className)} {...props} />
 
 export function Select({ value, onValueChange, options, placeholder = "Chọn" }) {
+  const selected = options.find((option) => option.value === value)
   return (
     <SelectPrimitive.Root value={value} onValueChange={onValueChange}>
       <SelectPrimitive.Trigger className="flex h-11 w-full min-w-0 items-center justify-between overflow-hidden rounded-xl border border-white/10 bg-black/24 px-3 text-left text-sm text-zinc-200 outline-none transition focus:border-violet-400/60 focus:ring-2 focus:ring-violet-500/20">
-        <SelectPrimitive.Value placeholder={placeholder} className="truncate" />
+        <span className={cn("block min-w-0 flex-1 overflow-hidden truncate whitespace-nowrap", selected ? "text-zinc-200" : "text-zinc-500")}>{selected?.label || placeholder}</span>
         <SelectPrimitive.Icon className="ml-2 shrink-0"><ChevronDown className="h-4 w-4 text-zinc-500" /></SelectPrimitive.Icon>
       </SelectPrimitive.Trigger>
       <SelectPrimitive.Portal>
         <SelectPrimitive.Content position="popper" className="z-[70] min-w-[var(--radix-select-trigger-width)] max-w-[min(680px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-white/10 bg-zinc-900 p-1 text-zinc-200 shadow-2xl">
           <SelectPrimitive.Viewport>
             {options.map((option) => (
-              <SelectPrimitive.Item key={option.value} value={option.value} className="relative flex min-w-0 cursor-pointer select-none items-center rounded-lg py-2 pl-8 pr-3 text-sm outline-none data-[highlighted]:bg-white/10">
+              <SelectPrimitive.Item key={option.value} value={option.value} className="relative flex w-full min-w-0 cursor-pointer select-none items-center rounded-lg py-2 pl-8 pr-3 text-sm outline-none data-[highlighted]:bg-white/10">
                 <SelectPrimitive.ItemIndicator className="absolute left-2"><Check className="h-4 w-4" /></SelectPrimitive.ItemIndicator>
-                <SelectPrimitive.ItemText><span className="block truncate">{option.label}</span></SelectPrimitive.ItemText>
+                <SelectPrimitive.ItemText><span className="block max-w-[min(620px,calc(100vw-5rem))] overflow-hidden truncate whitespace-nowrap">{option.label}</span></SelectPrimitive.ItemText>
               </SelectPrimitive.Item>
             ))}
           </SelectPrimitive.Viewport>
