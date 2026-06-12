@@ -672,7 +672,7 @@ function App() {
     }
     const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: payload }) })
     setSettings(data.settings)
-    setToast(makeDefault ? `Đã đặt mặc định: ${payload.voice_clone_reference_name}` : `Đã chọn giọng clone: ${payload.voice_clone_reference_name}`)
+    if (makeDefault) setToast(`Đã đặt mặc định: ${payload.voice_clone_reference_name}`)
   }
 
   async function runPreflight() {
@@ -1277,7 +1277,6 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
   const [cloneName, setCloneName] = useState("")
   const [cloneLanguage, setCloneLanguage] = useState("vi")
   const [pendingCloneFile, setPendingCloneFile] = useState(null)
-  const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
   const cloneInputRef = useRef(null)
   const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
   const cloneProfiles = Array.isArray(settings.voice_clone_profiles) ? settings.voice_clone_profiles : []
@@ -1293,7 +1292,7 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
   const cloneVoiceNow = async () => {
     if (!pendingCloneFile) return
     const latestSettings = await saveCloneVoice(pendingCloneFile, {
-      name: cloneName,
+      name: cloneName.trim() || pendingCloneFile.name.replace(/\.[^.]+$/, ""),
       language: cloneLanguage,
       setDefault: true,
     })
@@ -1330,38 +1329,17 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
       <div><b>Không biết chọn gì?</b><span>Bấm nút này để tool tự chọn ngôn ngữ, chế độ ổn định và tắt kiểm tra chậm cho script dài.</span></div>
       <Button variant="secondary" onClick={applyBeginnerVoicePreset} disabled={isBusy}><WandSparkles className="h-4 w-4" /> Dùng cấu hình dễ nhất</Button>
     </div>
-    <Dialog open={cloneDialogOpen} onOpenChange={setCloneDialogOpen}>
-      <DialogContent>
-        <DialogTitle>Thêm giọng clone mới</DialogTitle>
-        <DialogDescription>Tải file audio mẫu, đặt tên và chọn ngôn ngữ.</DialogDescription>
-        <div className="clone-dialog-grid">
-          <Field label="Tên giọng"><Input value={cloneName} onChange={(e)=>setCloneName(e.target.value)} placeholder="Ví dụ: AnhQuan, GiongKeChuyen..." /></Field>
-          <Field label="Ngôn ngữ"><Input value={cloneLanguage} onChange={(e)=>setCloneLanguage(e.target.value)} placeholder="vi, en, fr..." /></Field>
-        </div>
-        <button type="button" className="clone-upload-zone" onClick={() => cloneInputRef.current?.click()}>
-          <Upload className="h-8 w-8 text-emerald-300" />
-          <b>{pendingCloneFile ? `Đã chọn: ${pendingCloneFile.name}` : "Tải audio mẫu clone"}</b>
-          <span>Nên dùng file WAV/MP3 sạch, chỉ một người nói, dài khoảng 10-30 giây.</span>
-        </button>
-        <input ref={cloneInputRef} type="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg,.webm" className="hidden" onChange={(e)=>setPendingCloneFile(e.target.files?.[0] || null)} />
-        <p className="mt-3 text-xs text-slate-500">Lần đầu clone có thể lâu vì tool tự cài thư viện cần thiết.</p>
-        <Button className="mt-4 w-full" disabled={!pendingCloneFile || isBusy || voicePreviewBusy} onClick={async () => { await cloneVoiceNow(); setCloneDialogOpen(false) }}>
-          {voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}
-          {voicePreviewBusy ? "Đang lưu và tạo nghe thử..." : "Clone voice"}
-        </Button>
-      </DialogContent>
-    </Dialog>
     {isBusy && busyAction === "voice" && <div className="voice-progress-panel">
       <div className="voice-progress-head"><b>{userProgress?.title || "Đang tạo giọng đọc và timing"}</b><span>{progress}%</span></div>
       <i><em style={{width:`${progress}%`}} /></i>
       <div className="voice-progress-log">{progressMessages.map((message, index)=><p key={index}>{message}</p>)}</div>
     </div>}
-    <div className="voice-mode-tabs">
-      <button className={cn(voiceMode==="normal" && "active")} onClick={chooseNormalMode}><FileAudio className="h-5 w-5" /><span><b>Giọng có sẵn</b><small>Nhanh, ổn định</small></span></button>
-      <button className={cn(voiceMode==="clone" && "active")} onClick={()=>setVoiceMode("clone")}><Mic className="h-5 w-5" /><span><b>Giọng đã clone</b><small>Dùng giọng riêng đã lưu</small></span></button>
-    </div>
     <div className="voice-screen-grid">
       <div className="glass-panel screen-panel flex flex-col">
+        <div className="voice-choice-buttons">
+          <button className={cn(voiceMode==="normal" && "active")} onClick={chooseNormalMode}><FileAudio className="h-4 w-4" /><span>Giọng có sẵn</span></button>
+          <button className={cn(voiceMode==="clone" && "active")} onClick={()=>setVoiceMode("clone")}><Mic className="h-4 w-4" /><span>Giọng đã clone</span></button>
+        </div>
         {voiceMode === "normal" ? <>
           <div className="panel-title"><h2>Giọng có sẵn</h2><Button variant="ghost" size="sm" onClick={() => refreshVoices(settings.text_to_voice_language || "en")}><RefreshCw className="h-4 w-4" /> Tải lại</Button></div>
           <Field label="Ngôn ngữ đọc"><Select value={voiceLanguage} onValueChange={changeVoiceLanguage} options={voiceLanguageOptions} /></Field>
@@ -1372,17 +1350,27 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
               options={voiceOptions.map((voice) => ({ value: voice.value, label: voice.label }))}
             />
           </Field>
-          <div className="voice-mode-help"><FileAudio className="h-5 w-5"/><span>Phù hợp để test nhanh, ổn định, không cần audio mẫu.</span></div>
           <div className="voice-left-actions">
             <Button variant="secondary" onClick={() => previewVoiceNow()} disabled={voicePreviewBusy}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button>
           </div>
         </> : <>
-          <div className="panel-title"><div><h2>Giọng đã clone</h2><p>Clone một lần, lần sau chỉ chọn lại và nghe thử ngay.</p></div><Button variant="secondary" size="sm" onClick={() => setCloneDialogOpen(true)}><Upload className="h-4 w-4" /> Tải tệp clone</Button></div>
-          <button className="clone-upload-inline" onClick={() => setCloneDialogOpen(true)}>
-            <Mic className="h-5 w-5" />
-            <span><b>Clone voice mới</b><small>Tải file MP3/WAV mẫu 10-30 giây</small></span>
-            <Plus className="h-4 w-4" />
-          </button>
+          <div className="panel-title"><div><h2>Giọng đã clone</h2><p>Tải audio mẫu, bấm Clone giọng một lần, lần sau chỉ chọn lại.</p></div></div>
+          <div className="clone-inline-card">
+            <div className="clone-dialog-grid">
+              <Field label="Tên giọng"><Input value={cloneName} onChange={(e)=>setCloneName(e.target.value)} placeholder="Ví dụ: BLV Anh Quân" /></Field>
+              <Field label="Ngôn ngữ"><Input value={cloneLanguage} onChange={(e)=>setCloneLanguage(e.target.value)} placeholder="vi, en, fr..." /></Field>
+            </div>
+            <button type="button" className="clone-upload-zone compact" onClick={() => cloneInputRef.current?.click()}>
+              <Upload className="h-6 w-6 text-emerald-300" />
+              <b>{pendingCloneFile ? pendingCloneFile.name : "Tải audio mẫu clone"}</b>
+              <span>WAV/MP3 sạch, một người nói, khoảng 10-30 giây.</span>
+            </button>
+            <input ref={cloneInputRef} type="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg,.webm" className="hidden" onChange={(e)=>setPendingCloneFile(e.target.files?.[0] || null)} />
+            <Button disabled={!pendingCloneFile || isBusy || voicePreviewBusy} onClick={cloneVoiceNow}>
+              {voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}
+              {voicePreviewBusy ? "Đang clone và tạo nghe thử..." : "Clone giọng"}
+            </Button>
+          </div>
           {cloneProfiles.length > 0 ? <div className="saved-voice-list clone-picker-list">
             {cloneProfiles.map((item) => {
               const active = item.id === selectedCloneId
