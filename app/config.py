@@ -36,6 +36,7 @@ DEFAULT_SETTINGS = {
     "voice_clone_engine": "magicvoice",
     "voice_clone_reference_path": "",
     "voice_clone_reference_name": "",
+    "voice_clone_preview_url": "",
     "voice_clone_profiles": [],
     "voice_clone_default_id": "",
     "voice_clone_max_chars": 900,

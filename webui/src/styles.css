@@ -914,6 +914,10 @@ textarea {
 .project-row { width:100%; align-items:center; text-align:left; transition:.24s; }
 .project-row:hover { border-color:rgba(208,188,255,.28); background:rgba(160,120,255,.08); transform:translateY(-1px); }
 .project-row.active { border-color:rgba(78,222,163,.28); background:rgba(78,222,163,.07); }
+.project-row.managed { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; }
+.project-row.managed > button:first-child { display:flex; min-width:0; align-items:center; gap:12px; text-align:left; }
+.project-row-actions { display:flex; gap:6px; }
+.project-row-actions button { height:32px; padding:0 9px; font-size:11px; }
 .project-row svg { width:20px; height:20px; color:#d0bcff; }
 .project-row b { color:white; font-size:13px; }
 .project-row small { display:block; max-width:560px; overflow:hidden; color:#94a3b8; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }

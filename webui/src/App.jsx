@@ -186,6 +186,7 @@ function App() {
   const [settings, setSettings] = useState({})
   const [voiceOptions, setVoiceOptions] = useState([{ value: "af_heart", label: "af_heart" }])
   const [workflowInput, setWorkflowInput] = useState("")
+  const [projectCategory, setProjectCategory] = useState("")
   const [workflowSteps, setWorkflowSteps] = useState(defaultSteps)
   const [activeJob, setActiveJob] = useState(null)
   const [logs, setLogs] = useState([])
@@ -465,7 +466,7 @@ function App() {
   async function createProject() {
     if (!script.trim()) return setError("Hãy nhập script trước khi tạo project.")
     try {
-      const data = await api("/api/projects", { method: "POST", body: JSON.stringify({ title, script }) })
+      const data = await api("/api/projects", { method: "POST", body: JSON.stringify({ title, script, category: projectCategory }) })
       setState((current) => ({ ...current, project: data.project }))
       setTitle(data.project.name)
       setToast("Đã lưu nội dung. Bước tiếp theo: tạo giọng đọc.")
@@ -528,6 +529,7 @@ function App() {
     setScript("")
     setTitle("")
     setWorkflowInput("")
+    setProjectCategory("")
     setLogs([])
     setError("")
     setToast("")
@@ -544,14 +546,49 @@ function App() {
     const language = looksLikeEnglish(script) ? "en" : normalizeVoiceLanguage(settings.text_to_voice_language || "en")
     const options = await refreshVoices(language)
     const preferredVoice = options?.find((voice) => /heart|bella|sarah|michael/i.test(voice.value || voice.label)) || options?.[0]
-    setSettings((current) => ({
-      ...current,
+    const nextSettings = {
+      ...settings,
       text_to_voice_language: language,
-      text_to_voice_voice: preferredVoice?.value || current.text_to_voice_voice || "af_heart",
+      text_to_voice_voice: preferredVoice?.value || settings.text_to_voice_voice || "af_heart",
       text_to_voice_delivery: "natural",
       text_to_voice_speed: 1,
-    }))
-    setToast("Đã chọn cấu hình giọng dễ dùng. Có thể bấm Nghe thử hoặc Tạo giọng đọc.")
+      voice_clone_enabled: false,
+      voice_clone_preview_url: "",
+    }
+    const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: nextSettings }) })
+    setSettings(data.settings)
+    setToast("Đã chọn cấu hình dễ nhất: giọng thường ổn định, tốc độ 1.0.")
+  }
+
+  async function renameProject(path, currentName) {
+    const title = window.prompt("Tên project mới", currentName || "")
+    if (!title || !title.trim()) return
+    try {
+      const data = await api("/api/projects/rename", { method: "POST", body: JSON.stringify({ path, title }) })
+      if (project?.path === path) {
+        setState((current) => ({ ...current, project: data.project }))
+        setTitle(data.project.name)
+      }
+      await loadState(true)
+      setToast("Đã đổi tên project")
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  async function deleteProject(path, name) {
+    if (!window.confirm(`Xóa project "${name}"? Thao tác này không hoàn tác.`)) return
+    try {
+      await api("/api/projects/delete", { method: "POST", body: JSON.stringify({ path }) })
+      if (project?.path === path) {
+        setState((current) => ({ ...(current || {}), project: null }))
+        setActiveScreen("home")
+      }
+      await loadState(true)
+      setToast("Đã xóa project")
+    } catch (err) {
+      setError(err.message)
+    }
   }
 
   async function approveAsset(assetId) {
@@ -629,6 +666,7 @@ function App() {
       voice_clone_engine: "magicvoice",
       voice_clone_reference_path: profile.path || "",
       voice_clone_reference_name: profile.name || profile.file_name || "Giọng clone",
+      voice_clone_preview_url: profile.preview_url || "",
       voice_clone_profiles: profiles,
       voice_clone_default_id: makeDefault ? profile.id : (settings.voice_clone_default_id || ""),
     }
@@ -661,6 +699,7 @@ function App() {
         voice_clone_engine: settings.voice_clone_engine || "magicvoice",
         voice_clone_reference_path: settings.voice_clone_reference_path || "",
         voice_clone_reference_name: settings.voice_clone_reference_name || "",
+        voice_clone_preview_url: settings.voice_clone_preview_url || "",
       }
       const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: voiceSettings }) })
       setSettings(data.settings)
@@ -675,6 +714,10 @@ function App() {
       setVoicePreviewBusy(true)
       setVoicePreviewUrl("")
       const sourceSettings = settingsOverride && !settingsOverride?.nativeEvent ? settingsOverride : settings
+      if (!textOverride && sourceSettings.voice_clone_enabled && sourceSettings.voice_clone_preview_url) {
+        setVoicePreviewUrl(`${sourceSettings.voice_clone_preview_url}${sourceSettings.voice_clone_preview_url.includes("?") ? "&" : "?"}v=${Date.now()}`)
+        return { url: sourceSettings.voice_clone_preview_url, cached: true }
+      }
       const voiceLanguage = normalizeVoiceLanguage(sourceSettings.text_to_voice_language || "en")
       const safeSettings = {
         ...sourceSettings,
@@ -689,6 +732,7 @@ function App() {
       })
       if (data.warning) setToast(data.warning)
       setVoicePreviewUrl(`${data.url}${data.url?.includes("?") ? "&" : "?"}v=${Date.now()}`)
+      return data
     } catch (err) {
       setError(err.message)
     } finally {
@@ -807,8 +851,11 @@ function App() {
             workflowInput={workflowInput}
             setWorkflowInput={setWorkflowInput}
             startJob={startJob}
+            projectCategory={projectCategory}
+            setProjectCategory={setProjectCategory}
+            categories={state.categories || []}
           />}
-          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
+          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} userProgress={userProgress} />}
           {activeScreen === "step3a" && <SceneScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step3b" && <MediaReviewScreen assets={assets} filteredAssets={filteredAssets} assetFilter={assetFilter} setAssetFilter={setAssetFilter} project={project} assetJobs={assetJobs} statusBadge={statusBadge} setLightboxIndex={setLightboxIndex} startJob={startJob} approveAsset={approveAsset} chooseAssetMedia={chooseAssetMedia} bulkRetryAssets={bulkRetryAssets} isBusy={isBusy} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step4" && <ExportScreen project={project} assets={assets} preflight={preflight} runPreflight={runPreflight} startJob={startJob} title={title} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
@@ -816,7 +863,7 @@ function App() {
       )}
 
       <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} setSettings={setSettings} workflowSteps={workflowSteps} setWorkflowSteps={setWorkflowSteps} workflowPresets={workflowPresets} applyWorkflowPreset={applyWorkflowPreset} updateStep={updateStep} presetName={presetName} setPresetName={setPresetName} saveCurrentWorkflowAsPreset={saveCurrentWorkflowAsPreset} saveSettings={saveSettings} runPreflight={runPreflight} preflight={preflight} />
-      <ProjectsModal open={projectsOpen} onOpenChange={setProjectsOpen} state={state} project={project} openProject={openProject} />
+      <ProjectsModal open={projectsOpen} onOpenChange={setProjectsOpen} state={state} project={project} openProject={openProject} renameProject={renameProject} deleteProject={deleteProject} />
       <Lightbox open={lightboxIndex !== null} setLightboxIndex={setLightboxIndex} lightboxIndex={lightboxIndex} assets={assets} lightboxAsset={lightboxAsset} assetJobs={assetJobs} statusBadge={statusBadge} startJob={startJob} approveAsset={approveAsset} chooseAssetMedia={chooseAssetMedia} editingAssetId={editingAssetId} setEditingAssetId={setEditingAssetId} editingKeywordValue={editingKeywordValue} setEditingKeywordValue={setEditingKeywordValue} saveKeyword={saveKeyword} />
       <Dialog open={showApiKeyNotice} onOpenChange={(open) => !open && setApiKeyNoticeDismissed(true)}>
         <DialogContent className="api-key-dialog max-w-xl">
@@ -1190,12 +1237,16 @@ function FlowCard({ icon: Icon, title, desc, accent = "violet", dashed, onClick 
   </button>
 }
 
-function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob }) {
+function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categories = [] }) {
   return <div className="step-screen">
     <div className="screen-heading"><h1>Bước 1 - Chuẩn bị nội dung</h1><p>Dán kịch bản cuối hoặc tải file TXT. Đây là nội dung giọng đọc sẽ đọc ở bước sau.</p></div>
     <div className="panel">
       <div className="panel-title"><div><h2>Kịch bản cuối</h2><p>Nội dung giọng đọc sẽ đọc</p></div><FileText className="text-violet-300" /></div>
       <Field label="Tên project"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ví dụ: Brazil vs Panama" /></Field>
+      <Field label="Chủ đề / thư mục lưu project">
+        <Input list="project-category-list" value={projectCategory} onChange={(e) => setProjectCategory(e.target.value)} placeholder="Ví dụ: Bóng đá, Nấu ăn, Khoa học..." />
+        <datalist id="project-category-list">{categories.map((item) => <option key={item} value={item} />)}</datalist>
+      </Field>
       <div className="mt-4 flex-1"><Textarea className="h-full min-h-[400px]" value={script} onChange={(e) => setScript(e.target.value)} placeholder="Dán kịch bản cuối vào đây..." /></div>
       <div className="mt-4 flex items-center gap-2">
         <input ref={scriptFileInputRef} type="file" accept=".txt,text/plain" className="hidden" onChange={(e) => uploadTxtFile(e.target.files?.[0])} />
@@ -1238,21 +1289,19 @@ function WorkflowPanel({ workflowInput, setWorkflowInput, workflowSteps, setting
   </div>
 }
 
-function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, saveCloneVoice, selectSavedCloneVoice, isBusy, busyAction, setActiveScreen }) {
+function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, saveCloneVoice, selectSavedCloneVoice, isBusy, busyAction, setActiveScreen, userProgress }) {
   const [cloneName, setCloneName] = useState("")
   const [cloneLanguage, setCloneLanguage] = useState("vi")
   const [pendingCloneFile, setPendingCloneFile] = useState(null)
   const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
   const cloneInputRef = useRef(null)
-  const languageMismatch = looksLikeEnglish(script) && (settings.text_to_voice_language || "en") !== "en"
   const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
   const cloneProfiles = Array.isArray(settings.voice_clone_profiles) ? settings.voice_clone_profiles : []
   const selectedClone = cloneProfiles.find((item) => item.path === settings.voice_clone_reference_path)
   const selectedCloneId = selectedClone?.id || ""
   const usingClone = Boolean(settings.voice_clone_enabled && selectedClone)
-  const selectedVoiceLabel = usingClone
-    ? selectedClone.name
-    : (voiceOptions.find((voice) => voice.value === settings.text_to_voice_voice)?.label || settings.text_to_voice_voice || "Giọng thường")
+  const [voiceMode, setVoiceMode] = useState(usingClone ? "clone" : "normal")
+  useEffect(() => { setVoiceMode(usingClone ? "clone" : "normal") }, [usingClone])
   const changeVoiceLanguage = (language) => setSettings({
     ...settings,
     text_to_voice_language: language,
@@ -1265,36 +1314,38 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
       setDefault: true,
     })
     setPendingCloneFile(null)
-    await previewVoiceNow(
+    const preview = await previewVoiceNow(
       latestSettings,
       cloneLanguage.toLowerCase().startsWith("vi")
         ? "Đây là đoạn nghe thử giọng vừa lưu. Hãy kiểm tra độ giống giọng, tốc độ đọc và độ rõ của âm thanh."
         : "This is a short preview of the saved cloned voice. Check the tone, pace, and clarity."
     )
+    if (preview?.url) {
+      const profiles = Array.isArray(latestSettings.voice_clone_profiles) ? latestSettings.voice_clone_profiles : []
+      const selectedPath = latestSettings.voice_clone_reference_path
+      const nextProfiles = profiles.map((item) => item.path === selectedPath ? { ...item, preview_url: preview.url } : item)
+      const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: { ...latestSettings, voice_clone_profiles: nextProfiles, voice_clone_preview_url: preview.url } }) })
+      setSettings(data.settings)
+    }
+    setVoiceMode("clone")
   }
+  const chooseNormalMode = () => {
+    setVoiceMode("normal")
+    setSettings({ ...settings, voice_clone_enabled:false, voice_clone_reference_path:"", voice_clone_reference_name:"", voice_clone_preview_url:"" })
+  }
+  const chooseCloneProfile = async (profile) => {
+    if (!profile) return
+    setVoiceMode("clone")
+    await selectSavedCloneVoice(profile, false)
+  }
+  const progress = Math.max(0, Math.min(100, Math.round(userProgress?.percent || 0)))
+  const progressMessages = userProgress?.messages || []
   return <div className="step-screen">
     <div className="screen-heading"><h1>Bước 2 - Chọn giọng đọc cho video</h1><p>Chọn giọng, nghe thử, rồi tạo file đọc để bước sau tự chia cảnh.</p></div>
-    <div className="voice-choice-summary">
-      <div className={cn("voice-summary-card", !usingClone && "active")}>
-        <FileAudio className="h-5 w-5" />
-        <div><b>Giọng thường</b><span>{!usingClone ? `Đang chọn: ${selectedVoiceLabel}` : "Nhanh, ổn định, dùng ngay"}</span></div>
-        {!usingClone && <Check className="h-5 w-5" />}
-      </div>
-      <div className={cn("voice-summary-card", usingClone && "active clone")}>
-        <Mic className="h-5 w-5" />
-        <div><b>Giọng clone</b><span>{usingClone ? `Đang chọn: ${selectedClone.name}` : cloneProfiles.length ? `${cloneProfiles.length} giọng đã lưu` : "Chưa có giọng clone"}</span></div>
-        {usingClone && <Check className="h-5 w-5" />}
-      </div>
-      <div className={cn("voice-summary-card", project?.voice_path && "done")}>
-        <CheckCircle2 className="h-5 w-5" />
-        <div><b>File voice video</b><span>{project?.voice_path ? "Đã tạo, có thể tạo cảnh" : "Chưa tạo voice cho script này"}</span></div>
-      </div>
-    </div>
     <div className="recommended-action">
       <div><b>Không biết chọn gì?</b><span>Bấm nút này để tool tự chọn ngôn ngữ, chế độ ổn định và tắt kiểm tra chậm cho script dài.</span></div>
       <Button variant="secondary" onClick={applyBeginnerVoicePreset} disabled={isBusy}><WandSparkles className="h-4 w-4" /> Dùng cấu hình dễ nhất</Button>
     </div>
-    {languageMismatch && <div className="ux-warning"><AlertTriangle className="h-4 w-4" /><span>Script có vẻ là tiếng Anh nhưng ngôn ngữ giọng đang không phải English. Giọng có thể phát âm sai.</span><button onClick={() => setSettings({...settings, text_to_voice_language:"en", text_to_voice_voice:"af_heart"})}>Đổi sang English</button></div>}
     <Dialog open={cloneDialogOpen} onOpenChange={setCloneDialogOpen}>
       <DialogContent>
         <DialogTitle>Thêm giọng clone mới</DialogTitle>
@@ -1316,52 +1367,40 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
         </Button>
       </DialogContent>
     </Dialog>
+    {isBusy && busyAction === "voice" && <div className="voice-progress-panel">
+      <div className="voice-progress-head"><b>{userProgress?.title || "Đang tạo giọng đọc và timing"}</b><span>{progress}%</span></div>
+      <i><em style={{width:`${progress}%`}} /></i>
+      <div className="voice-progress-log">{progressMessages.map((message, index)=><p key={index}>{message}</p>)}</div>
+    </div>}
+    <div className="voice-mode-tabs">
+      <button className={cn(voiceMode==="normal" && "active")} onClick={chooseNormalMode}><FileAudio className="h-4 w-4" /><span>Giọng có sẵn</span></button>
+      <button className={cn(voiceMode==="clone" && "active")} onClick={()=>setVoiceMode("clone")}><Mic className="h-4 w-4" /><span>Giọng đã clone</span></button>
+    </div>
     <div className="voice-screen-grid">
       <div className="glass-panel screen-panel flex flex-col">
-        <div className="panel-title"><h2>Chọn giọng đọc</h2><Button variant="ghost" size="sm" onClick={() => refreshVoices(settings.text_to_voice_language || "en")}><RefreshCw className="h-4 w-4" /> Tải lại</Button></div>
-        <Field label="Ngôn ngữ đọc"><Select value={voiceLanguage} onValueChange={changeVoiceLanguage} options={voiceLanguageOptions} /></Field>
-        <Field label="Giọng thường">
-          <Select
-            value={settings.text_to_voice_voice || voiceOptions[0]?.value || "af_heart"}
-            onValueChange={(value) => setSettings({...settings, text_to_voice_voice:value, voice_clone_enabled:false})}
-            options={voiceOptions.map((voice) => ({ value: voice.value, label: voice.label }))}
-          />
-        </Field>
-        <div className="saved-voice-box">
-          <div className="flex items-center justify-between gap-3">
-            <div><b>Giọng clone đã lưu</b><p>Clone một lần, lần sau chỉ cần chọn lại ở đây.</p></div>
-          </div>
-          <Select
-            value={selectedCloneId}
-            placeholder={cloneProfiles.length ? "Chọn giọng clone" : "Chưa có giọng clone"}
-            onValueChange={(id) => {
-              const profile = cloneProfiles.find((item) => item.id === id)
-              selectSavedCloneVoice(profile, false).catch((err) => setSettings({...settings, voice_clone_enabled:false, voice_clone_reference_path:"", voice_clone_reference_name:""}))
-            }}
-            options={cloneProfiles.length ? cloneProfiles.map((item) => ({
-              value: item.id,
-              label: `${item.name}${item.language ? ` · ${item.language}` : ""}`,
-            })) : [{ value: "__none", label: "Chưa có giọng clone đã lưu" }]}
-          />
-          {cloneProfiles.length > 0 ? <div className="saved-voice-list">
+        {voiceMode === "normal" ? <>
+          <div className="panel-title"><h2>Giọng có sẵn</h2><Button variant="ghost" size="sm" onClick={() => refreshVoices(settings.text_to_voice_language || "en")}><RefreshCw className="h-4 w-4" /> Tải lại</Button></div>
+          <Field label="Ngôn ngữ đọc"><Select value={voiceLanguage} onValueChange={changeVoiceLanguage} options={voiceLanguageOptions} /></Field>
+          <Field label="Chọn giọng">
+            <Select
+              value={settings.text_to_voice_voice || voiceOptions[0]?.value || "af_heart"}
+              onValueChange={(value) => setSettings({...settings, text_to_voice_voice:value, voice_clone_enabled:false, voice_clone_preview_url:""})}
+              options={voiceOptions.map((voice) => ({ value: voice.value, label: voice.label }))}
+            />
+          </Field>
+          <div className="voice-mode-help"><FileAudio className="h-5 w-5"/><span>Phù hợp để test nhanh, ổn định, không cần audio mẫu.</span></div>
+        </> : <>
+          <div className="panel-title"><div><h2>Giọng đã clone</h2><p>Clone một lần, lần sau chỉ chọn lại và nghe thử ngay.</p></div><Button variant="ghost" size="sm" onClick={() => setCloneDialogOpen(true)}><Plus className="h-4 w-4" /> Thêm clone</Button></div>
+          {cloneProfiles.length > 0 ? <div className="saved-voice-list clone-picker-list">
             {cloneProfiles.map((item) => {
               const active = item.id === selectedCloneId
-              return <button
-                type="button"
-                key={item.id}
-                className={cn("saved-voice-row", active && "active")}
-                onClick={() => selectSavedCloneVoice(item, false)}
-              >
-                <span><b>{item.name}</b><small>{item.language || "voice clone"}</small></span>
+              return <button type="button" key={item.id} className={cn("saved-voice-row", active && "active")} onClick={() => chooseCloneProfile(item)}>
+                <span><b>{item.name}</b><small>{item.language || "voice clone"}{item.preview_url ? " · có nghe thử nhanh" : " · chưa cache nghe thử"}</small></span>
                 {active && <Check className="h-5 w-5" />}
               </button>
             })}
-          </div> : <div className="clone-empty-hint"><Mic className="h-5 w-5" /><span>Chưa có giọng clone. Bấm “Thêm clone mới”, tải audio mẫu và tool sẽ lưu giọng vào danh sách này.</span></div>}
-          <div className="saved-voice-actions">
-            <Button variant="secondary" size="sm" disabled={!selectedClone} onClick={() => setSettings({...settings, voice_clone_enabled:false, voice_clone_reference_path:"", voice_clone_reference_name:""})}>Dùng giọng thường</Button>
-            <Button variant="secondary" size="sm" onClick={() => setCloneDialogOpen(true)}><Plus className="h-4 w-4" /> Thêm clone mới</Button>
-          </div>
-        </div>
+          </div> : <div className="clone-empty-hint"><Mic className="h-5 w-5" /><span>Chưa có giọng clone. Bấm “Thêm clone”, tải audio mẫu và tool sẽ lưu giọng vào danh sách này.</span></div>}
+        </>}
       </div>
       <div className="glass-panel screen-panel flex flex-col">
         <div className="panel-title"><div><h3>Cài đặt giọng đọc</h3><p>Chỉnh tốc độ, mức clone và nghe thử kết quả.</p></div><Settings className="text-emerald-300" /></div>
@@ -1376,7 +1415,7 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
         </div>
       </div>
     </div>
-    <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step1")}><ArrowLeft className="h-4 w-4" /> Quay lại Bước 1</Button><div className="footer-chips"><span>Xuất WAV</span><span>Tạo mốc thời gian</span><span>{project?.voice_path ? "Sẵn sàng tạo cảnh" : "Tạo voice trước"}</span></div>{project?.voice_path
+    <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step1")}><ArrowLeft className="h-4 w-4" /> Quay lại Bước 1</Button><span>{project?.voice_path ? "Đã có voice video. Có thể tạo cảnh và tìm ảnh." : "Chọn giọng xong hãy bấm Tạo giọng đọc."}</span>{project?.voice_path
       ? <Button onClick={()=>{setActiveScreen("step3a");startJob("/api/analyze-search",undefined,"analyze-search")}} disabled={isBusy}>{busyAction==="analyze-search"?<LoaderCircle className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} Tạo cảnh và tìm ảnh</Button>
       : <Button onClick={createVoiceWithQuickSettings} disabled={isBusy}>{busyAction==="voice"?<LoaderCircle className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} Tạo giọng đọc</Button>}</div>
   </div>
@@ -1561,10 +1600,16 @@ function SettingsModal({ open, onOpenChange, settings, setSettings, workflowStep
     </Tabs><div className="mt-5 flex justify-end gap-2"><Button variant="ghost" onClick={()=>onOpenChange(false)}>Huỷ</Button><Button onClick={()=>saveSettings(true)}>Lưu cài đặt</Button></div></DialogContent></Dialog>
 }
 
-function ProjectsModal({ open, onOpenChange, state, project, openProject }) {
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-w-3xl"><DialogTitle>Project gần đây</DialogTitle><DialogDescription>Chọn project muốn làm tiếp. Đường dẫn chi tiết được rút gọn để dễ nhìn.</DialogDescription><div className="project-list">{state.projects?.map(item=>{
+function ProjectsModal({ open, onOpenChange, state, project, openProject, renameProject, deleteProject }) {
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-w-3xl"><DialogTitle>Project gần đây</DialogTitle><DialogDescription>Chọn project muốn làm tiếp, đổi tên hoặc xóa project không cần nữa.</DialogDescription><div className="project-list">{state.projects?.map(item=>{
     const isOpen = project?.path===item.path
-    return <button className={cn("project-row", isOpen && "active")} onClick={()=>openProject(item.path)} key={item.path}><FolderOpen/><div><b>{item.name}</b><small>{formatProjectDate(item.updated_at)} · {shortPath(item.path)}</small></div>{isOpen&&<Badge>Đang mở</Badge>}</button>
+    return <div className={cn("project-row managed", isOpen && "active")} key={item.path}>
+      <button onClick={()=>openProject(item.path)}><FolderOpen/><div><b>{item.name}</b><small>{item.category ? `${item.category} · ` : ""}{formatProjectDate(item.updated_at)} · {shortPath(item.path)}</small></div>{isOpen&&<Badge>Đang mở</Badge>}</button>
+      <div className="project-row-actions">
+        <Button size="sm" variant="ghost" onClick={()=>renameProject(item.path, item.name)}><Pencil className="h-3.5 w-3.5"/> Sửa</Button>
+        <Button size="sm" variant="ghost" onClick={()=>deleteProject(item.path, item.name)}><Trash2 className="h-3.5 w-3.5"/> Xóa</Button>
+      </div>
+    </div>
   })}</div></DialogContent></Dialog>
 }
 function Lightbox({ open, setLightboxIndex, lightboxIndex, assets, lightboxAsset, assetJobs, statusBadge, startJob, approveAsset, chooseAssetMedia, editingAssetId, setEditingAssetId, editingKeywordValue, setEditingKeywordValue, saveKeyword }) {

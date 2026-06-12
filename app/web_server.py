@@ -53,9 +53,19 @@ CURRENT_CLIENT_ID: ContextVar[str] = ContextVar("visual_client_id", default="def
 class ProjectCreateRequest(BaseModel):
     title: str = ""
     script: str
+    category: str = ""
 
 
 class ProjectOpenRequest(BaseModel):
+    path: str
+
+
+class ProjectUpdateRequest(BaseModel):
+    path: str
+    title: str = ""
+
+
+class ProjectDeleteRequest(BaseModel):
     path: str
 
 
@@ -397,9 +407,19 @@ def _project_payload(project: Path | None) -> dict[str, Any] | None:
     capcut_files = [path for path in capcut_dir.rglob("*") if path.is_file()] if capcut_dir.exists() else []
     capcut_mtime = max((path.stat().st_mtime for path in capcut_files), default=0)
     has_capcut_export = bool(capcut_files) and capcut_mtime >= manifest_mtime and has_scenes
+    meta = {}
+    try:
+        meta = json.loads((project / "visual_project.json").read_text(encoding="utf-8"))
+    except Exception:
+        meta = {}
+    display_name = str(meta.get("title") or "").strip() or project.name
+    parent_category = "" if project.parent.name == "Projects" else project.parent.name
+    category = str(meta.get("category") or parent_category).strip()
     return {
         "path": str(project),
-        "name": project.name,
+        "name": display_name,
+        "folder_name": project.name,
+        "category": category,
         "script": script_path.read_text(encoding="utf-8", errors="replace"),
         "has_voice": has_voice,
         "voice_path": str(voice_path) if has_voice else "",
@@ -480,6 +500,7 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
         "voice_clone_engine",
         "voice_clone_reference_path",
         "voice_clone_reference_name",
+        "voice_clone_preview_url",
         "voice_clone_profiles",
         "voice_clone_default_id",
         "voice_clone_max_chars",
@@ -672,16 +693,24 @@ def state() -> dict[str, Any]:
     settings = _public_settings()
     projects_dir = Path(str(settings.get("projects_dir") or APP_DIR / "Projects"))
     projects = []
+    categories = []
     if projects_dir.exists():
-        for path in sorted(projects_dir.iterdir(), key=lambda value: value.stat().st_mtime, reverse=True):
-            if path.is_dir() and (path / "scripts" / "script_final.txt").exists():
+        project_roots = []
+        for path in projects_dir.rglob("scripts/script_final.txt"):
+            project_roots.append(path.parents[1])
+        for path in sorted(set(project_roots), key=lambda value: value.stat().st_mtime, reverse=True):
+            payload = _project_payload(path)
+            if payload:
                 projects.append(
                     {
                         "path": str(path),
-                        "name": path.name,
+                        "name": payload["name"],
+                        "folder_name": path.name,
+                        "category": payload.get("category") or "",
                         "updated_at": path.stat().st_mtime,
                     }
                 )
+        categories = sorted({item["category"] for item in projects if item.get("category")})
     active = runtime.jobs.get(runtime.active_job_id or "")
     queued = [job.payload() for job, _callback in runtime.pending_jobs]
     live_jobs = ([active.payload()] if active else []) + queued
@@ -689,6 +718,7 @@ def state() -> dict[str, Any]:
         "settings": settings,
         "project": _project_payload(runtime.current_project),
         "projects": projects[:100],
+        "categories": categories,
         "active_job": active.payload() if active else None,
         "queued_jobs": queued,
         "jobs": live_jobs,
@@ -804,6 +834,7 @@ async def upload_voice_clone_reference(
             "voice_clone_engine": "magicvoice",
             "voice_clone_reference_path": str(target.resolve()),
             "voice_clone_reference_name": display_name,
+            "voice_clone_preview_url": "",
             "voice_clone_profiles": profiles,
             "voice_clone_default_id": default_id,
         }
@@ -832,7 +863,14 @@ def preflight() -> dict[str, Any]:
 def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
     settings = load_settings()
     projects_dir = Path(str(settings.get("projects_dir") or APP_DIR / "Projects"))
-    project = create_visual_project(projects_dir, request.title, request.script.strip())
+    category = re.sub(r"[\\/:*?\"<>|]+", " ", request.category or "").strip()
+    target_dir = projects_dir / category if category else projects_dir
+    project = create_visual_project(target_dir, request.title, request.script.strip())
+    if category:
+        meta_path = project / "visual_project.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["category"] = category
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     runtime.set_project(project)
     return {"project": _project_payload(project)}
 
@@ -844,6 +882,40 @@ def open_project(request: ProjectOpenRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Không tìm thấy project hợp lệ.")
     runtime.set_project(project)
     return {"project": _project_payload(project)}
+
+
+@app.post("/api/projects/rename")
+def rename_project(request: ProjectUpdateRequest) -> dict[str, Any]:
+    project = Path(request.path)
+    if not (project / "visual_project.json").exists():
+        raise HTTPException(status_code=404, detail="Không tìm thấy project hợp lệ.")
+    title = request.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Tên project không được rỗng.")
+    meta_path = project / "visual_project.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["title"] = title
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    if runtime.current_project and runtime.current_project.resolve() == project.resolve():
+        runtime.set_project(project)
+    return {"project": _project_payload(project)}
+
+
+@app.post("/api/projects/delete")
+def delete_project(request: ProjectDeleteRequest) -> dict[str, Any]:
+    settings = load_settings()
+    projects_dir = Path(str(settings.get("projects_dir") or APP_DIR / "Projects")).resolve()
+    project = Path(request.path).resolve()
+    try:
+        project.relative_to(projects_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Project nằm ngoài thư mục quản lý.")
+    if not (project / "scripts" / "script_final.txt").exists():
+        raise HTTPException(status_code=404, detail="Không tìm thấy project hợp lệ.")
+    if runtime.current_project and runtime.current_project.resolve() == project:
+        runtime.current_project = None
+    shutil.rmtree(project)
+    return {"ok": True}
 
 
 @app.post("/api/projects/script")
@@ -951,6 +1023,7 @@ def preview_voice(request: VoicePreviewRequest) -> dict[str, Any]:
             "voice_clone_engine",
             "voice_clone_reference_path",
             "voice_clone_reference_name",
+            "voice_clone_preview_url",
             "voice_clone_max_chars",
             "voice_clone_timeout",
             "voice_clone_setup_timeout",
