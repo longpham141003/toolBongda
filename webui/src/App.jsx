@@ -899,7 +899,7 @@ function App() {
   )
 }
 
-function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, activeJob, userProgress, setSettingsOpen, setProjectsOpen }) {
+function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, setSettingsOpen, setProjectsOpen }) {
   const steps = [
     { id: "step1", label: "Nội dung", hint: "Kịch bản và AI viết" },
     { id: "step2", label: "Giọng đọc", hint: "Chọn giọng, clone voice" },
@@ -907,9 +907,6 @@ function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, activ
     { id: "step4", label: "Xuất CapCut", hint: "Kiểm tra và xuất" },
   ]
   const doneMap = { step1: completedSteps[0], step2: completedSteps[1], step3a: completedSteps[2], step4: completedSteps[3] }
-  const isRunning = activeJob && ["queued", "running"].includes(activeJob.status)
-  const percent = Math.max(0, Math.min(100, Math.round(userProgress?.percent || 0)))
-  const latestLog = userProgress?.messages?.[userProgress.messages.length - 1] || ""
 
   const stepLabel = (id) => {
     if (doneMap[id]) return "Hoàn thành"
@@ -979,19 +976,6 @@ function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, activ
           )
         })}
       </nav>
-
-      {isRunning && (
-        <>
-          <hr className="sidebar-divider" />
-          <div className="sidebar-job">
-            <div className="sidebar-job-title">{userProgress?.title || "Đang xử lý..."}</div>
-            <div className="sidebar-job-bar">
-              <div className="sidebar-job-bar-fill" style={{ width: `${percent}%` }} />
-            </div>
-            <div className="sidebar-job-log">{latestLog || "Đang xử lý..."}</div>
-          </div>
-        </>
-      )}
 
       <div className="sidebar-bottom">
         <button className="sidebar-bottom-btn" onClick={() => setSettingsOpen(true)}>
@@ -1373,8 +1357,8 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
       <div className="voice-progress-log">{progressMessages.map((message, index)=><p key={index}>{message}</p>)}</div>
     </div>}
     <div className="voice-mode-tabs">
-      <button className={cn(voiceMode==="normal" && "active")} onClick={chooseNormalMode}><FileAudio className="h-4 w-4" /><span>Giọng có sẵn</span></button>
-      <button className={cn(voiceMode==="clone" && "active")} onClick={()=>setVoiceMode("clone")}><Mic className="h-4 w-4" /><span>Giọng đã clone</span></button>
+      <button className={cn(voiceMode==="normal" && "active")} onClick={chooseNormalMode}><FileAudio className="h-5 w-5" /><span><b>Giọng có sẵn</b><small>Nhanh, ổn định</small></span></button>
+      <button className={cn(voiceMode==="clone" && "active")} onClick={()=>setVoiceMode("clone")}><Mic className="h-5 w-5" /><span><b>Giọng đã clone</b><small>Dùng giọng riêng đã lưu</small></span></button>
     </div>
     <div className="voice-screen-grid">
       <div className="glass-panel screen-panel flex flex-col">
@@ -1389,8 +1373,16 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
             />
           </Field>
           <div className="voice-mode-help"><FileAudio className="h-5 w-5"/><span>Phù hợp để test nhanh, ổn định, không cần audio mẫu.</span></div>
+          <div className="voice-left-actions">
+            <Button variant="secondary" onClick={() => previewVoiceNow()} disabled={voicePreviewBusy}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button>
+          </div>
         </> : <>
-          <div className="panel-title"><div><h2>Giọng đã clone</h2><p>Clone một lần, lần sau chỉ chọn lại và nghe thử ngay.</p></div><Button variant="ghost" size="sm" onClick={() => setCloneDialogOpen(true)}><Plus className="h-4 w-4" /> Thêm clone</Button></div>
+          <div className="panel-title"><div><h2>Giọng đã clone</h2><p>Clone một lần, lần sau chỉ chọn lại và nghe thử ngay.</p></div><Button variant="secondary" size="sm" onClick={() => setCloneDialogOpen(true)}><Upload className="h-4 w-4" /> Tải tệp clone</Button></div>
+          <button className="clone-upload-inline" onClick={() => setCloneDialogOpen(true)}>
+            <Mic className="h-5 w-5" />
+            <span><b>Clone voice mới</b><small>Tải file MP3/WAV mẫu 10-30 giây</small></span>
+            <Plus className="h-4 w-4" />
+          </button>
           {cloneProfiles.length > 0 ? <div className="saved-voice-list clone-picker-list">
             {cloneProfiles.map((item) => {
               const active = item.id === selectedCloneId
@@ -1400,7 +1392,11 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
               </button>
             })}
           </div> : <div className="clone-empty-hint"><Mic className="h-5 w-5" /><span>Chưa có giọng clone. Bấm “Thêm clone”, tải audio mẫu và tool sẽ lưu giọng vào danh sách này.</span></div>}
+          <div className="voice-left-actions">
+            <Button variant="secondary" onClick={() => previewVoiceNow()} disabled={!selectedClone || voicePreviewBusy}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button>
+          </div>
         </>}
+        {voicePreviewUrl && <audio autoPlay src={voicePreviewUrl} className="hidden" />}
       </div>
       <div className="glass-panel screen-panel flex flex-col">
         <div className="panel-title"><div><h3>Cài đặt giọng đọc</h3><p>Chỉnh tốc độ, mức clone và nghe thử kết quả.</p></div><Settings className="text-emerald-300" /></div>
@@ -1408,7 +1404,6 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
         <div className="setting-help">0.9-1.0 là tự nhiên. Tăng lên nếu muốn đọc nhanh, giảm xuống nếu muốn chậm và rõ hơn.</div>
         <RangeField label="Mức xử lý giọng clone" value={settings.magicvoice_steps ?? 16} min={8} max={32} step={1} onChange={(v)=>setSettings({...settings, magicvoice_steps:v})} />
         <div className="setting-help">16 là cân bằng. Số cao hơn có thể giống giọng mẫu hơn nhưng tạo voice lâu hơn.</div>
-        <div className="audio-preview"><div className="flex justify-between text-xs"><span>Nghe thử giọng đang chọn</span><Button size="sm" variant="ghost" onClick={() => previewVoiceNow()}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button></div>{voicePreviewUrl && <audio controls autoPlay src={voicePreviewUrl} className="mt-2 w-full" />}</div>
         <div className="voice-next-help">
           <b>Sau khi bấm “Tạo giọng đọc”</b>
           <span>Tool sẽ tạo WAV + timing cho script hiện tại. Clone voice chỉ là chọn chất giọng, không thay thế bước tạo voice video.</span>
