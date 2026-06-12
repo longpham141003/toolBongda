@@ -193,11 +193,11 @@ def bootstrap_magicvoice(settings: dict, log: Callable[[str], None] | None = Non
         raise FileNotFoundError(f"Không thấy bộ cài MagicVoice: {setup_script}")
     if python == Path("py"):
         for version_arg in ("-3.11", "-3.10"):
-            probe = subprocess.run(["py", version_arg, "-c", "import omnivoice"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
+            probe = subprocess.run(["py", version_arg, "-c", "import omnivoice, soundfile"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
             if probe.returncode == 0:
                 return root, ["py", version_arg]
     elif python.is_file():
-        probe = subprocess.run([str(python), "-c", "import omnivoice"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
+        probe = subprocess.run([str(python), "-c", "import omnivoice, soundfile"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
         if probe.returncode == 0:
             return root, [str(python)]
     if callable(log):
@@ -223,18 +223,18 @@ def bootstrap_magicvoice(settings: dict, log: Callable[[str], None] | None = Non
     python = magicvoice_python(settings, root)
     if python == Path("py"):
         for version_arg in ("-3.11", "-3.10"):
-            probe = subprocess.run(["py", version_arg, "-c", "import omnivoice"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
+            probe = subprocess.run(["py", version_arg, "-c", "import omnivoice, soundfile"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
             if probe.returncode == 0:
                 if callable(log):
                     log("Đã cài xong MagicVoice local.")
                 return root, ["py", version_arg]
     elif python.is_file():
-        probe = subprocess.run([str(python), "-c", "import omnivoice"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
+        probe = subprocess.run([str(python), "-c", "import omnivoice, soundfile"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
         if probe.returncode == 0:
             if callable(log):
                 log("Đã cài xong MagicVoice local.")
             return root, [str(python)]
-    raise FileNotFoundError("Cài MagicVoice xong nhưng vẫn không gọi được Python 3.11/3.10 có omnivoice.")
+    raise FileNotFoundError("Cài MagicVoice xong nhưng vẫn thiếu thư viện clone giọng cần thiết.")
 
 
 def kokoro_custom_voice_dir(settings: dict, language: str = "en") -> Path:

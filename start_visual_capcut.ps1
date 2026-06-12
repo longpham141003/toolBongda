@@ -105,7 +105,7 @@ if (-not (Test-Path $BackendVenvPython)) {
 Write-Step "Kiem tra va cai thu vien can thiet cho tool..."
 $previousErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-& $BackendVenvPython -c "import fastapi,uvicorn,playwright,requests,PIL,imagehash,multipart" *> $null
+& $BackendVenvPython -c "import fastapi,uvicorn,playwright,requests,PIL,imagehash,multipart,soundfile" *> $null
 $dependencyCheckExitCode = $LASTEXITCODE
 $ErrorActionPreference = $previousErrorActionPreference
 if ($dependencyCheckExitCode -ne 0) {

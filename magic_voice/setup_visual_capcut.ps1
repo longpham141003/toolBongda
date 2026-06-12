@@ -77,7 +77,7 @@ function Invoke-Python {
 Invoke-Python -m pip install --upgrade pip wheel setuptools
 
 try {
-    Invoke-Python -c "import torch, torchaudio, omnivoice" *> $null
+    Invoke-Python -c "import torch, torchaudio, omnivoice, soundfile" *> $null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "MagicVoice dependencies OK"
         exit 0
@@ -88,4 +88,4 @@ Write-Host "Dang cai Torch va MagicVoice dependencies..."
 Invoke-Python -m pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --progress-bar on --no-cache-dir
 Invoke-Python -m pip install omnivoice soundfile scipy pydub psutil requests numpy imageio-ffmpeg --progress-bar on --no-cache-dir
 
-Invoke-Python -c "import torch, torchaudio, omnivoice; print('MagicVoice import OK')"
+Invoke-Python -c "import torch, torchaudio, omnivoice, soundfile; print('MagicVoice import OK')"
