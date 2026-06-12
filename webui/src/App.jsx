@@ -732,6 +732,15 @@ function App() {
       })
       if (data.warning) setToast(data.warning)
       setVoicePreviewUrl(`${data.url}${data.url?.includes("?") ? "&" : "?"}v=${Date.now()}`)
+      if (!textOverride && data.url && sourceSettings.voice_clone_enabled && sourceSettings.voice_clone_reference_path) {
+        const profiles = Array.isArray(sourceSettings.voice_clone_profiles) ? sourceSettings.voice_clone_profiles : []
+        const nextProfiles = profiles.map((item) => item.path === sourceSettings.voice_clone_reference_path ? { ...item, preview_url: data.url } : item)
+        const saved = await api("/api/settings", {
+          method: "POST",
+          body: JSON.stringify({ settings: { ...sourceSettings, voice_clone_profiles: nextProfiles, voice_clone_preview_url: data.url } }),
+        })
+        setSettings(saved.settings)
+      }
       return data
     } catch (err) {
       setError(err.message)
@@ -1382,11 +1391,6 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
                 placeholder={cloneProfileOptions.length ? "Chọn giọng clone" : "Không có giọng cho ngôn ngữ này"}
               />
             </Field>
-            {selectedClone && <div className="selected-clone-chip">
-              <Mic className="h-4 w-4" />
-              <span><b>{selectedClone.name}</b><small>{selectedClone.preview_url ? "Đã có file nghe thử nhanh" : "Chưa có file nghe thử, bấm Nghe thử để tạo"}</small></span>
-              <Check className="h-4 w-4" />
-            </div>}
           </> : <div className="clone-empty-hint"><Mic className="h-5 w-5" /><span>Chưa có giọng clone cho ngôn ngữ này. Tạo giọng mới ở bảng bên phải.</span></div>}
           <div className="voice-left-actions">
             <Button variant="secondary" onClick={() => previewVoiceNow()} disabled={!selectedClone || voicePreviewBusy}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button>

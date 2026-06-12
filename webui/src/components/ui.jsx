@@ -85,17 +85,17 @@ export const DialogDescription = ({ className, ...props }) => <DialogPrimitive.D
 export function Select({ value, onValueChange, options, placeholder = "Chọn" }) {
   return (
     <SelectPrimitive.Root value={value} onValueChange={onValueChange}>
-      <SelectPrimitive.Trigger className="flex h-11 w-full items-center justify-between rounded-xl border border-white/10 bg-black/24 px-3 text-sm text-zinc-200 outline-none transition focus:border-violet-400/60 focus:ring-2 focus:ring-violet-500/20">
-        <SelectPrimitive.Value placeholder={placeholder} />
-        <SelectPrimitive.Icon><ChevronDown className="h-4 w-4 text-zinc-500" /></SelectPrimitive.Icon>
+      <SelectPrimitive.Trigger className="flex h-11 w-full min-w-0 items-center justify-between overflow-hidden rounded-xl border border-white/10 bg-black/24 px-3 text-left text-sm text-zinc-200 outline-none transition focus:border-violet-400/60 focus:ring-2 focus:ring-violet-500/20">
+        <SelectPrimitive.Value placeholder={placeholder} className="truncate" />
+        <SelectPrimitive.Icon className="ml-2 shrink-0"><ChevronDown className="h-4 w-4 text-zinc-500" /></SelectPrimitive.Icon>
       </SelectPrimitive.Trigger>
       <SelectPrimitive.Portal>
-        <SelectPrimitive.Content position="popper" className="z-[70] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-white/10 bg-zinc-900 p-1 text-zinc-200 shadow-2xl">
+        <SelectPrimitive.Content position="popper" className="z-[70] min-w-[var(--radix-select-trigger-width)] max-w-[min(680px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-white/10 bg-zinc-900 p-1 text-zinc-200 shadow-2xl">
           <SelectPrimitive.Viewport>
             {options.map((option) => (
-              <SelectPrimitive.Item key={option.value} value={option.value} className="relative flex cursor-pointer select-none items-center rounded-lg py-2 pl-8 pr-3 text-sm outline-none data-[highlighted]:bg-white/10">
+              <SelectPrimitive.Item key={option.value} value={option.value} className="relative flex min-w-0 cursor-pointer select-none items-center rounded-lg py-2 pl-8 pr-3 text-sm outline-none data-[highlighted]:bg-white/10">
                 <SelectPrimitive.ItemIndicator className="absolute left-2"><Check className="h-4 w-4" /></SelectPrimitive.ItemIndicator>
-                <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
+                <SelectPrimitive.ItemText><span className="block truncate">{option.label}</span></SelectPrimitive.ItemText>
               </SelectPrimitive.Item>
             ))}
           </SelectPrimitive.Viewport>
