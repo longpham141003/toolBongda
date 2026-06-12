@@ -1249,6 +1249,10 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
   const cloneProfiles = Array.isArray(settings.voice_clone_profiles) ? settings.voice_clone_profiles : []
   const selectedClone = cloneProfiles.find((item) => item.path === settings.voice_clone_reference_path)
   const selectedCloneId = selectedClone?.id || ""
+  const usingClone = Boolean(settings.voice_clone_enabled && selectedClone)
+  const selectedVoiceLabel = usingClone
+    ? selectedClone.name
+    : (voiceOptions.find((voice) => voice.value === settings.text_to_voice_voice)?.label || settings.text_to_voice_voice || "Giọng thường")
   const changeVoiceLanguage = (language) => setSettings({
     ...settings,
     text_to_voice_language: language,
@@ -1270,6 +1274,22 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
   }
   return <div className="step-screen">
     <div className="screen-heading"><h1>Bước 2 - Chọn giọng đọc cho video</h1><p>Chọn giọng, nghe thử, rồi tạo file đọc để bước sau tự chia cảnh.</p></div>
+    <div className="voice-choice-summary">
+      <div className={cn("voice-summary-card", !usingClone && "active")}>
+        <FileAudio className="h-5 w-5" />
+        <div><b>Giọng thường</b><span>{!usingClone ? `Đang chọn: ${selectedVoiceLabel}` : "Nhanh, ổn định, dùng ngay"}</span></div>
+        {!usingClone && <Check className="h-5 w-5" />}
+      </div>
+      <div className={cn("voice-summary-card", usingClone && "active clone")}>
+        <Mic className="h-5 w-5" />
+        <div><b>Giọng clone</b><span>{usingClone ? `Đang chọn: ${selectedClone.name}` : cloneProfiles.length ? `${cloneProfiles.length} giọng đã lưu` : "Chưa có giọng clone"}</span></div>
+        {usingClone && <Check className="h-5 w-5" />}
+      </div>
+      <div className={cn("voice-summary-card", project?.voice_path && "done")}>
+        <CheckCircle2 className="h-5 w-5" />
+        <div><b>File voice video</b><span>{project?.voice_path ? "Đã tạo, có thể tạo cảnh" : "Chưa tạo voice cho script này"}</span></div>
+      </div>
+    </div>
     <div className="recommended-action">
       <div><b>Không biết chọn gì?</b><span>Bấm nút này để tool tự chọn ngôn ngữ, chế độ ổn định và tắt kiểm tra chậm cho script dài.</span></div>
       <Button variant="secondary" onClick={applyBeginnerVoicePreset} disabled={isBusy}><WandSparkles className="h-4 w-4" /> Dùng cấu hình dễ nhất</Button>
@@ -1309,7 +1329,7 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
         </Field>
         <div className="saved-voice-box">
           <div className="flex items-center justify-between gap-3">
-            <div><b>Giọng clone đã lưu</b><p>Chọn giọng nào thì video sẽ dùng giọng đó.</p></div>
+            <div><b>Giọng clone đã lưu</b><p>Clone một lần, lần sau chỉ cần chọn lại ở đây.</p></div>
           </div>
           <Select
             value={selectedCloneId}
@@ -1323,7 +1343,7 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
               label: `${item.name}${item.language ? ` · ${item.language}` : ""}`,
             })) : [{ value: "__none", label: "Chưa có giọng clone đã lưu" }]}
           />
-          {cloneProfiles.length > 0 && <div className="saved-voice-list">
+          {cloneProfiles.length > 0 ? <div className="saved-voice-list">
             {cloneProfiles.map((item) => {
               const active = item.id === selectedCloneId
               return <button
@@ -1336,7 +1356,7 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
                 {active && <Check className="h-5 w-5" />}
               </button>
             })}
-          </div>}
+          </div> : <div className="clone-empty-hint"><Mic className="h-5 w-5" /><span>Chưa có giọng clone. Bấm “Thêm clone mới”, tải audio mẫu và tool sẽ lưu giọng vào danh sách này.</span></div>}
           <div className="saved-voice-actions">
             <Button variant="secondary" size="sm" disabled={!selectedClone} onClick={() => setSettings({...settings, voice_clone_enabled:false, voice_clone_reference_path:"", voice_clone_reference_name:""})}>Dùng giọng thường</Button>
             <Button variant="secondary" size="sm" onClick={() => setCloneDialogOpen(true)}><Plus className="h-4 w-4" /> Thêm clone mới</Button>
@@ -1350,6 +1370,10 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
         <RangeField label="Mức xử lý giọng clone" value={settings.magicvoice_steps ?? 16} min={8} max={32} step={1} onChange={(v)=>setSettings({...settings, magicvoice_steps:v})} />
         <div className="setting-help">16 là cân bằng. Số cao hơn có thể giống giọng mẫu hơn nhưng tạo voice lâu hơn.</div>
         <div className="audio-preview"><div className="flex justify-between text-xs"><span>Nghe thử giọng đang chọn</span><Button size="sm" variant="ghost" onClick={() => previewVoiceNow()}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button></div>{voicePreviewUrl && <audio controls autoPlay src={voicePreviewUrl} className="mt-2 w-full" />}</div>
+        <div className="voice-next-help">
+          <b>Sau khi bấm “Tạo giọng đọc”</b>
+          <span>Tool sẽ tạo WAV + timing cho script hiện tại. Clone voice chỉ là chọn chất giọng, không thay thế bước tạo voice video.</span>
+        </div>
       </div>
     </div>
     <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step1")}><ArrowLeft className="h-4 w-4" /> Quay lại Bước 1</Button><div className="footer-chips"><span>Xuất WAV</span><span>Tạo mốc thời gian</span><span>{project?.voice_path ? "Sẵn sàng tạo cảnh" : "Tạo voice trước"}</span></div>{project?.voice_path
@@ -1408,6 +1432,7 @@ function MediaReviewScreen({ assets, filteredAssets, assetFilter, setAssetFilter
   }, { processing:0, review:0, approved:0, error:0, missing:0 })
   counts.all = assets.length
   const retryableAssets = assets.filter(asset => ["error", "missing"].includes(categoryOf(asset)))
+  const approvalPercent = assets.length ? Math.round((counts.approved / assets.length) * 100) : 0
   const changeFilter = (value) => {
     setAssetFilter(value)
     setPage(1)
@@ -1433,6 +1458,17 @@ function MediaReviewScreen({ assets, filteredAssets, assetFilter, setAssetFilter
         <h1>Duyệt hình ảnh <span>({assets.length} cảnh)</span></h1>
         <p>Kiểm tra nhanh từng cảnh. Bấm vào thẻ để xem đầy đủ nội dung và nguồn ảnh.</p>
       </div>
+      <div className="media-review-progress">
+        <b>{approvalPercent}%</b>
+        <span>đã duyệt</span>
+        <i><em style={{width:`${approvalPercent}%`}} /></i>
+      </div>
+    </div>
+    <div className="media-task-strip">
+      <div><CheckCircle2 className="h-4 w-4" /><b>{counts.approved}</b><span>đã duyệt</span></div>
+      <div><Image className="h-4 w-4" /><b>{counts.review}</b><span>cần xem</span></div>
+      <div><LoaderCircle className="h-4 w-4" /><b>{counts.processing}</b><span>đang xử lý</span></div>
+      <div><AlertTriangle className="h-4 w-4" /><b>{counts.error + counts.missing}</b><span>cần xử lý</span></div>
     </div>
     <div className="media-filter-row">
       <div className="media-filter-tabs">
@@ -1457,15 +1493,16 @@ function MediaReviewScreen({ assets, filteredAssets, assetFilter, setAssetFilter
     <div className="media-grid">{visibleAssets.length ? visibleAssets.map((asset)=>{
       const idx=assets.findIndex(a=>a.asset_id===asset.asset_id), job=assetJobs.get(asset.asset_id), badge=statusBadge(asset.status), version=asset.media_version||asset.sha256||asset.search_attempt
       return <article className="media-card" key={asset.asset_id}>
-        <button className="media-image" onClick={()=>setLightboxIndex(idx)}>
-          {asset.local_path?<img src={mediaUrl(asset.local_path,version)} alt={`Cảnh ${idx+1}`}/>:<Image className="h-10 w-10 text-slate-700"/>}
-          <span className="scene-number">Cảnh {idx+1}</span><Badge variant={badge.variant}>{badge.label}</Badge>
-          <time>{formatTime(asset.start)} - {formatTime(asset.end)}</time>
+          <button className={cn("media-image", !asset.local_path && "empty")} onClick={()=>setLightboxIndex(idx)}>
+            {asset.local_path?<img src={mediaUrl(asset.local_path,version)} alt={`Cảnh ${idx+1}`}/>:<Image className="h-10 w-10 text-slate-700"/>}
+            <span className="scene-number">Cảnh {idx+1}</span><Badge variant={badge.variant}>{badge.label}</Badge>
+            <time>{formatTime(asset.start)} - {formatTime(asset.end)}</time>
           {job&&<div className="media-busy"><LoaderCircle className="h-7 w-7 animate-spin"/>{job.status==="queued"?`Đang chờ #${job.queue_position}`:"Đang tìm ảnh mới..."}</div>}
         </button>
-        <div className="media-card-body">
-          <button className="media-card-title" onClick={()=>setLightboxIndex(idx)}><b>{asset.main_subject || asset.asset_id}</b><span>{Number(asset.duration||0).toFixed(1)}s</span></button>
-          <div className="media-actions">
+          <div className="media-card-body">
+            <button className="media-card-title" onClick={()=>setLightboxIndex(idx)}><b>{asset.main_subject || asset.asset_id}</b><span>{Number(asset.duration||0).toFixed(1)}s</span></button>
+            <button className="media-card-script" onClick={()=>setLightboxIndex(idx)}>{asset.sentence_text || asset.visual_context || "Bấm để xem chi tiết cảnh."}</button>
+            <div className="media-actions">
             <Button size="sm" variant="secondary" disabled={!!job} onClick={()=>startJob(`/api/assets/${asset.asset_id}/retry`,undefined,`retry-${asset.asset_id}`)}><RefreshCw className="h-3.5 w-3.5"/> Tìm lại</Button>
             <Button size="sm" variant="ghost" onClick={()=>chooseAssetMedia(asset.asset_id)}><Upload className="h-3.5 w-3.5"/> Tải lên</Button>
             <Button size="sm" variant={asset.status==="approved"?"success":"ghost"} disabled={!asset.local_path} onClick={()=>approveAsset(asset.asset_id)}><Check className="h-3.5 w-3.5"/> {asset.status==="approved"?"Đã duyệt":"Duyệt"}</Button>
