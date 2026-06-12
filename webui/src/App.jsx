@@ -1285,6 +1285,17 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
   const usingClone = Boolean(settings.voice_clone_enabled && selectedClone)
   const [voiceMode, setVoiceMode] = useState(usingClone ? "clone" : "normal")
   useEffect(() => { setVoiceMode(usingClone ? "clone" : "normal") }, [usingClone])
+  useEffect(() => {
+    if (selectedClone?.language && selectedClone.language !== cloneLanguage) setCloneLanguage(selectedClone.language)
+  }, [selectedClone?.language])
+  const cloneLanguageOptions = useMemo(() => {
+    const values = new Set(["vi"])
+    cloneProfiles.forEach((item) => values.add(item.language || "vi"))
+    if (cloneLanguage) values.add(cloneLanguage)
+    return [...values].map((value) => ({ value, label: value }))
+  }, [cloneProfiles, cloneLanguage])
+  const filteredCloneProfiles = cloneProfiles.filter((item) => (item.language || "vi") === cloneLanguage)
+  const cloneProfileOptions = filteredCloneProfiles.map((item) => ({ value: item.id, label: item.name || item.file_name || "Giọng clone" }))
   const changeVoiceLanguage = (language) => setSettings({
     ...settings,
     text_to_voice_language: language,
@@ -1319,7 +1330,13 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
   const chooseCloneProfile = async (profile) => {
     if (!profile) return
     setVoiceMode("clone")
+    setCloneLanguage(profile.language || "vi")
     await selectSavedCloneVoice(profile, false)
+  }
+  const changeCloneLanguage = async (language) => {
+    setCloneLanguage(language)
+    const first = cloneProfiles.find((item) => (item.language || "vi") === language)
+    if (first && first.id !== selectedCloneId) await chooseCloneProfile(first)
   }
   const progress = Math.max(0, Math.min(100, Math.round(userProgress?.percent || 0)))
   const progressMessages = userProgress?.messages || []
@@ -1354,7 +1371,32 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
             <Button variant="secondary" onClick={() => previewVoiceNow()} disabled={voicePreviewBusy}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button>
           </div>
         </> : <>
-          <div className="panel-title"><div><h2>Giọng đã clone</h2><p>Tải audio mẫu, bấm Clone giọng một lần, lần sau chỉ chọn lại.</p></div></div>
+          <div className="panel-title"><div><h2>Giọng đã clone</h2><p>Chọn ngôn ngữ rồi chọn giọng đã lưu.</p></div></div>
+          <Field label="Ngôn ngữ clone"><Select value={cloneLanguage} onValueChange={changeCloneLanguage} options={cloneLanguageOptions} /></Field>
+          {cloneProfileOptions.length > 0 ? <>
+            <Field label="Chọn giọng clone">
+              <Select
+                value={selectedCloneId}
+                onValueChange={(id) => chooseCloneProfile(cloneProfiles.find((item) => item.id === id))}
+                options={cloneProfileOptions}
+                placeholder={cloneProfileOptions.length ? "Chọn giọng clone" : "Không có giọng cho ngôn ngữ này"}
+              />
+            </Field>
+            {selectedClone && <div className="selected-clone-chip">
+              <Mic className="h-4 w-4" />
+              <span><b>{selectedClone.name}</b><small>{selectedClone.preview_url ? "Đã có file nghe thử nhanh" : "Chưa có file nghe thử, bấm Nghe thử để tạo"}</small></span>
+              <Check className="h-4 w-4" />
+            </div>}
+          </> : <div className="clone-empty-hint"><Mic className="h-5 w-5" /><span>Chưa có giọng clone cho ngôn ngữ này. Tạo giọng mới ở bảng bên phải.</span></div>}
+          <div className="voice-left-actions">
+            <Button variant="secondary" onClick={() => previewVoiceNow()} disabled={!selectedClone || voicePreviewBusy}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button>
+          </div>
+        </>}
+        {voicePreviewUrl && <audio autoPlay src={voicePreviewUrl} className="hidden" />}
+      </div>
+      <div className="glass-panel screen-panel flex flex-col">
+        {voiceMode === "clone" && <>
+          <div className="panel-title"><div><h3>Clone giọng mới</h3><p>Tải audio mẫu, bấm Clone giọng một lần, lần sau chọn lại ở bảng trái.</p></div><Mic className="text-emerald-300" /></div>
           <div className="clone-inline-card">
             <div className="clone-dialog-grid">
               <Field label="Tên giọng"><Input value={cloneName} onChange={(e)=>setCloneName(e.target.value)} placeholder="Ví dụ: BLV Anh Quân" /></Field>
@@ -1371,23 +1413,8 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
               {voicePreviewBusy ? "Đang clone và tạo nghe thử..." : "Clone giọng"}
             </Button>
           </div>
-          {cloneProfiles.length > 0 ? <div className="saved-voice-list clone-picker-list">
-            {cloneProfiles.map((item) => {
-              const active = item.id === selectedCloneId
-              return <button type="button" key={item.id} className={cn("saved-voice-row", active && "active")} onClick={() => chooseCloneProfile(item)}>
-                <span><b>{item.name}</b><small>{item.language || "voice clone"}{item.preview_url ? " · có nghe thử nhanh" : " · chưa cache nghe thử"}</small></span>
-                {active && <Check className="h-5 w-5" />}
-              </button>
-            })}
-          </div> : <div className="clone-empty-hint"><Mic className="h-5 w-5" /><span>Chưa có giọng clone. Bấm “Thêm clone”, tải audio mẫu và tool sẽ lưu giọng vào danh sách này.</span></div>}
-          <div className="voice-left-actions">
-            <Button variant="secondary" onClick={() => previewVoiceNow()} disabled={!selectedClone || voicePreviewBusy}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button>
-          </div>
         </>}
-        {voicePreviewUrl && <audio autoPlay src={voicePreviewUrl} className="hidden" />}
-      </div>
-      <div className="glass-panel screen-panel flex flex-col">
-        <div className="panel-title"><div><h3>Cài đặt giọng đọc</h3><p>Chỉnh tốc độ, mức clone và nghe thử kết quả.</p></div><Settings className="text-emerald-300" /></div>
+        <div className="panel-title mt-4"><div><h3>Cài đặt giọng đọc</h3><p>Chỉnh tốc độ, mức clone và nghe thử kết quả.</p></div><Settings className="text-emerald-300" /></div>
         <RangeField label="Tốc độ đọc" value={settings.text_to_voice_speed ?? 1} min={.5} max={2} step={.05} onChange={(v)=>setSettings({...settings,text_to_voice_speed:v})} />
         <div className="setting-help">0.9-1.0 là tự nhiên. Tăng lên nếu muốn đọc nhanh, giảm xuống nếu muốn chậm và rõ hơn.</div>
         <RangeField label="Mức xử lý giọng clone" value={settings.magicvoice_steps ?? 16} min={8} max={32} step={1} onChange={(v)=>setSettings({...settings, magicvoice_steps:v})} />
