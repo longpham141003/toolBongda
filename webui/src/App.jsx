@@ -1187,27 +1187,32 @@ function runningTitle(action, job) {
 
 function runningMessages(action, logs = [], assets = [], latest) {
   const messages = []
+  const rawText = (logs || []).join(" ").toLowerCase()
   if (action === "workflow") {
-    messages.push("AI đang đọc yêu cầu và tạo kịch bản cuối.")
-    messages.push("Bạn có thể đợi ở màn này, xong tool sẽ tự điền script.")
+    messages.push("AI đang đọc yêu cầu và viết kịch bản cuối.")
+    messages.push("Khi xong, nội dung sẽ tự điền vào ô script.")
   } else if (action === "voice") {
-    messages.push("Kokoro đang tạo file WAV từ script.")
-    messages.push("Sau đó Whisper sẽ căn timing và tạo SRT để chia cảnh.")
+    if (rawText.includes("magicvoice") || rawText.includes("clone")) {
+      messages.push("Đang tạo giọng đọc bằng giọng clone đã chọn.")
+      messages.push("Tool sẽ lưu file voice và căn thời gian lời đọc sau khi tạo xong.")
+    } else {
+      messages.push("Đang tạo giọng đọc cho script hiện tại.")
+      messages.push("Sau khi xong, tool sẽ căn thời gian lời đọc để chia cảnh.")
+    }
   } else if (action === "analyze-search") {
     const total = assets.length
     const downloaded = assets.filter((item) => item.local_path).length
-    messages.push(total ? `Đã tải được ${downloaded}/${total} media.` : "Gemini đang đọc SRT để gom cảnh và tạo keyword.")
-    messages.push("Tool sẽ tự tải ảnh/video phù hợp cho từng cảnh.")
+    messages.push(total ? `Đang chuẩn bị media cho các cảnh: ${downloaded}/${total} cảnh đã có media.` : "Đang đọc lời thoại để chia cảnh và tạo từ khóa tìm ảnh.")
+    messages.push("Khi đủ dữ liệu, tool sẽ chuyển sang màn duyệt hình ảnh.")
   } else if (action === "export") {
-    messages.push("Tool đang gắn voice và media vào timeline CapCut.")
-    messages.push("Khi xong, project sẽ sẵn sàng mở trong CapCut.")
+    messages.push("Đang gắn voice và hình ảnh vào timeline CapCut.")
+    messages.push("Khi xong, project sẽ mở được trong CapCut.")
   } else if (action?.startsWith("retry")) {
-    messages.push("Ảnh cũ đã bị bỏ qua, tool đang tìm phương án mới.")
+    messages.push("Đang tìm media mới cho cảnh đã chọn.")
   } else {
     messages.push("Tool đang chạy tác vụ hiện tại.")
   }
-  if (latest) messages.push(latest)
-  return messages.slice(0, 3)
+  return messages.slice(0, 2)
 }
 
 function normalizeUserLog(line) {
