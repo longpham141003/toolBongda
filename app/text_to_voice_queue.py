@@ -658,6 +658,12 @@ class TextToVoiceRunner:
                     str(self.settings.get("magicvoice_device") or "auto"),
                     "--dtype",
                     str(self.settings.get("magicvoice_dtype") or "float16"),
+                    "--sentence-pause",
+                    str(float(self.settings.get("magicvoice_sentence_pause") or 0.42)),
+                    "--clause-pause",
+                    str(float(self.settings.get("magicvoice_clause_pause") or 0.18)),
+                    "--paragraph-pause",
+                    str(float(self.settings.get("magicvoice_paragraph_pause") or 0.65)),
                 ]
                 with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout, stderr_path.open("w", encoding="utf-8", errors="replace") as stderr:
                     result = subprocess.run(
@@ -824,7 +830,7 @@ class TextToVoiceRunner:
             "engine": "magicvoice" if bool(self.settings.get("voice_clone_enabled")) and _clone_reference_path(self.settings) else "kokoro",
             "voice_clone_reference_path": str(self.settings.get("voice_clone_reference_path") or ""),
             "voice_clone_engine": str(self.settings.get("voice_clone_engine") or ""),
-            "segment_cleaner": "tts_clean_v7_magicvoice_estimated_timing",
+            "segment_cleaner": "tts_clean_v8_magicvoice_natural_pauses",
         }
 
     @staticmethod
