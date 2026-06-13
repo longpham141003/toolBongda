@@ -48,6 +48,7 @@ DEFAULT_SETTINGS = {
     "magicvoice_clause_pause": 0.18,
     "magicvoice_paragraph_pause": 0.65,
     "magicvoice_clarity_speed": 0.96,
+    "magicvoice_batch_size": 3,
     "magicvoice_dtype": "float16",
     "magicvoice_device": "auto",
     "whisper_python": sys.executable,

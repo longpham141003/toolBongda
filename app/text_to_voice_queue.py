@@ -193,11 +193,11 @@ def bootstrap_magicvoice(settings: dict, log: Callable[[str], None] | None = Non
         raise FileNotFoundError(f"Không thấy bộ cài MagicVoice: {setup_script}")
     if python == Path("py"):
         for version_arg in ("-3.11", "-3.10"):
-            probe = subprocess.run(["py", version_arg, "-c", "import omnivoice, soundfile"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
+            probe = subprocess.run(["py", version_arg, "-c", "import omnivoice, soundfile, faster_whisper"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
             if probe.returncode == 0:
                 return root, ["py", version_arg]
     elif python.is_file():
-        probe = subprocess.run([str(python), "-c", "import omnivoice, soundfile"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
+        probe = subprocess.run([str(python), "-c", "import omnivoice, soundfile, faster_whisper"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
         if probe.returncode == 0:
             return root, [str(python)]
     if callable(log):
@@ -223,13 +223,13 @@ def bootstrap_magicvoice(settings: dict, log: Callable[[str], None] | None = Non
     python = magicvoice_python(settings, root)
     if python == Path("py"):
         for version_arg in ("-3.11", "-3.10"):
-            probe = subprocess.run(["py", version_arg, "-c", "import omnivoice, soundfile"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
+            probe = subprocess.run(["py", version_arg, "-c", "import omnivoice, soundfile, faster_whisper"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
             if probe.returncode == 0:
                 if callable(log):
                     log("Đã cài xong MagicVoice local.")
                 return root, ["py", version_arg]
     elif python.is_file():
-        probe = subprocess.run([str(python), "-c", "import omnivoice, soundfile"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
+        probe = subprocess.run([str(python), "-c", "import omnivoice, soundfile, faster_whisper"], capture_output=True, text=True, check=False, **_win_hidden_kwargs())
         if probe.returncode == 0:
             if callable(log):
                 log("Đã cài xong MagicVoice local.")
@@ -666,6 +666,10 @@ class TextToVoiceRunner:
                     str(float(self.settings.get("magicvoice_paragraph_pause") or 0.65)),
                     "--clarity-speed",
                     str(float(self.settings.get("magicvoice_clarity_speed") or 0.96)),
+                    "--language",
+                    str(self.settings.get("text_to_voice_language") or "vi"),
+                    "--batch-size",
+                    str(int(self.settings.get("magicvoice_batch_size") or 3)),
                 ]
                 with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout, stderr_path.open("w", encoding="utf-8", errors="replace") as stderr:
                     result = subprocess.run(
@@ -832,7 +836,7 @@ class TextToVoiceRunner:
             "engine": "magicvoice" if bool(self.settings.get("voice_clone_enabled")) and _clone_reference_path(self.settings) else "kokoro",
             "voice_clone_reference_path": str(self.settings.get("voice_clone_reference_path") or ""),
             "voice_clone_engine": str(self.settings.get("voice_clone_engine") or ""),
-            "segment_cleaner": "tts_clean_v9_magicvoice_natural_cadence",
+            "segment_cleaner": "tts_clean_v11_magicvoice_sentence_batch",
         }
 
     @staticmethod

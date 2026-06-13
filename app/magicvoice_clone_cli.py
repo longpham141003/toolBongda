@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 from pathlib import Path
@@ -15,12 +16,91 @@ def _to_tensor(result):
     import numpy as np
     import torch
 
-    item = result[0] if hasattr(result, "__getitem__") else result
+    if isinstance(result, np.ndarray):
+        item = result
+    elif isinstance(result, (list, tuple)):
+        item = result[0]
+    else:
+        item = result
     if isinstance(item, np.ndarray):
         item = torch.from_numpy(item.copy())
     if hasattr(item, "dim") and item.dim() == 1:
         item = item.unsqueeze(0)
     return item
+
+
+def _prepare_reference_audio(ref: Path) -> Path:
+    """Cache the clearest 3-10 second speech region from a long clone sample."""
+    try:
+        import soundfile as sf
+
+        audio, sample_rate = sf.read(ref, dtype="float32", always_2d=True)
+        duration = len(audio) / max(1, sample_rate)
+        if duration <= 10.5:
+            return ref
+
+        prepared = ref.with_name(f"{ref.stem}.prepared.wav")
+        metadata = ref.with_name(f"{ref.stem}.prepared.json")
+        signature = {"size": int(ref.stat().st_size), "mtime_ns": int(ref.stat().st_mtime_ns)}
+        if prepared.is_file() and metadata.is_file():
+            cached = json.loads(metadata.read_text(encoding="utf-8"))
+            if cached.get("source") == signature:
+                return prepared
+
+        from faster_whisper import WhisperModel
+
+        model = WhisperModel("base", device="cpu", compute_type="int8")
+        raw_segments, _ = model.transcribe(
+            str(ref),
+            language="vi",
+            beam_size=3,
+            word_timestamps=True,
+            vad_filter=True,
+            condition_on_previous_text=True,
+        )
+        candidates = []
+        for segment in raw_segments:
+            words = [word for word in segment.words or [] if str(word.word or "").strip()]
+            start = max(0.0, float(segment.start or 0.0))
+            end = min(duration, float(segment.end or start))
+            segment_duration = end - start
+            if segment_duration < 2.5:
+                continue
+            probabilities = [float(word.probability or 0.0) for word in words]
+            confidence = sum(probabilities) / max(1, len(probabilities))
+            length_bonus = min(segment_duration, 7.0) * 0.012
+            candidates.append((confidence + length_bonus, start, end, str(segment.text or "").strip(), confidence))
+        if not candidates:
+            return ref
+
+        _, start, end, transcript, confidence = max(candidates, key=lambda item: item[0])
+        if end - start > 9.5:
+            end = start + 9.5
+        start = max(0.0, start - 0.12)
+        end = min(duration, end + 0.18)
+        clip = audio[int(start * sample_rate) : int(end * sample_rate)]
+        if clip.shape[1] > 1:
+            clip = clip.mean(axis=1, keepdims=True)
+        sf.write(prepared, clip, sample_rate)
+        metadata.write_text(
+            json.dumps(
+                {
+                    "source": signature,
+                    "start": round(start, 4),
+                    "end": round(end, 4),
+                    "confidence": round(confidence, 4),
+                    "transcript": transcript,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        print(f"Prepared clone reference: {start:.2f}-{end:.2f}s, confidence {confidence:.3f}")
+        return prepared
+    except Exception as exc:
+        print(f"Reference preparation skipped: {exc}")
+        return ref
 
 
 def _split_natural_phrases(text: str, max_chars: int = 260) -> list[tuple[str, float]]:
@@ -92,93 +172,45 @@ def _split_natural_phrases(text: str, max_chars: int = 260) -> list[tuple[str, f
     return phrases
 
 
-def _insert_natural_pauses(tensor, phrases: list[tuple[str, float]], sample_rate: int, args):
+def _pause_seconds(detected_pause: float, args) -> float:
+    if detected_pause >= 0.55:
+        return detected_pause * max(0.5, float(args.paragraph_pause) / 0.65)
+    if detected_pause <= 0.24:
+        return detected_pause * max(0.5, float(args.clause_pause) / 0.18)
+    return detected_pause * max(0.5, float(args.sentence_pause) / 0.42)
+
+
+def _combine_generated_phrases(audios, phrases: list[tuple[str, float]], sample_rate: int, args):
+    import numpy as np
     import torch
-    import torch.nn.functional as functional
-
-    if tensor.dim() == 1:
-        tensor = tensor.unsqueeze(0)
-    if len(phrases) <= 1 or tensor.shape[1] < sample_rate:
-        return torch.cat([tensor.cpu(), torch.zeros((tensor.shape[0], int(sample_rate * 0.12)), dtype=tensor.dtype)], dim=1)
-
-    weights = [max(1, len(re.findall(r"\w+", phrase, flags=re.UNICODE))) for phrase, _ in phrases]
-    total_weight = max(1, sum(weights))
-    energy = tensor.detach().float().abs().mean(dim=0).cpu()
-    frame = max(1, int(sample_rate * 0.025))
-    stride = max(1, int(sample_rate * 0.005))
-    smoothed = functional.avg_pool1d(energy.view(1, 1, -1), kernel_size=frame, stride=stride).flatten()
-
-    cut_points: list[tuple[int, float]] = []
-    cumulative = 0
-    previous_cut = 0
-    search_radius = int(sample_rate * 1.25)
-    min_gap = int(sample_rate * 0.35)
-    total_samples = int(tensor.shape[1])
-    for index, ((_, detected_pause), weight) in enumerate(zip(phrases[:-1], weights[:-1])):
-        cumulative += weight
-        target = int(total_samples * cumulative / total_weight)
-        start = max(previous_cut + min_gap, target - search_radius)
-        end = min(total_samples - min_gap, target + search_radius)
-        if end <= start:
-            continue
-        pooled_start = max(0, start // stride)
-        pooled_end = min(int(smoothed.numel()), max(pooled_start + 1, end // stride))
-        quiet_index = int(torch.argmin(smoothed[pooled_start:pooled_end]).item()) + pooled_start
-        cut = max(start, min(end, quiet_index * stride + frame // 2))
-        if detected_pause >= 0.55:
-            pause_seconds = detected_pause * max(0.5, float(args.paragraph_pause) / 0.65)
-        elif detected_pause <= 0.24:
-            pause_seconds = detected_pause * max(0.5, float(args.clause_pause) / 0.18)
-        else:
-            pause_seconds = detected_pause * max(0.5, float(args.sentence_pause) / 0.42)
-        cut_points.append((cut, pause_seconds))
-        previous_cut = cut
-
-    if not cut_points:
-        return torch.cat([tensor.cpu(), torch.zeros((tensor.shape[0], int(sample_rate * 0.12)), dtype=tensor.dtype)], dim=1)
 
     parts = []
-    cursor = 0
-    source = tensor.cpu()
-    fade_samples = max(1, int(sample_rate * 0.028))
-    for cut, pause_seconds in cut_points:
-        left = source[:, cursor:cut].clone()
-        if left.shape[1] >= fade_samples:
-            left[:, -fade_samples:] *= torch.linspace(1.0, 0.0, fade_samples, dtype=left.dtype)
-        parts.append(left)
-        # A tiny noise floor sounds more like a breath/room pause than digital zero.
-        pause_count = max(1, int(sample_rate * pause_seconds))
-        pause = torch.randn((source.shape[0], pause_count), dtype=source.dtype) * 0.000035
-        parts.append(pause)
-        cursor = cut
-        if cursor < source.shape[1]:
-            fade_end = min(source.shape[1], cursor + fade_samples)
-            source[:, cursor:fade_end] *= torch.linspace(0.0, 1.0, fade_end - cursor, dtype=source.dtype)
-    parts.append(source[:, cursor:])
-    parts.append(torch.randn((source.shape[0], int(sample_rate * 0.14)), dtype=source.dtype) * 0.000025)
+    for index, audio in enumerate(audios):
+        tensor = _to_tensor(audio)
+        if tensor is None:
+            raise RuntimeError(f"MagicVoice không trả về audio cho câu {index + 1}.")
+        if tensor.dim() == 1:
+            tensor = tensor.unsqueeze(0)
+        if tensor.shape[0] > 1:
+            tensor = tensor.mean(dim=0, keepdim=True)
+        tensor = tensor.cpu()
+        parts.append(tensor)
+        if index < len(audios) - 1:
+            pause_count = max(1, int(sample_rate * _pause_seconds(phrases[index][1], args)))
+            # Keep a tiny room-noise floor instead of digital zero.
+            noise = np.random.default_rng(42 + index).normal(0.0, 0.000025, pause_count).astype("float32")
+            parts.append(torch.from_numpy(noise).unsqueeze(0).to(dtype=tensor.dtype))
+    if not parts:
+        raise RuntimeError("MagicVoice không tạo được câu thoại nào.")
+    parts.append(torch.zeros((1, int(sample_rate * 0.14)), dtype=parts[0].dtype))
     return torch.cat(parts, dim=1)
-
-
-def _apply_broadcast_dynamics(tensor, sample_rate: int):
-    """Add subtle long-form energy movement without changing the cloned timbre."""
-    import math
-    import torch
-
-    if tensor.dim() == 1:
-        tensor = tensor.unsqueeze(0)
-    total = int(tensor.shape[1])
-    if total < sample_rate:
-        return tensor
-    position = torch.linspace(0.0, 1.0, total, dtype=tensor.dtype, device=tensor.device)
-    # Slow non-periodic movement avoids every sentence having identical intensity.
-    envelope = 1.0 + 0.035 * torch.sin(position * math.pi * 3.4) + 0.018 * torch.sin(position * math.pi * 8.6 + 0.7)
-    return tensor * envelope.unsqueeze(0)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate cloned voice with MagicVoice / OmniVoice")
     parser.add_argument("--text-file", required=True)
     parser.add_argument("--ref", required=True)
+    parser.add_argument("--ref-text-file", default="")
     parser.add_argument("--out", required=True)
     parser.add_argument("--steps", type=int, default=16)
     parser.add_argument("--speed", type=float, default=1.0)
@@ -189,6 +221,8 @@ def main() -> int:
     parser.add_argument("--clause-pause", type=float, default=0.18)
     parser.add_argument("--paragraph-pause", type=float, default=0.65)
     parser.add_argument("--clarity-speed", type=float, default=0.96)
+    parser.add_argument("--language", default="vi")
+    parser.add_argument("--batch-size", type=int, default=3)
     args = parser.parse_args()
 
     text = Path(args.text_file).read_text(encoding="utf-8", errors="replace").strip()
@@ -197,6 +231,7 @@ def main() -> int:
     ref = Path(args.ref)
     if not ref.is_file():
         raise FileNotFoundError(f"Không thấy audio mẫu clone: {ref}")
+    ref = _prepare_reference_audio(ref)
 
     import torch
     import torchaudio
@@ -223,51 +258,45 @@ def main() -> int:
     phrases = _split_natural_phrases(text)
     if not phrases:
         raise ValueError("Text rỗng sau khi xử lý.")
-    tts_text = re.sub(r"(?<=[.!?。！？])\s+", "\n", text)
-    kwargs = {
-        "text": tts_text,
-        "ref_audio": str(ref),
-        "num_step": max(4, int(args.steps)),
-        "speed": float(args.speed or 1.0) * max(0.85, min(1.05, float(args.clarity_speed))),
-        "guidance_scale": 2.0,
-    }
-    instruct = _normalize_instruct(args.instruct)
-    if instruct:
-        kwargs["instruct"] = instruct
-    for attempt in range(3):
+    ref_text = None
+    if str(args.ref_text_file or "").strip():
+        ref_text_path = Path(args.ref_text_file)
+        if ref_text_path.is_file():
+            ref_text = ref_text_path.read_text(encoding="utf-8", errors="replace").strip() or None
+    clone_prompt = model.create_voice_clone_prompt(str(ref), ref_text=ref_text)
+    phrase_texts = [phrase for phrase, _ in phrases]
+    generated_audios = []
+    batch_size = max(1, min(int(args.batch_size or 3), 8))
+    base_speed = float(args.speed or 1.0) * max(0.85, min(1.05, float(args.clarity_speed)))
+    for batch_start in range(0, len(phrase_texts), batch_size):
+        batch_texts = phrase_texts[batch_start : batch_start + batch_size]
+        batch_speeds = [base_speed * (0.985 + ((batch_start + index) % 3) * 0.012) for index in range(len(batch_texts))]
+        kwargs = {
+            "text": batch_texts,
+            "language": [str(args.language or "vi")] * len(batch_texts),
+            "voice_clone_prompt": [clone_prompt] * len(batch_texts),
+            "speed": batch_speeds,
+            "num_step": max(16, int(args.steps)),
+            "guidance_scale": 2.0,
+            # Preserve consonant attacks at sentence starts. OmniVoice's edge
+            # post-processing can trim Vietnamese initial sounds too tightly.
+            "postprocess_output": False,
+        }
         try:
             with torch.inference_mode():
-                result = model.generate(**kwargs)
-            break
-        except (TypeError, ValueError) as exc:
+                batch_result = model.generate(**kwargs)
+        except TypeError as exc:
             message = str(exc).lower()
-            unsupported_instruct = "unsupported instruct" in message
-            unsupported_keyword = "unexpected keyword" in message or "got an unexpected" in message
-            if not unsupported_instruct and not unsupported_keyword:
+            if "unexpected keyword" not in message and "got an unexpected" not in message:
                 raise
-            if unsupported_instruct and "instruct" in kwargs:
-                kwargs.pop("instruct", None)
-                continue
-            if "guidance_scale" in kwargs:
-                kwargs.pop("guidance_scale", None)
-                continue
-            if "instruct" in kwargs:
-                kwargs.pop("instruct", None)
-                continue
-            raise
-    else:
-        raise RuntimeError("MagicVoice không tạo được audio với bộ tham số hiện tại.")
+            kwargs.pop("guidance_scale", None)
+            with torch.inference_mode():
+                batch_result = model.generate(**kwargs)
+        generated_audios.extend(batch_result)
+        print(f"Generated sentences {batch_start + 1}-{batch_start + len(batch_texts)}/{len(phrase_texts)}")
 
-    tensor = _to_tensor(result)
-    if tensor is None:
-        raise RuntimeError("MagicVoice không trả về audio tensor.")
-    if tensor.dim() == 1:
-        tensor = tensor.unsqueeze(0)
-    if tensor.shape[0] > 1:
-        tensor = tensor.mean(dim=0, keepdim=True)
-    tensor = _apply_broadcast_dynamics(tensor, 24000)
-    tensor = _insert_natural_pauses(tensor, phrases, 24000, args)
-    print(f"Inserted natural pauses at {max(0, len(phrases) - 1)} sentence boundaries.")
+    tensor = _combine_generated_phrases(generated_audios, phrases, 24000, args)
+    print(f"Joined {len(phrases)} complete sentences with natural pauses.")
     peak = tensor.abs().max()
     if peak > 0.95:
         tensor = tensor * (0.891 / peak)
