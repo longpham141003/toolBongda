@@ -29,6 +29,26 @@ def _to_tensor(result):
     return item
 
 
+FOREIGN_NAME_PRONUNCIATIONS = {
+    "World Cup": "Uân Cúp",
+    "Los Angeles": "Lót An-giơ-lét",
+    "Paraguay": "Pa-ra-goay",
+    "Mauricio Pochettino": "Mau-ri-xi-ô Pô-chét-ti-nô",
+    "Folarin Balogun": "Fô-la-rin Ba-lô-gun",
+    "Weston McKennie": "Oét-tơn Mắc-Ken-ni",
+    "Gio Reyna": "Giô Rây-na",
+    "Christian Pulisic": "Crít-chi-an Pu-li-sích",
+}
+
+
+def _prepare_spoken_text(text: str) -> str:
+    """Apply speech-only hints while leaving the saved script unchanged."""
+    spoken = str(text or "")
+    for original, pronunciation in sorted(FOREIGN_NAME_PRONUNCIATIONS.items(), key=lambda item: len(item[0]), reverse=True):
+        spoken = re.sub(rf"\b{re.escape(original)}\b", pronunciation, spoken, flags=re.IGNORECASE)
+    return spoken
+
+
 def _prepare_reference_audio(ref: Path) -> Path:
     """Cache the clearest 3-10 second speech region from a long clone sample."""
     try:
@@ -193,7 +213,7 @@ def _combine_generated_phrases(audios, phrases: list[tuple[str, float]], sample_
             tensor = tensor.unsqueeze(0)
         if tensor.shape[0] > 1:
             tensor = tensor.mean(dim=0, keepdim=True)
-        tensor = tensor.cpu()
+        tensor = _trim_trailing_silence(tensor.cpu(), sample_rate)
         parts.append(tensor)
         if index < len(audios) - 1:
             pause_count = max(1, int(sample_rate * _pause_seconds(phrases[index][1], args)))
@@ -204,6 +224,28 @@ def _combine_generated_phrases(audios, phrases: list[tuple[str, float]], sample_
         raise RuntimeError("MagicVoice không tạo được câu thoại nào.")
     parts.append(torch.zeros((1, int(sample_rate * 0.14)), dtype=parts[0].dtype))
     return torch.cat(parts, dim=1)
+
+
+def _trim_trailing_silence(tensor, sample_rate: int):
+    """Remove only generated tail silence; retain a short natural release."""
+    import torch
+
+    if tensor.shape[1] < int(sample_rate * 0.25):
+        return tensor
+    mono = tensor.detach().float().abs().mean(dim=0)
+    frame = max(1, int(sample_rate * 0.02))
+    hop = max(1, int(sample_rate * 0.01))
+    if mono.numel() < frame:
+        return tensor
+    frames = mono.unfold(0, frame, hop).mean(dim=1)
+    peak = max(float(frames.max().item()), 1e-6)
+    threshold = max(0.00035, peak * 0.006)
+    voiced = torch.nonzero(frames > threshold, as_tuple=False).flatten()
+    if not voiced.numel():
+        return tensor
+    # Preserve 120 ms after the last voiced frame so final consonants are safe.
+    keep = min(tensor.shape[1], int(voiced[-1].item()) * hop + frame + int(sample_rate * 0.12))
+    return tensor[:, :keep]
 
 
 def main() -> int:
@@ -217,9 +259,9 @@ def main() -> int:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--dtype", default="float16")
     parser.add_argument("--instruct", default="")
-    parser.add_argument("--sentence-pause", type=float, default=0.42)
-    parser.add_argument("--clause-pause", type=float, default=0.18)
-    parser.add_argument("--paragraph-pause", type=float, default=0.65)
+    parser.add_argument("--sentence-pause", type=float, default=0.28)
+    parser.add_argument("--clause-pause", type=float, default=0.12)
+    parser.add_argument("--paragraph-pause", type=float, default=0.43)
     parser.add_argument("--clarity-speed", type=float, default=0.96)
     parser.add_argument("--language", default="vi")
     parser.add_argument("--batch-size", type=int, default=3)
@@ -264,7 +306,7 @@ def main() -> int:
         if ref_text_path.is_file():
             ref_text = ref_text_path.read_text(encoding="utf-8", errors="replace").strip() or None
     clone_prompt = model.create_voice_clone_prompt(str(ref), ref_text=ref_text)
-    phrase_texts = [phrase for phrase, _ in phrases]
+    phrase_texts = [_prepare_spoken_text(phrase) for phrase, _ in phrases]
     generated_audios = []
     batch_size = max(1, min(int(args.batch_size or 3), 8))
     base_speed = float(args.speed or 1.0) * max(0.85, min(1.05, float(args.clarity_speed)))
