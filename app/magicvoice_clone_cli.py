@@ -68,16 +68,22 @@ def _split_natural_phrases(text: str, max_chars: int = 260) -> list[tuple[str, f
                 is_last_unit = unit_index == len(expanded) - 1
                 is_last_sentence = sentence_index == len(sentences) - 1
                 is_last_paragraph = paragraph_index == len(paragraphs) - 1
+                word_count = max(1, len(re.findall(r"\w+", unit, flags=re.UNICODE)))
                 if not is_last_unit:
-                    pause = 0.18
+                    pause = 0.14 + min(0.08, word_count * 0.003)
                 elif is_last_sentence and not is_last_paragraph:
-                    pause = 0.65
-                elif unit.rstrip().endswith((".", "!", "?", "。", "！", "？")):
-                    pause = 0.42
+                    pause = 0.58 + min(0.16, word_count * 0.006)
+                elif unit.rstrip().endswith(("!", "?", "！", "？")):
+                    pause = 0.34 + min(0.12, word_count * 0.005)
+                elif unit.rstrip().endswith((".", "。")):
+                    # Alternate the cadence slightly so consecutive sentences do not
+                    # all land with the same synthetic pause.
+                    cadence = (sentence_index % 3) * 0.045
+                    pause = 0.31 + cadence + min(0.10, word_count * 0.004)
                 elif unit.rstrip().endswith((",", ";", ":", "，", "；", "：")):
-                    pause = 0.18
+                    pause = 0.13 + min(0.08, word_count * 0.003)
                 else:
-                    pause = 0.32
+                    pause = 0.27 + min(0.08, word_count * 0.003)
                 append_phrase(unit, pause)
 
     if phrases:
@@ -119,12 +125,12 @@ def _insert_natural_pauses(tensor, phrases: list[tuple[str, float]], sample_rate
         pooled_end = min(int(smoothed.numel()), max(pooled_start + 1, end // stride))
         quiet_index = int(torch.argmin(smoothed[pooled_start:pooled_end]).item()) + pooled_start
         cut = max(start, min(end, quiet_index * stride + frame // 2))
-        if detected_pause >= 0.6:
-            pause_seconds = max(0.0, float(args.paragraph_pause))
-        elif detected_pause <= 0.2:
-            pause_seconds = max(0.0, float(args.clause_pause))
+        if detected_pause >= 0.55:
+            pause_seconds = detected_pause * max(0.5, float(args.paragraph_pause) / 0.65)
+        elif detected_pause <= 0.24:
+            pause_seconds = detected_pause * max(0.5, float(args.clause_pause) / 0.18)
         else:
-            pause_seconds = max(0.0, float(args.sentence_pause))
+            pause_seconds = detected_pause * max(0.5, float(args.sentence_pause) / 0.42)
         cut_points.append((cut, pause_seconds))
         previous_cut = cut
 
@@ -134,13 +140,39 @@ def _insert_natural_pauses(tensor, phrases: list[tuple[str, float]], sample_rate
     parts = []
     cursor = 0
     source = tensor.cpu()
+    fade_samples = max(1, int(sample_rate * 0.028))
     for cut, pause_seconds in cut_points:
-        parts.append(source[:, cursor:cut])
-        parts.append(torch.zeros((source.shape[0], max(1, int(sample_rate * pause_seconds))), dtype=source.dtype))
+        left = source[:, cursor:cut].clone()
+        if left.shape[1] >= fade_samples:
+            left[:, -fade_samples:] *= torch.linspace(1.0, 0.0, fade_samples, dtype=left.dtype)
+        parts.append(left)
+        # A tiny noise floor sounds more like a breath/room pause than digital zero.
+        pause_count = max(1, int(sample_rate * pause_seconds))
+        pause = torch.randn((source.shape[0], pause_count), dtype=source.dtype) * 0.000035
+        parts.append(pause)
         cursor = cut
+        if cursor < source.shape[1]:
+            fade_end = min(source.shape[1], cursor + fade_samples)
+            source[:, cursor:fade_end] *= torch.linspace(0.0, 1.0, fade_end - cursor, dtype=source.dtype)
     parts.append(source[:, cursor:])
-    parts.append(torch.zeros((source.shape[0], int(sample_rate * 0.12)), dtype=source.dtype))
+    parts.append(torch.randn((source.shape[0], int(sample_rate * 0.14)), dtype=source.dtype) * 0.000025)
     return torch.cat(parts, dim=1)
+
+
+def _apply_broadcast_dynamics(tensor, sample_rate: int):
+    """Add subtle long-form energy movement without changing the cloned timbre."""
+    import math
+    import torch
+
+    if tensor.dim() == 1:
+        tensor = tensor.unsqueeze(0)
+    total = int(tensor.shape[1])
+    if total < sample_rate:
+        return tensor
+    position = torch.linspace(0.0, 1.0, total, dtype=tensor.dtype, device=tensor.device)
+    # Slow non-periodic movement avoids every sentence having identical intensity.
+    envelope = 1.0 + 0.035 * torch.sin(position * math.pi * 3.4) + 0.018 * torch.sin(position * math.pi * 8.6 + 0.7)
+    return tensor * envelope.unsqueeze(0)
 
 
 def main() -> int:
@@ -156,6 +188,7 @@ def main() -> int:
     parser.add_argument("--sentence-pause", type=float, default=0.42)
     parser.add_argument("--clause-pause", type=float, default=0.18)
     parser.add_argument("--paragraph-pause", type=float, default=0.65)
+    parser.add_argument("--clarity-speed", type=float, default=0.96)
     args = parser.parse_args()
 
     text = Path(args.text_file).read_text(encoding="utf-8", errors="replace").strip()
@@ -195,22 +228,35 @@ def main() -> int:
         "text": tts_text,
         "ref_audio": str(ref),
         "num_step": max(4, int(args.steps)),
-        "speed": float(args.speed or 1.0),
+        "speed": float(args.speed or 1.0) * max(0.85, min(1.05, float(args.clarity_speed))),
         "guidance_scale": 2.0,
     }
     instruct = _normalize_instruct(args.instruct)
     if instruct:
         kwargs["instruct"] = instruct
-    try:
-        with torch.inference_mode():
-            result = model.generate(**kwargs)
-    except TypeError as exc:
-        if "unexpected keyword" in str(exc).lower() or "got an unexpected" in str(exc).lower():
-            kwargs.pop("guidance_scale", None)
+    for attempt in range(3):
+        try:
             with torch.inference_mode():
                 result = model.generate(**kwargs)
-        else:
+            break
+        except (TypeError, ValueError) as exc:
+            message = str(exc).lower()
+            unsupported_instruct = "unsupported instruct" in message
+            unsupported_keyword = "unexpected keyword" in message or "got an unexpected" in message
+            if not unsupported_instruct and not unsupported_keyword:
+                raise
+            if unsupported_instruct and "instruct" in kwargs:
+                kwargs.pop("instruct", None)
+                continue
+            if "guidance_scale" in kwargs:
+                kwargs.pop("guidance_scale", None)
+                continue
+            if "instruct" in kwargs:
+                kwargs.pop("instruct", None)
+                continue
             raise
+    else:
+        raise RuntimeError("MagicVoice không tạo được audio với bộ tham số hiện tại.")
 
     tensor = _to_tensor(result)
     if tensor is None:
@@ -219,6 +265,7 @@ def main() -> int:
         tensor = tensor.unsqueeze(0)
     if tensor.shape[0] > 1:
         tensor = tensor.mean(dim=0, keepdim=True)
+    tensor = _apply_broadcast_dynamics(tensor, 24000)
     tensor = _insert_natural_pauses(tensor, phrases, 24000, args)
     print(f"Inserted natural pauses at {max(0, len(phrases) - 1)} sentence boundaries.")
     peak = tensor.abs().max()

@@ -23,6 +23,7 @@
   "magicvoice_sentence_pause": 0.42,
   "magicvoice_clause_pause": 0.18,
   "magicvoice_paragraph_pause": 0.65,
+  "magicvoice_clarity_speed": 0.96,
   "magicvoice_dtype": "float16",
   "magicvoice_device": "auto",
   "whisper_python": "",
