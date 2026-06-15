@@ -140,6 +140,38 @@ def create_visual_project(projects_dir: Path, title: str, script: str) -> Path:
     return root
 
 
+def _replace_file_windows(source: Path, target: Path, retries: int = 60, delay: float = 0.5) -> None:
+    """Replace target with source on Windows, tolerating file-in-use locks (WinError 5/32).
+
+    Strategy per attempt:
+      1. Try direct copy2 over target (works when reader opened with write-share).
+      2. If that fails, unlink target then copy2 (works when target is deletable).
+      3. Retry up to `retries` times with `delay` seconds between attempts.
+    Source is cleaned up via the caller's finally block if it can't be deleted here.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        # Strategy 1: overwrite in-place (avoids needing delete rights on target).
+        try:
+            shutil.copy2(str(source), str(target))
+            source.unlink(missing_ok=True)
+            return
+        except PermissionError as exc:
+            last_exc = exc
+
+        # Strategy 2: delete target first, then copy.
+        try:
+            target.unlink(missing_ok=True)
+            shutil.copy2(str(source), str(target))
+            source.unlink(missing_ok=True)
+            return
+        except PermissionError as exc:
+            last_exc = exc
+
+        time.sleep(delay)
+    raise PermissionError(str(last_exc)) from last_exc
+
+
 def generate_voice(project: Path, settings: dict, log: Callable[[str], None], stop_check=lambda: False) -> Path:
     script_path = project / "scripts" / "script_final.txt"
     output_path = project / "voices" / "voice.wav"
@@ -158,7 +190,7 @@ def generate_voice(project: Path, settings: dict, log: Callable[[str], None], st
         for source, target in replacements:
             if source.exists():
                 target.parent.mkdir(parents=True, exist_ok=True)
-                source.replace(target)
+                _replace_file_windows(source, target)
         # A new voice means the old scene/timing-to-asset mapping is no longer
         # trustworthy. Force the next analyze-search run to rebuild scenes from
         # the new voice instead of showing/reusing stale media.

@@ -1733,19 +1733,7 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
       setDefault: true,
     })
     setPendingCloneFile(null)
-    const preview = await previewVoiceNow(
-      latestSettings,
-      cloneLanguage.toLowerCase().startsWith("vi")
-        ? "Đây là đoạn nghe thử giọng vừa lưu. Hãy kiểm tra độ giống giọng, tốc độ đọc và độ rõ của âm thanh."
-        : "This is a short preview of the saved cloned voice. Check the tone, pace, and clarity."
-    )
-    if (preview?.url) {
-      const profiles = Array.isArray(latestSettings.voice_clone_profiles) ? latestSettings.voice_clone_profiles : []
-      const selectedPath = latestSettings.voice_clone_reference_path
-      const nextProfiles = profiles.map((item) => item.path === selectedPath ? { ...item, preview_url: preview.url } : item)
-      const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: { ...latestSettings, voice_clone_profiles: nextProfiles, voice_clone_preview_url: preview.url } }) })
-      setSettings(data.settings)
-    }
+    setSettings(latestSettings)
     setVoiceMode("clone")
   }
   const chooseNormalMode = () => {
@@ -2018,6 +2006,10 @@ function SettingsModal({ open, onOpenChange, settings, setSettings, saveSettings
       </div></TabsContent>
       <TabsContent value="ai"><SettingSection title="AI dùng để hiểu nội dung và kiểm ảnh" icon={Bot}><Field label="Nhà cung cấp"><Select value={settings.keyword_ai_provider||"auto"} onValueChange={v=>setSettings({...settings,keyword_ai_provider:v})} options={[{value:"auto",label:"Tự động"},{value:"gemini",label:"Gemini"},{value:"openai",label:"OpenAI"}]}/></Field><Field label="Gemini API key"><div className="relative"><Input type={showKey?"text":"password"} className="pr-11" value={settings.gemini_api_key||""} onChange={e=>setSettings({...settings,gemini_api_key:e.target.value})}/><button type="button" onClick={()=>setShowKey(v=>!v)} aria-label={showKey?"Ẩn key":"Hiện key"} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-zinc-500 hover:bg-white/10 hover:text-white">{showKey?<EyeOff className="h-4 w-4"/>:<Eye className="h-4 w-4"/>}</button></div></Field><div className="setting-note">Nếu không biết chọn gì, để Tự động và chỉ nhập Gemini API key.</div></SettingSection></TabsContent>
       <TabsContent value="advanced"><div className="settings-grid">
+        <SettingSection title="Clone giọng (MagicVoice)" icon={Mic}>
+          <Field label="Thiết bị xử lý"><Select value={settings.magicvoice_device||"auto"} onValueChange={v=>setSettings({...settings,magicvoice_device:v})} options={[{value:"auto",label:"Tự động (ưu tiên CUDA)"},{value:"cuda",label:"CUDA (GPU)"},{value:"cpu",label:"CPU"}]}/></Field>
+          <div className="setting-note">Chọn CPU nếu gặp lỗi CUDA hoặc cuDNN. CPU chậm hơn nhưng ổn định hơn.</div>
+        </SettingSection>
         <SettingSection title="Cảnh và chất lượng hình ảnh" icon={Aperture}><Switch checked={!!settings.whisper_timing_enabled} onCheckedChange={v=>setSettings({...settings,whisper_timing_enabled:v})} label="Căn lời đọc chính xác theo thời gian"/><Switch checked={!!settings.scene_ai_enabled} onCheckedChange={v=>setSettings({...settings,scene_ai_enabled:v})} label="Tự gom các câu cùng ý thành một cảnh"/><div className="grid grid-cols-2 gap-4"><Field label="Cảnh ngắn nhất (giây)"><Input type="number" min={1} step={1} value={settings.scene_min_seconds??3} onChange={e=>setNum("scene_min_seconds",e.target.value,3)}/></Field><Field label="Thời lượng cảnh mong muốn (giây)"><Input type="number" min={1} step={1} value={settings.scene_target_max_seconds??10} onChange={e=>setNum("scene_target_max_seconds",e.target.value,10)}/></Field><Field label="Chiều rộng video"><Input type="number" min={16} step={2} value={settings.image_target_width??1920} onChange={e=>setNum("image_target_width",e.target.value,1920)}/></Field><Field label="Chiều cao video"><Input type="number" min={16} step={2} value={settings.image_target_height??1080} onChange={e=>setNum("image_target_height",e.target.value,1080)}/></Field></div><div className="setting-note">Khuyến nghị giữ 1920 × 1080 cho video ngang. Chỉ thay đổi khi bạn cần kích thước xuất khác.</div></SettingSection>
       </div></TabsContent>
       <TabsContent value="validate"><SettingSection title="Kiểm tra cấu hình máy" icon={CheckCircle2}><Button onClick={runPreflight} disabled={preflightBusy}>{preflightBusy?<LoaderCircle className="h-4 w-4 animate-spin"/>:<RefreshCw className="h-4 w-4"/>}{preflightBusy?"Đang kiểm tra...":"Chạy kiểm tra"}</Button><div className="grid grid-cols-2 gap-3">{(preflight?.checks||[]).map(x=><CheckRow key={x.id} ok={x.ok} label={x.label}/>)}</div></SettingSection></TabsContent>

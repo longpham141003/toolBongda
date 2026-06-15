@@ -745,6 +745,9 @@ class TextToVoiceRunner:
                                 or "fetching " in lowered
                                 or line.startswith("[transformers]")
                                 or "%|" in line
+                                or "could not load symbol" in lowered
+                                or "runtimewarning" in lowered
+                                or "filterwarnings" in lowered
                             ):
                                 continue
                             detail_lines.append(line)

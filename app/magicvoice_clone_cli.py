@@ -7,6 +7,32 @@ import re
 from pathlib import Path
 
 
+def _warmup_torch_cudnn(device_arg: str) -> None:
+    """Map torch's own cuDNN into the process before faster-whisper/ctranslate2.
+
+    ctranslate2 ships its own cudnn64_9.dll. If it loads first, torch later picks
+    up that incompatible copy and crashes natively with
+    "Could not load symbol cudnnGetLibConfig. Error code 127" while moving the
+    OmniVoice model to CUDA. Touching a cuDNN op here forces torch's cuDNN DLLs to
+    load first, so the later faster-whisper import can no longer win the name race.
+    """
+    device = str(device_arg or "auto").strip().lower()
+    if device not in {"", "auto", "cuda"}:
+        return
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return
+        x = torch.randn(1, 1, 8, 8, device="cuda")
+        w = torch.randn(1, 1, 3, 3, device="cuda")
+        torch.nn.functional.conv2d(x, w)
+        torch.cuda.synchronize()
+    except Exception:
+        # Warmup is best-effort: never block voice cloning on it.
+        pass
+
+
 def _normalize_instruct(text: str | None) -> str | None:
     value = (text or "").strip()
     return value or None
@@ -273,8 +299,12 @@ def main() -> int:
     ref = Path(args.ref)
     if not ref.is_file():
         raise FileNotFoundError(f"Không thấy audio mẫu clone: {ref}")
+    # Load torch's cuDNN before faster-whisper pulls in ctranslate2's copy.
+    _warmup_torch_cudnn(args.device)
     ref = _prepare_reference_audio(ref)
 
+    import warnings
+    warnings.filterwarnings("ignore", category=RuntimeWarning, module="pydub")
     import torch
     import torchaudio
     from omnivoice import OmniVoice as MagicVoice
@@ -292,7 +322,17 @@ def main() -> int:
     }.get(dtype_name, torch.float32)
 
     print(f"Loading MagicVoice model on {device} ({dtype_name})...")
-    model = MagicVoice.from_pretrained("k2-fsa/OmniVoice", device_map=device, dtype=dtype)
+    try:
+        model = MagicVoice.from_pretrained("k2-fsa/OmniVoice", device_map=device, dtype=dtype)
+    except Exception as cuda_exc:
+        if device != "cpu":
+            print(f"CUDA load failed ({cuda_exc}), falling back to CPU float32...")
+            device = "cpu"
+            dtype_name = "float32"
+            dtype = torch.float32
+            model = MagicVoice.from_pretrained("k2-fsa/OmniVoice", device_map="cpu", dtype=dtype)
+        else:
+            raise
     torch.manual_seed(42)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(42)
