@@ -67,13 +67,13 @@
   --ring: 263 70% 58%;
 
   /* Typography */
-  --text-xl: 32px;
-  --text-lg: 24px;
-  --text-md: 18px;
-  --text-base: 14px;
-  --text-sm: 13px;
-  --text-xs: 12px;
-  --text-micro: 11px;
+  --text-xl: 34px;
+  --text-lg: 26px;
+  --text-md: 19px;
+  --text-base: 15px;
+  --text-sm: 14px;
+  --text-xs: 13px;
+  --text-micro: 12px;
 
   /* Spacing (4px grid) */
   --sp-1: 4px;
@@ -324,7 +324,7 @@ textarea {
   border-radius: 12px;
   padding: 9px 12px;
   color: #cbc3d7;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -429,7 +429,7 @@ textarea {
   background: rgba(32,31,34,.8);
   padding: 8px 16px;
   color: #cbc3d7;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
 }
 .step-pill span {
@@ -458,7 +458,7 @@ textarea {
   gap: 8px;
   border-radius: 999px;
   padding: 12px 24px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
 }
 .btn-primary { color: white; background: linear-gradient(90deg,#8b5cf6,#a078ff); }
@@ -498,7 +498,7 @@ textarea {
   background: rgba(24,24,27,.6);
   padding: 14px;
   color: #94a3b8;
-  font-size: 12px;
+  font-size: 13px;
   backdrop-filter: blur(20px);
 }
 
@@ -1706,7 +1706,7 @@ textarea {
   background: rgba(78,222,163,0.08);
   color: #8df6c7;
   padding: 7px 12px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 900;
   letter-spacing: 0.22em;
 }
@@ -1798,7 +1798,7 @@ textarea {
   background: rgba(255,255,255,0.045);
   color: #94a3b8;
   padding: 7px 10px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
 }
 
@@ -1859,14 +1859,14 @@ textarea {
 
 .home-process-strip b {
   color: white;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 900;
 }
 
 .home-process-strip small {
   overflow: hidden;
   color: #94a3b8;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1924,7 +1924,7 @@ textarea {
   background: rgba(208,188,255,0.12);
   color: #d0bcff;
   padding: 9px 12px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 900;
 }
 
@@ -2002,7 +2002,7 @@ textarea {
 .help-step-list p {
   margin-top: 4px;
   color: #94a3b8;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
 }
 
@@ -2060,13 +2060,13 @@ textarea {
 
 .script-mode-switch b {
   color: inherit;
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .script-mode-switch small {
   overflow: hidden;
   color: #94a3b8;
-  font-size: 12px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2100,7 +2100,7 @@ textarea {
 .script-editor-actions span {
   margin-left: auto;
   color: #64748b;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .workflow-create {
@@ -2125,7 +2125,7 @@ textarea {
 .workflow-result span {
   margin-top: 3px;
   color: #94a3b8;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .workflow-flow-picker {
@@ -2162,7 +2162,7 @@ textarea {
   justify-content: space-between;
   gap: 12px;
   color: #d0bcff;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .workflow-live-progress i {
@@ -2390,7 +2390,7 @@ textarea {
   background: rgba(245,158,11,.1);
   border: 1px solid rgba(245,158,11,.22);
   color: #d4a72c;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s;
@@ -2417,7 +2417,7 @@ textarea {
 }
 
 .dashboard-hero-readiness p {
-  font-size: 13px;
+  font-size: 14px;
   color: #71717a;
   line-height: 1.5;
 }
@@ -2492,7 +2492,7 @@ textarea {
 }
 
 .series-card-desc {
-  font-size: 12px;
+  font-size: 13px;
   color: #71717a;
   margin: 2px 0 0;
   white-space: nowrap;
@@ -2508,7 +2508,7 @@ textarea {
 }
 
 .series-card-count {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   color: #8b5cf6;
   background: rgba(139,92,246,.12);
@@ -2517,7 +2517,7 @@ textarea {
 }
 
 .series-card-date {
-  font-size: 11px;
+  font-size: 12px;
   color: #52525b;
 }
 
@@ -2539,7 +2539,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: 14px;
   color: #71717a;
   cursor: pointer;
   background: none;
@@ -2580,7 +2580,7 @@ textarea {
 }
 
 .project-detail-desc {
-  font-size: 14px;
+  font-size: 15px;
   color: #71717a;
   margin: 4px 0 0;
 }
@@ -2589,7 +2589,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 13px;
+  font-size: 14px;
   color: #52525b;
 }
 
@@ -2637,7 +2637,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 14px;
   color: #e5e1e4;
 }
 
@@ -2661,7 +2661,7 @@ textarea {
 }
 
 .video-card-date {
-  font-size: 11px;
+  font-size: 12px;
   color: #52525b;
   flex-shrink: 0;
 }
