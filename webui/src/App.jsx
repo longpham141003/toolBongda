@@ -983,7 +983,7 @@ function App() {
         )}
         <button className="flex items-center gap-2" onClick={() => activeScreen !== "dashboard" && goHomeAndStopProject()}>
           <div className="logo-mark"><WandSparkles className="h-4 w-4" /></div>
-          <span className="text-[15px] font-bold text-white">Visual CapCut <span className="text-emerald-300">Studio</span></span>
+          <span className="text-[15px] font-bold text-white">CONTENT <span className="text-emerald-300">AUTOMATION</span></span>
         </button>
         <div className="ml-auto flex items-center gap-2">
           <button className="icon-action" onClick={() => setSettingsOpen(true)}><Settings className="h-4 w-4" /></button>
