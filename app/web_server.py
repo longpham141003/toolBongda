@@ -820,6 +820,13 @@ async def upload_voice_clone_reference(
     target = ref_dir / f"{stem}_{profile_id}{suffix}"
     with target.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
+    file_size = target.stat().st_size
+    if file_size < 5000:
+        target.unlink()
+        raise HTTPException(
+            status_code=400,
+            detail="File audio quá nhỏ hoặc không hợp lệ. Vui lòng upload file audio ít nhất 2-3 giây (tối thiểu ~5KB)."
+        )
     profiles = settings.get("voice_clone_profiles")
     if not isinstance(profiles, list):
         profiles = []
@@ -1058,6 +1065,12 @@ def preview_voice(request: VoicePreviewRequest) -> dict[str, Any]:
     if len(sample) > 500:
         sample = sample[:500]
 
+    clone_warning = None
+    if settings.get("voice_clone_enabled"):
+        ref_path_str = str(settings.get("voice_clone_reference_path") or "").strip()
+        if not ref_path_str or not Path(ref_path_str).exists():
+            clone_warning = "Clone giọng đang bật nhưng chưa có file tham chiếu hợp lệ. Đã dùng Kokoro preset."
+
     preview_dir = APP_DIR / ".voice_preview"
     preview_dir.mkdir(parents=True, exist_ok=True)
     text_path = preview_dir / "preview.txt"
@@ -1077,9 +1090,10 @@ def preview_voice(request: VoicePreviewRequest) -> dict[str, Any]:
         "ok": True,
         "path": result_path,
         "url": f"/api/media?path={quote(result_path, safe='')}",
-        "logs": ([language_warning] if language_warning else []) + logs[-8:],
+        "logs": ([language_warning] if language_warning else []) + ([clone_warning] if clone_warning else []) + logs[-8:],
         "language": normalized_lang,
         "warning": language_warning,
+        "clone_warning": clone_warning,
     }
 
 
