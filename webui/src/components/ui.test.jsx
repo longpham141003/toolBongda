@@ -188,10 +188,10 @@ describe('Switch', () => {
     expect(onCheckedChange).toHaveBeenCalledWith(false)
   })
 
-  it('checked state applies violet classes to the track', () => {
+  it('checked state applies emerald classes to the track', () => {
     render(<Switch checked={true} onCheckedChange={() => {}} />)
     const trackSpan = screen.getByRole('button').querySelector('span')
-    expect(trackSpan.className).toMatch(/violet/)
+    expect(trackSpan.className).toMatch(/emerald/)
   })
 
   it('unchecked state does not apply violet track classes', () => {

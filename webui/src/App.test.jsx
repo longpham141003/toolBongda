@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
 
 // App now derives its screen from the URL, so it must render inside a Router.
-function renderApp() {
-  return render(<MemoryRouter><App /></MemoryRouter>)
+function renderApp(initialEntries = ['/']) {
+  return render(<MemoryRouter initialEntries={initialEntries}><App /></MemoryRouter>)
 }
 
 // ---------------------------------------------------------------------------
@@ -17,9 +17,13 @@ function makeState(overrides = {}) {
       projects_dir: 'C:/Projects',
       script_workflow_steps: [],
       script_workflow_input: '',
+      // Provide a dummy key so the "Thiếu Gemini API key" notice dialog does
+      // not open and cover the main UI under an aria-hidden overlay.
+      gemini_api_key: 'test-key',
     },
     project: null,
     projects: [],
+    series: [],
     active_job: null,
     queued_jobs: [],
     jobs: [],
@@ -27,7 +31,7 @@ function makeState(overrides = {}) {
   }
 }
 
-function mockFetchOnce(data) {
+function mockFetch(data) {
   global.fetch = vi.fn().mockResolvedValue({
     ok: true,
     json: async () => data,
@@ -49,74 +53,82 @@ describe('App', () => {
     expect(screen.getByText(/Đang khởi động/)).toBeInTheDocument()
   })
 
-  it('renders the app header after state is loaded', async () => {
-    mockFetchOnce(makeState())
+  it('renders the app header "CONTENT AUTOMATION" after state is loaded', async () => {
+    mockFetch(makeState())
     renderApp()
     await waitFor(() => {
-      expect(screen.getByText('Visual CapCut Studio')).toBeInTheDocument()
+      // The header now reads "CONTENT AUTOMATION" (with AUTOMATION in emerald span)
+      expect(screen.getByText(/CONTENT/)).toBeInTheDocument()
+      expect(screen.getByText(/AUTOMATION/)).toBeInTheDocument()
     })
   })
 
-  it('shows "Chưa có project" when no project is loaded', async () => {
-    mockFetchOnce(makeState({ project: null }))
+  it('shows empty-state hero section when no series exist', async () => {
+    mockFetch(makeState({ project: null, series: [] }))
     renderApp()
     await waitFor(() => {
-      expect(screen.getByText('Chưa có project')).toBeInTheDocument()
+      // The dashboard shows "AI VIDEO PRODUCTION" kicker when no projects
+      expect(screen.getByText('AI VIDEO PRODUCTION')).toBeInTheDocument()
     })
   })
 
-  it('shows the project name in the header when a project is loaded', async () => {
-    const project = {
-      name: 'My Test Project',
-      path: 'C:/Projects/my-test-project',
-      script: 'Hello world script.',
-      has_voice: false,
-      has_scenes: false,
-      has_capcut_export: false,
-      assets: [],
-    }
-    mockFetchOnce(makeState({ project }))
+  it('shows series title in the dashboard grid when series exist', async () => {
+    const series = [
+      {
+        path: 'C:/Projects/bong-da',
+        title: 'Bóng đá',
+        description: 'Series bóng đá',
+        is_virtual: false,
+        video_count: 2,
+        latest_updated_at: 0,
+        videos: [],
+      },
+    ]
+    mockFetch(makeState({ series }))
     renderApp()
     await waitFor(() => {
-      expect(screen.getByText('My Test Project')).toBeInTheDocument()
+      expect(screen.getByText('Bóng đá')).toBeInTheDocument()
     })
   })
 
-  it('shows "Sẵn sàng" badge when no active job is running', async () => {
-    mockFetchOnce(makeState())
+  it('shows "Tạo Dự án mới" button on the dashboard', async () => {
+    mockFetch(makeState())
     renderApp()
     await waitFor(() => {
-      expect(screen.getByText('Sẵn sàng')).toBeInTheDocument()
+      // Dashboard always shows a "Tạo Dự án mới" button in the hero CTA
+      const btn = screen.getAllByRole('button').find(
+        (b) => b.textContent.normalize('NFC').includes('Tạo Dự án mới'.normalize('NFC'))
+      )
+      expect(btn).toBeInTheDocument()
     })
   })
 
-  it('shows the workflow section after state is loaded', async () => {
-    mockFetchOnce(makeState())
+  it('shows process steps section when no projects exist', async () => {
+    mockFetch(makeState({ series: [] }))
     renderApp()
     await waitFor(() => {
-      // The B0 script section heading should be visible
-      expect(screen.getByText('B0 · Tạo nội dung')).toBeInTheDocument()
+      // The empty-state dashboard shows 4 process steps like "Nhập nội dung"
+      expect(screen.getByText('Nhập nội dung')).toBeInTheDocument()
     })
   })
 
-  it('shows flow step labels once loaded', async () => {
-    mockFetchOnce(makeState())
+  it('hides process strip when series already exist', async () => {
+    const series = [
+      {
+        path: 'C:/Projects/khoa-hoc',
+        title: 'Khoa học',
+        description: '',
+        is_virtual: false,
+        video_count: 1,
+        latest_updated_at: 0,
+        videos: [],
+      },
+    ]
+    mockFetch(makeState({ series }))
     renderApp()
     await waitFor(() => {
-      // The step label in the flow-step header has the exact text "B1 · Magic Voice"
-      expect(screen.getByText('B1 · Magic Voice')).toBeInTheDocument()
-      expect(screen.getByText('B2 · Phân cảnh')).toBeInTheDocument()
-    })
-  })
-
-  it('renders "Tạo project" button when no project is loaded', async () => {
-    mockFetchOnce(makeState({ project: null }))
-    renderApp()
-    await waitFor(() => {
-      // Multiple "Tạo project" buttons exist (header area + workflow tabs).
-      // We just need at least one to be present.
-      const buttons = screen.getAllByRole('button', { name: /Tạo project/ })
-      expect(buttons.length).toBeGreaterThan(0)
+      // "Nhập nội dung" belongs to the process strip — hidden when projects exist
+      expect(screen.queryByText('Nhập nội dung')).not.toBeInTheDocument()
     })
   })
 

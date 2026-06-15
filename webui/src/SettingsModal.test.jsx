@@ -15,8 +15,30 @@ function renderApp() {
 // Vietnamese text can be stored in different Unicode normalization forms (NFC
 // vs NFD), so all text matching here is normalization-insensitive.
 const nfc = (s) => (s || '').normalize('NFC')
-const exactName = (label) => ({ name: (n) => nfc(n) === nfc(label) })
-const partialName = (frag) => ({ name: (n) => nfc(n).includes(nfc(frag)) })
+
+// Robust button finder: scans all rendered buttons by textContent so it isn't
+// affected by accessible-name computation changes (which broke the role+name
+// function matcher after a dependency refresh).
+function findButtonByText(text) {
+  const normalised = nfc(text)
+  const btn = screen.getAllByRole('button').find(
+    (b) => nfc(b.textContent).includes(normalised)
+  )
+  if (!btn) throw new Error(`Unable to find button with text "${text}"`)
+  return btn
+}
+
+// Async version — waits for the button to appear (e.g. after dialog opens).
+async function findButtonByTextAsync(text) {
+  const normalised = nfc(text)
+  return waitFor(() => {
+    const btn = screen.getAllByRole('button').find(
+      (b) => nfc(b.textContent).includes(normalised)
+    )
+    if (!btn) throw new Error(`Unable to find button with text "${text}"`)
+    return btn
+  })
+}
 
 function makeState(settingsOverrides = {}) {
   return {
@@ -25,6 +47,9 @@ function makeState(settingsOverrides = {}) {
       script_workflow_steps: [],
       script_workflow_input: '',
       image_ai_validation_enabled: true,
+      // Provide a dummy key so the "Thiếu Gemini API key" notice dialog does
+      // not open and cover the settings button under an aria-hidden overlay.
+      gemini_api_key: 'test-key',
       ...settingsOverrides,
     },
     project: null,
@@ -53,9 +78,16 @@ function routedFetch(state, savedBodies) {
 }
 
 async function openSettings(user, container) {
-  // The header gear button is the only ".icon-action" on the dashboard.
-  await user.click(container.querySelector('.icon-action'))
-  await screen.findByRole('button', exactName('Lưu cài đặt'))
+  // The header gear button (aria-label="Cài đặt") opens the settings dialog.
+  // We click the second .icon-action (the settings gear), not the first (help).
+  const iconActions = container.querySelectorAll('.icon-action')
+  // Settings button is the second icon-action in the header
+  const settingsBtn = Array.from(iconActions).find(
+    (el) => el.getAttribute('aria-label') === 'Cài đặt'
+  ) || iconActions[iconActions.length - 1]
+  await user.click(settingsBtn)
+  // Wait for dialog to open — use robust textContent-based check
+  await findButtonByTextAsync('Lưu cài đặt')
 }
 
 // ---------------------------------------------------------------------------
@@ -73,8 +105,8 @@ describe('SettingsModal', () => {
 
     await openSettings(user, container)
     // Toggle "AI kiểm tra ảnh có đúng nội dung" from on -> off
-    await user.click(screen.getByRole('button', partialName('AI kiểm tra ảnh')))
-    await user.click(screen.getByRole('button', exactName('Lưu cài đặt')))
+    await user.click(findButtonByText('AI kiểm tra ảnh'))
+    await user.click(findButtonByText('Lưu cài đặt'))
 
     await waitFor(() => expect(saved.length).toBeGreaterThan(0))
     expect(saved.at(-1).image_ai_validation_enabled).toBe(false)
@@ -89,12 +121,12 @@ describe('SettingsModal', () => {
 
     // Edit then cancel
     await openSettings(user, container)
-    await user.click(screen.getByRole('button', partialName('AI kiểm tra ảnh')))
-    await user.click(screen.getByRole('button', exactName('Hủy')))
+    await user.click(findButtonByText('AI kiểm tra ảnh'))
+    await user.click(findButtonByText('Hủy'))
 
     // Reopen and save without touching anything: should persist the ORIGINAL value
     await openSettings(user, container)
-    await user.click(screen.getByRole('button', exactName('Lưu cài đặt')))
+    await user.click(findButtonByText('Lưu cài đặt'))
 
     await waitFor(() => expect(saved.length).toBeGreaterThan(0))
     expect(saved.at(-1).image_ai_validation_enabled).toBe(true)
