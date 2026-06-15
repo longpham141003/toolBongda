@@ -86,7 +86,7 @@
   --sp-12: 48px;
 
   /* Layout */
-  --sidebar-width: 240px;
+  --sidebar-width: 280px;
   --topbar-height: 60px;
 
   font-family: 'Be Vietnam Pro', 'Segoe UI', system-ui, sans-serif;
@@ -943,8 +943,8 @@ textarea {
 .check-row.bad { border-color:rgba(251,113,133,.24); color:#fca5a5; }
 .check-row span { color:#e5e1e4; font-size:13px; }
 
-.settings-dialog .settings-content { max-height:70vh; overflow:auto; }
 .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media (max-width:720px) { .settings-grid { grid-template-columns:1fr; } .workflow-edit { grid-template-columns:1fr; } }
 .setting-note { border:1px solid rgba(78,222,163,.18); border-radius:14px; background:rgba(78,222,163,.07); padding:10px 12px; color:#a7f3d0; font-size:12px; line-height:18px; }
 .workflow-edit { display:grid; grid-template-columns:auto 240px 1fr; gap:10px; align-items:start; border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:10px; }
 .project-list { display:grid; max-height:62vh; gap:10px; overflow:auto; padding:14px 2px 2px; }
