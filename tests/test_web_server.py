@@ -809,3 +809,61 @@ class TestMediaEndpoint:
         with patch("app.web_server.load_settings", return_value={"projects_dir": str(projects_dir)}):
             r = client.get(f"/api/media?path={media_file}")
         assert r.headers.get("cache-control", "").startswith("no-store")
+
+
+# ===========================================================================
+# SPA fallback (SPAStaticFiles) tests
+# ===========================================================================
+
+class TestSPAFallback:
+    """Tests that unknown paths fall back to index.html (SPA deep-link support).
+
+    These tests only run when WEB_DIST/index.html is present (it is committed
+    to the repository under webui/dist/index.html).
+    """
+
+    def _skip_if_no_dist(self):
+        """Skip the test if the dist directory/index.html is not available."""
+        if not ws.WEB_DIST.exists() or not (ws.WEB_DIST / "index.html").exists():
+            pytest.skip("webui/dist/index.html not present – skipping SPA fallback tests")
+
+    def test_deep_link_returns_200(self, client):
+        """GET on an unknown deep path must return 200 (not 404)."""
+        self._skip_if_no_dist()
+        r = client.get("/du-an/bat-ky")
+        assert r.status_code == 200
+
+    def test_deep_link_serves_spa_html(self, client):
+        """The body served for an unknown deep path must be the SPA index.html."""
+        self._skip_if_no_dist()
+        r = client.get("/du-an/bat-ky")
+        body = r.text.lower()
+        assert "<!doctype html" in body or '<div id="root"' in body
+
+    def test_another_unknown_path_returns_spa(self, client):
+        """A second unrelated deep path also returns the SPA."""
+        self._skip_if_no_dist()
+        r = client.get("/video/x/giong-doc")
+        assert r.status_code == 200
+        body = r.text.lower()
+        assert "<!doctype html" in body or '<div id="root"' in body
+
+    def test_index_html_itself_returns_200(self, client):
+        """The real index.html asset is still served normally."""
+        self._skip_if_no_dist()
+        r = client.get("/index.html")
+        assert r.status_code == 200
+
+    def test_api_state_not_shadowed_by_spa(self, client):
+        """API routes defined before the static mount must not be affected."""
+        self._skip_if_no_dist()
+        with patch("app.web_server._public_settings", return_value={
+            "projects_dir": "/tmp/no-exist",
+            "script_workflow_steps": [],
+        }):
+            r = client.get("/api/state")
+        assert r.status_code == 200
+        assert r.headers.get("content-type", "").startswith("application/json")
+        # Must be JSON, not HTML
+        data = r.json()
+        assert "settings" in data

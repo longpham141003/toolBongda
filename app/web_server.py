@@ -18,6 +18,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
 
 from .config import APP_DIR, load_settings, save_settings
@@ -1552,8 +1553,25 @@ def media(path: str) -> FileResponse:
     )
 
 
+class SPAStaticFiles(StaticFiles):
+    """StaticFiles subclass that falls back to index.html for unknown paths.
+
+    This enables BrowserRouter deep-link reloads: any GET that would otherwise
+    return 404 from the static file store is served as the SPA entry point
+    instead, letting the frontend router handle the path.
+    """
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404:
+                return await super().get_response("index.html", scope)
+            raise
+
+
 if WEB_DIST.exists():
-    app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="webui")
+    app.mount("/", SPAStaticFiles(directory=WEB_DIST, html=True), name="webui")
 
 
 def main() -> None:
