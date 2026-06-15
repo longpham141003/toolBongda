@@ -1900,30 +1900,67 @@ function ProjectsModal({ open, onOpenChange, state, project, openProject, rename
 
 function DashboardScreen({ series, allReady, runPreflight, preflightChecks, onOpenSeries, onCreateSeries, setError }) {
   const [createOpen, setCreateOpen] = useState(false)
-  const readyCount = preflightChecks.filter(c => c.ok).length
+  const hasAny = series.length > 0
+  const totalVideos = series.reduce((acc, s) => acc + (s.video_count || 0), 0)
+  const realSeries = series.filter(s => !s.is_virtual)
+
   return (
     <main className="dashboard-home fade-in-up">
-      {!allReady && (
-        <div className="dashboard-preflight-banner">
-          <CheckCircle2 className="h-4 w-4 text-amber-400" />
-          <span>Cần thiết lập lần đầu ({readyCount}/{preflightChecks.length} mục sẵn sàng)</span>
-          <button className="dashboard-preflight-btn" onClick={runPreflight}><RefreshCw className="h-3.5 w-3.5" /> Kiểm tra</button>
+
+      {/* Hero banner — always visible, adapts based on whether projects exist */}
+      <section className="dashboard-hero">
+        <div className="dashboard-hero-content">
+          <span className="home-kicker">AI VIDEO PRODUCTION</span>
+          <h1 className="dashboard-hero-title">
+            {hasAny ? "Dự án của bạn" : "Tạo video bằng AI\nchưa bao giờ dễ hơn"}
+          </h1>
+          <p className="dashboard-hero-sub">
+            {hasAny
+              ? `${realSeries.length} dự án · ${totalVideos} video. Chọn một Dự án để tiếp tục hoặc tạo mới.`
+              : "Nhập kịch bản, chọn giọng đọc, tool tự chia cảnh, tìm ảnh và xuất thẳng vào CapCut."}
+          </p>
+          <div className="dashboard-hero-cta">
+            <Button size="lg" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4" /> Tạo Dự án mới
+            </Button>
+            {!allReady && (
+              <button className="dashboard-setup-btn" onClick={runPreflight}>
+                <RefreshCw className="h-3.5 w-3.5" />
+                Kiểm tra cấu hình ({preflightChecks.filter(c => c.ok).length}/{preflightChecks.length})
+              </button>
+            )}
+          </div>
         </div>
+        <div className="dashboard-hero-readiness">
+          <div className={cn("ready-orb", allReady && "ok")}>
+            <CheckCircle2 className="h-7 w-7" />
+          </div>
+          <b>{allReady ? "Sẵn sàng tạo video" : "Cần thiết lập lần đầu"}</b>
+          <p>{allReady ? "Mọi thứ đã được chuẩn bị. Bắt đầu bằng cách tạo Dự án." : "Bấm Kiểm tra cấu hình để tool hướng dẫn từng bước."}</p>
+          {!allReady && <Button variant="secondary" size="sm" onClick={runPreflight}><RefreshCw className="h-4 w-4" /> Kiểm tra và hướng dẫn</Button>}
+        </div>
+      </section>
+
+      {/* Process strip — only when no projects yet */}
+      {!hasAny && (
+        <section className="home-process-strip fade-in-up delay-100">
+          {[
+            ["1", "Nhập nội dung", "Dán script hoặc tải TXT, hoặc dùng AI viết kịch bản"],
+            ["2", "Chọn giọng", "Giọng có sẵn hoặc clone giọng của bạn"],
+            ["3", "Duyệt media", "Tìm lại, tải lên, duyệt từng cảnh"],
+            ["4", "Xuất CapCut", "Mở project để chỉnh sửa và xuất video"],
+          ].map(([num, title, desc]) => (
+            <div key={num}>
+              <span>{num}</span>
+              <b>{title}</b>
+              <small>{desc}</small>
+            </div>
+          ))}
+        </section>
       )}
-      <div className="dashboard-header">
-        <div>
-          <h1 className="dashboard-title">Dự án của bạn</h1>
-          <p className="dashboard-subtitle">Chọn một Dự án để xem video bên trong, hoặc tạo Dự án mới.</p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> Tạo Dự án mới</Button>
-      </div>
-      {series.length === 0 ? (
-        <div className="dashboard-empty">
-          <FolderOpen className="h-12 w-12 text-zinc-600" />
-          <p>Chưa có Dự án nào. Tạo Dự án đầu tiên để bắt đầu.</p>
-          <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> Tạo Dự án mới</Button>
-        </div>
-      ) : (
+
+      {/* Series grid — only when projects exist */}
+      {hasAny && (
         <div className="series-grid">
           {series.map(s => (
             <div
@@ -1950,6 +1987,7 @@ function DashboardScreen({ series, allReady, runPreflight, preflightChecks, onOp
           ))}
         </div>
       )}
+
       <CreateSeriesDialog open={createOpen} onOpenChange={setCreateOpen} onCreateSeries={onCreateSeries} setError={setError} onSuccess={onOpenSeries} />
     </main>
   )
