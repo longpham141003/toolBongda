@@ -1563,11 +1563,14 @@ class SPAStaticFiles(StaticFiles):
 
     async def get_response(self, path: str, scope):
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
             if exc.status_code == 404:
                 return await super().get_response("index.html", scope)
             raise
+        if response.status_code == 404:
+            return await super().get_response("index.html", scope)
+        return response
 
 
 if WEB_DIST.exists():

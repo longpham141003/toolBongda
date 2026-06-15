@@ -827,6 +827,11 @@ class TestSPAFallback:
         if not ws.WEB_DIST.exists() or not (ws.WEB_DIST / "index.html").exists():
             pytest.skip("webui/dist/index.html not present – skipping SPA fallback tests")
 
+    @pytest.fixture(autouse=True)
+    def _auto_skip_if_no_dist(self):
+        """Automatically skip all tests in this class when dist is absent."""
+        self._skip_if_no_dist()
+
     def test_deep_link_returns_200(self, client):
         """GET on an unknown deep path must return 200 (not 404)."""
         self._skip_if_no_dist()
@@ -867,3 +872,17 @@ class TestSPAFallback:
         # Must be JSON, not HTML
         data = r.json()
         assert "settings" in data
+
+    def test_real_asset_serves_true_content(self, client):
+        """A real built JS asset must be served as-is, not replaced by the SPA HTML fallback."""
+        assets_dir = ws.WEB_DIST / "assets"
+        js_files = list(assets_dir.glob("*.js")) if assets_dir.is_dir() else []
+        if not js_files:
+            pytest.skip("No *.js files found under webui/dist/assets/ – skipping asset content test")
+        asset_name = js_files[0].name
+        r = client.get(f"/assets/{asset_name}")
+        assert r.status_code == 200
+        body = r.text
+        # The body must NOT be the SPA HTML entry point
+        assert "<div id=\"root\"" not in body, "Asset response looks like SPA HTML (contains <div id=\"root\")"
+        assert not body.lstrip().lower().startswith("<!doctype"), "Asset response looks like SPA HTML (starts with <!doctype)"
