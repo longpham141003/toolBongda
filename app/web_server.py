@@ -621,6 +621,24 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
             settings["magicvoice_steps"] = max(8, min(16, int(values["magicvoice_steps"])))
         except (TypeError, ValueError):
             settings["magicvoice_steps"] = 16
+    for key, lo, hi, default, cast in (
+        ("scene_min_seconds", 1.0, 60.0, 3.0, float),
+        ("scene_target_max_seconds", 1.0, 120.0, 10.0, float),
+        ("scene_hard_max_seconds", 1.0, 600.0, 15.0, float),
+        ("image_target_width", 16, 7680, 1920, int),
+        ("image_target_height", 16, 7680, 1080, int),
+    ):
+        if key in values:
+            try:
+                settings[key] = max(lo, min(hi, cast(float(values[key]))))
+            except (TypeError, ValueError):
+                settings[key] = default
+    # Keep the scene-length window coherent: shortest must not exceed target.
+    try:
+        if float(settings.get("scene_min_seconds", 3)) > float(settings.get("scene_target_max_seconds", 10)):
+            settings["scene_min_seconds"] = settings["scene_target_max_seconds"]
+    except (TypeError, ValueError):
+        pass
     save_settings(settings)
     return settings
 

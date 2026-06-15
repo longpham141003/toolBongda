@@ -86,8 +86,9 @@
   --sp-12: 48px;
 
   /* Layout */
-  --sidebar-width: 280px;
+  --sidebar-width: 0px;
   --topbar-height: 60px;
+  --steps-bar-height: 48px;
 
   font-family: 'Be Vietnam Pro', 'Segoe UI', system-ui, sans-serif;
   font-synthesis: none;
@@ -345,14 +346,14 @@ textarea {
   position: relative;
   z-index: 10;
   display: flex;
-  width: calc(100% - var(--sidebar-width));
-  height: calc(100vh - var(--topbar-height));
+  width: 100%;
+  height: calc(100vh - var(--topbar-height) - var(--steps-bar-height));
   flex-direction: column;
   gap: 12px;
   overflow-x: hidden;
   overflow-y: auto;
   padding: var(--sp-3) var(--sp-6) var(--sp-4);
-  margin: var(--topbar-height) 0 0;
+  margin: calc(var(--topbar-height) + var(--steps-bar-height)) 0 0;
   scrollbar-gutter: stable;
 }
 
@@ -1422,11 +1423,135 @@ textarea {
 
 /* MAIN CONTENT */
 .app-main {
-  margin-left: var(--sidebar-width);
+  margin-left: 0;
   margin-top: var(--topbar-height);
   min-height: calc(100vh - var(--topbar-height));
   padding: var(--sp-6);
   overflow-x: hidden;
+}
+
+/* ═══════════════════════════════════════
+   HORIZONTAL STEPS BAR (replaces sidebar)
+   ═══════════════════════════════════════ */
+
+.stitch-steps-bar {
+  position: fixed;
+  top: var(--topbar-height);
+  left: 0;
+  right: 0;
+  height: var(--steps-bar-height);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 24px;
+  background: rgba(14,14,17,0.95);
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  backdrop-filter: blur(24px);
+}
+
+.step-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: var(--text-sm);
+  color: #64748b;
+  white-space: nowrap;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  cursor: pointer;
+}
+
+.step-tab:hover:not(.locked) {
+  background: rgba(255,255,255,0.05);
+  color: #cbd5e1;
+}
+
+.step-tab.active {
+  background: rgba(139,92,246,0.14);
+  border-color: rgba(139,92,246,0.28);
+  color: #d0bcff;
+}
+
+.step-tab.done:not(.active) {
+  color: #34d399;
+}
+
+.step-tab.locked {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.step-tab-num {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.step-tab.active .step-tab-num {
+  background: rgba(139,92,246,0.3);
+  border-color: rgba(139,92,246,0.5);
+}
+
+.step-tab.done:not(.active) .step-tab-num {
+  background: rgba(52,211,153,0.12);
+  border-color: rgba(52,211,153,0.3);
+  color: #34d399;
+}
+
+/* Step divider between steps */
+.step-tab-sep {
+  width: 24px;
+  height: 1px;
+  background: rgba(255,255,255,0.1);
+  flex-shrink: 0;
+}
+
+/* Topbar breadcrumb (series › video) */
+.topbar-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  padding-left: 16px;
+  border-left: 1px solid rgba(255,255,255,0.1);
+  overflow: hidden;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.topbar-breadcrumb-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-sm);
+  color: #94a3b8;
+  transition: color 0.2s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+  flex-shrink: 1;
+}
+
+.topbar-breadcrumb-item:hover {
+  color: #e5e1e4;
+}
+
+.topbar-breadcrumb-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ═══════════════════════════════════════

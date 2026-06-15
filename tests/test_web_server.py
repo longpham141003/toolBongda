@@ -65,15 +65,15 @@ HTTPException = ws.HTTPException
 @pytest.fixture(autouse=True)
 def reset_runtime():
     """Reset the module-level RuntimeState singleton between every test."""
-    ws.runtime.active_job_id = None
+    ws.runtime.active_job_ids = {}
     ws.runtime.jobs = {}
-    ws.runtime.pending_jobs = []
-    ws.runtime.current_project = None
+    ws.runtime.pending_jobs_by_client = {}
+    ws.runtime.current_projects = {}
     yield
-    ws.runtime.active_job_id = None
+    ws.runtime.active_job_ids = {}
     ws.runtime.jobs = {}
-    ws.runtime.pending_jobs = []
-    ws.runtime.current_project = None
+    ws.runtime.pending_jobs_by_client = {}
+    ws.runtime.current_projects = {}
 
 
 @pytest.fixture()
@@ -255,7 +255,7 @@ class TestRuntimeStateStartJob:
         active = ws.Job("blocker")
         active.status = "running"
         ws.runtime.jobs[active.id] = active
-        ws.runtime.active_job_id = active.id
+        ws.runtime.active_job_ids[ws.runtime.client_id] = active.id
 
         with pytest.raises(HTTPException) as exc_info:
             ws.runtime.start_job("new-job", MagicMock(), allow_queue=False)
@@ -289,7 +289,7 @@ class TestRuntimeStateStartJob:
         existing = ws.Job("existing", asset_id="a1")
         existing.status = "running"
         ws.runtime.jobs[existing.id] = existing
-        ws.runtime.active_job_id = existing.id
+        ws.runtime.active_job_ids[ws.runtime.client_id] = existing.id
 
         returned = ws.runtime.start_job(
             "new", MagicMock(), allow_queue=True, asset_id="a1"
@@ -393,7 +393,7 @@ class TestHealthEndpoint:
         job = ws.Job("running-job")
         job.status = "running"
         ws.runtime.jobs[job.id] = job
-        ws.runtime.active_job_id = job.id
+        ws.runtime.active_job_ids[ws.runtime.client_id] = job.id
 
         r = client.get("/api/health")
         assert r.json()["active_job_id"] == job.id
@@ -462,6 +462,33 @@ class TestSettingsEndpoint:
         if mock_save.called:
             saved = mock_save.call_args[0][0]
             assert saved.get("text_to_voice_language") == "vi"
+
+    def _save_and_get(self, client, payload):
+        fake_settings = {"projects_dir": "/tmp", "script_workflow_steps": []}
+        with patch("app.web_server.load_settings", return_value=dict(fake_settings)), \
+             patch("app.web_server.save_settings") as mock_save:
+            client.post("/api/settings", json={"settings": payload})
+        assert mock_save.called
+        return mock_save.call_args[0][0]
+
+    def test_post_settings_rejects_zero_video_dimensions(self, client):
+        # Clearing the field on the UI sends 0; backend must clamp away from 0.
+        saved = self._save_and_get(client, {"image_target_width": 0, "image_target_height": 0})
+        assert saved["image_target_width"] >= 16
+        assert saved["image_target_height"] >= 16
+
+    def test_post_settings_clamps_oversized_dimensions(self, client):
+        saved = self._save_and_get(client, {"image_target_width": 99999})
+        assert saved["image_target_width"] == 7680
+
+    def test_post_settings_recovers_from_invalid_number(self, client):
+        saved = self._save_and_get(client, {"scene_min_seconds": "abc"})
+        assert saved["scene_min_seconds"] == 3.0
+
+    def test_post_settings_keeps_scene_window_coherent(self, client):
+        # min must not exceed target after clamping.
+        saved = self._save_and_get(client, {"scene_min_seconds": 30, "scene_target_max_seconds": 8})
+        assert saved["scene_min_seconds"] <= saved["scene_target_max_seconds"]
 
 
 class TestProjectsCreateEndpoint:

@@ -11,6 +11,8 @@ import {
   CheckCircle2,
   ChevronRight,
   Circle,
+  Eye,
+  EyeOff,
   FileAudio,
   FileText,
   Film,
@@ -208,6 +210,7 @@ function ParticleCanvas() {
     const canvas = canvasRef.current
     if (!canvas) return
     const context = canvas.getContext("2d")
+    if (!context) return
     let animationFrame = 0
     let particles = []
 
@@ -290,12 +293,32 @@ function App() {
   const [assetFilter, setAssetFilter] = useState("all")
   const [presetName, setPresetName] = useState("")
   const [preflight, setPreflight] = useState(null)
+  const [preflightBusy, setPreflightBusy] = useState(false)
 
   const [activeScreen, setActiveScreen] = useState("dashboard")
   const [activeSeries, setActiveSeries] = useState(null)
   const [series, setSeries] = useState([])
   const logContainerRef = useRef(null)
   const scriptFileInputRef = useRef(null)
+  const settingsSnapshot = useRef(null)
+
+  // Snapshot the last-persisted settings whenever the dialog opens so that
+  // closing via Huỷ / X / Esc / overlay reverts unsaved in-memory edits.
+  useEffect(() => {
+    if (settingsOpen) settingsSnapshot.current = { settings, workflowSteps, workflowInput }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsOpen])
+
+  function handleSettingsOpenChange(next) {
+    if (next) return setSettingsOpen(true)
+    const snap = settingsSnapshot.current
+    if (snap) {
+      setSettings(snap.settings)
+      setWorkflowSteps(snap.workflowSteps)
+      setWorkflowInput(snap.workflowInput)
+    }
+    setSettingsOpen(false)
+  }
 
   const loadState = useCallback(async (preserveScript = false) => {
     const data = await api("/api/state")
@@ -525,6 +548,7 @@ function App() {
     try {
       const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: { ...settings, script_workflow_input: workflowInput, script_workflow_steps: workflowSteps } }) })
       setSettings(data.settings)
+      settingsSnapshot.current = { settings: data.settings, workflowSteps, workflowInput }
       if (close) setSettingsOpen(false)
       setToast("Đã lưu cài đặt")
     } catch (err) {
@@ -546,6 +570,7 @@ function App() {
     ]
     const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: { ...settings, active_workflow_id: id, workflow_presets: next, script_workflow_steps: workflowSteps } }) })
     setSettings(data.settings)
+    settingsSnapshot.current = { settings: data.settings, workflowSteps, workflowInput }
     setPresetName("")
     setToast("Đã lưu flow")
   }
@@ -559,6 +584,7 @@ function App() {
     try {
       const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: { active_workflow_id: id, script_workflow_steps: steps } }) })
       setSettings(data.settings)
+      settingsSnapshot.current = { settings: data.settings, workflowSteps: steps, workflowInput }
       setToast(`Đã chọn flow: ${preset.name}`)
     } catch (err) {
       setError(err.message)
@@ -832,12 +858,15 @@ function App() {
   }
 
   async function runPreflight() {
+    setPreflightBusy(true)
     try {
       const data = await api("/api/preflight")
       setPreflight(data)
       setToast(data.ok ? "Kiểm tra xong: cấu hình ổn" : "Kiểm tra xong: có mục cần sửa")
     } catch (err) {
       setError(err.message)
+    } finally {
+      setPreflightBusy(false)
     }
   }
 
@@ -981,28 +1010,38 @@ function App() {
             <ArrowLeft className="h-4 w-4" />
           </button>
         )}
-        <button className="flex items-center gap-2" onClick={() => activeScreen !== "dashboard" && goHomeAndStopProject()}>
+        <button className="flex items-center gap-2 flex-shrink-0" onClick={() => activeScreen !== "dashboard" && goHomeAndStopProject()}>
           <div className="logo-mark"><WandSparkles className="h-4 w-4" /></div>
           <span className="text-[15px] font-bold text-white">CONTENT <span className="text-emerald-300">AUTOMATION</span></span>
         </button>
+        {["step1","step2","step3a","step3b","step4"].includes(activeScreen) && (
+          <div className="topbar-breadcrumb">
+            {activeSeries && <>
+              <button className="topbar-breadcrumb-item" onClick={() => setActiveScreen("project")}>
+                <FolderOpen className="h-3.5 w-3.5 flex-shrink-0" />
+                <span>{activeSeries.title}</span>
+              </button>
+              <ChevronRight className="h-3 w-3 text-zinc-600 flex-shrink-0" />
+            </>}
+            <button className="topbar-breadcrumb-item" onClick={() => setProjectsOpen(true)}>
+              <Film className="h-3.5 w-3.5 flex-shrink-0" />
+              <span>{project?.name || "Video mới"}</span>
+            </button>
+          </div>
+        )}
         <div className="ml-auto flex items-center gap-2">
-          <button className="icon-action" onClick={() => setSettingsOpen(true)}><Settings className="h-4 w-4" /></button>
+          <button className="icon-action" aria-label="Trợ giúp" onClick={() => setHelpOpen(true)}><Bot className="h-4 w-4" /></button>
+          <button className="icon-action" aria-label="Cài đặt" onClick={() => setSettingsOpen(true)}><Settings className="h-4 w-4" /></button>
           <div className="avatar-dot">L</div>
         </div>
       </header>
 
       {["step1", "step2", "step3a", "step3b", "step4"].includes(activeScreen) && (
-        <Sidebar
+        <StepsBar
           activeScreen={activeScreen}
           setActiveScreen={setActiveScreen}
           completedSteps={completedSteps}
           project={project}
-          activeJob={activeJob}
-          userProgress={userProgress}
-          activeSeries={activeSeries}
-          setSettingsOpen={setSettingsOpen}
-          setProjectsOpen={setProjectsOpen}
-          setHelpOpen={setHelpOpen}
         />
       )}
       {activeScreen === "dashboard" ? (
@@ -1027,7 +1066,7 @@ function App() {
           setError={setError}
         />
       ) : (
-        <main className="stitch-workspace" style={{ marginLeft: "var(--sidebar-width)" }}>
+        <main className="stitch-workspace">
           {activeScreen === "step1" && <ScriptStepScreen
             title={title}
             setTitle={setTitle}
@@ -1059,7 +1098,7 @@ function App() {
         </main>
       )}
 
-      <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} setSettings={setSettings} workflowSteps={workflowSteps} setWorkflowSteps={setWorkflowSteps} workflowPresets={workflowPresets} applyWorkflowPreset={applyWorkflowPreset} updateStep={updateStep} presetName={presetName} setPresetName={setPresetName} saveCurrentWorkflowAsPreset={saveCurrentWorkflowAsPreset} saveSettings={saveSettings} runPreflight={runPreflight} preflight={preflight} />
+      <SettingsModal open={settingsOpen} onOpenChange={handleSettingsOpenChange} settings={settings} setSettings={setSettings} workflowSteps={workflowSteps} setWorkflowSteps={setWorkflowSteps} workflowPresets={workflowPresets} applyWorkflowPreset={applyWorkflowPreset} updateStep={updateStep} presetName={presetName} setPresetName={setPresetName} saveCurrentWorkflowAsPreset={saveCurrentWorkflowAsPreset} saveSettings={saveSettings} runPreflight={runPreflight} preflight={preflight} preflightBusy={preflightBusy} />
       <ProjectsModal open={projectsOpen} onOpenChange={setProjectsOpen} state={state} project={project} openProject={openProject} renameProject={renameProject} deleteProject={deleteProject} />
       <HelpModal open={helpOpen} onOpenChange={setHelpOpen} />
       <Lightbox open={lightboxIndex !== null} setLightboxIndex={setLightboxIndex} lightboxIndex={lightboxIndex} assets={assets} project={project} lightboxAsset={lightboxAsset} assetJobs={assetJobs} statusBadge={statusBadge} startJob={startJob} approveAsset={approveAsset} chooseAssetMedia={chooseAssetMedia} editingAssetId={editingAssetId} setEditingAssetId={setEditingAssetId} editingKeywordValue={editingKeywordValue} setEditingKeywordValue={setEditingKeywordValue} saveKeyword={saveKeyword} />
@@ -1191,6 +1230,54 @@ function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, activ
         </button>
       </div>
     </aside>
+  )
+}
+
+function StepsBar({ activeScreen, setActiveScreen, completedSteps, project }) {
+  const steps = [
+    { id: "step1", label: "Nội dung" },
+    { id: "step2", label: "Giọng đọc" },
+    { id: "step3a", label: "Hình ảnh" },
+    { id: "step4", label: "Xuất CapCut" },
+  ]
+  const doneMap = { step1: completedSteps[0], step2: completedSteps[1], step3a: completedSteps[2], step4: completedSteps[3] }
+
+  const isLocked = (id) => {
+    const idx = steps.findIndex(s => s.id === id)
+    if (idx === 0) return false
+    const prevId = steps[idx - 1].id
+    const isStep3Active = id === "step3a" && (activeScreen === "step3a" || activeScreen === "step3b")
+    return !doneMap[prevId] && !isStep3Active && activeScreen !== id
+  }
+
+  const navigate = (id) => {
+    if (isLocked(id)) return
+    setActiveScreen(id === "step3a" ? (project?.has_scenes ? "step3b" : "step3a") : id)
+  }
+
+  return (
+    <div className="stitch-steps-bar">
+      {steps.map((step, idx) => {
+        const done = doneMap[step.id]
+        const active = activeScreen === step.id || (step.id === "step3a" && activeScreen === "step3b")
+        const locked = isLocked(step.id)
+        return (
+          <div key={step.id} className="flex items-center">
+            {idx > 0 && <span className="step-tab-sep" />}
+            <button
+              className={cn("step-tab", active && "active", done && !active && "done", locked && "locked")}
+              disabled={locked}
+              onClick={() => navigate(step.id)}
+            >
+              <span className="step-tab-num">
+                {done && !active ? <Check className="h-3 w-3" /> : idx + 1}
+              </span>
+              {step.label}
+            </button>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -1827,8 +1914,12 @@ function ExportScreen({ project, assets, preflight, runPreflight, startJob, titl
 function CheckRow({ ok, label }) { return <div className={cn("check-row",ok?"ok":"bad")}>{ok?<CheckCircle2/>:<XCircle/>}<span>{label}</span></div> }
 function EmptyState({ text }) { return <div className="empty-state"><Image className="h-10 w-10"/><p>{text}</p></div> }
 
-function SettingsModal({ open, onOpenChange, settings, setSettings, workflowSteps, setWorkflowSteps, workflowPresets, applyWorkflowPreset, updateStep, presetName, setPresetName, saveCurrentWorkflowAsPreset, saveSettings, runPreflight, preflight }) {
+function SettingsModal({ open, onOpenChange, settings, setSettings, workflowSteps, setWorkflowSteps, workflowPresets, applyWorkflowPreset, updateStep, presetName, setPresetName, saveCurrentWorkflowAsPreset, saveSettings, runPreflight, preflight, preflightBusy }) {
   const presets=workflowPresets()
+  const [showKey, setShowKey] = useState(false)
+  // Keep the previous value when the field is blank or not a finite number,
+  // so clearing the box never stores 0/NaN. Backend clamps the final range.
+  const setNum = (key, raw, fallback) => { const n = Number(raw); setSettings({ ...settings, [key]: raw === "" || !Number.isFinite(n) ? fallback : n }) }
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="settings-dialog max-w-6xl"><DialogTitle>Cài đặt</DialogTitle><DialogDescription>Chỉnh những thứ hay dùng. Các thông số kỹ thuật nằm trong tab Nâng cao.</DialogDescription>
     <Tabs defaultValue="basic" className="mt-5"><TabsList className="grid w-full grid-cols-5"><TabsTrigger value="basic">Cơ bản</TabsTrigger><TabsTrigger value="flow">Flow</TabsTrigger><TabsTrigger value="ai">AI</TabsTrigger><TabsTrigger value="advanced">Nâng cao</TabsTrigger><TabsTrigger value="validate">Kiểm tra</TabsTrigger></TabsList>
       <TabsContent value="basic"><div className="settings-grid">
@@ -1838,17 +1929,17 @@ function SettingsModal({ open, onOpenChange, settings, setSettings, workflowStep
         </SettingSection>
         <SettingSection title="Ảnh và video" icon={Image}>
           <Switch checked={settings.image_ai_validation_enabled!==false} onCheckedChange={v=>setSettings({...settings,image_ai_validation_enabled:v})} label="AI kiểm tra ảnh có đúng nội dung"/>
-          <Switch checked={!!settings.image_enhance_enabled} onCheckedChange={v=>setSettings({...settings,image_enhance_enabled:v})} label="Làm nét ảnh sau khi tải"/>
+          <Switch checked={settings.image_enhance_enabled!==false} onCheckedChange={v=>setSettings({...settings,image_enhance_enabled:v})} label="Làm nét ảnh sau khi tải"/>
           <div className="setting-note">Khuyến nghị: bật cả hai mục trên để ảnh ít sai hơn và đủ nét khi xuất CapCut.</div>
         </SettingSection>
       </div></TabsContent>
       <TabsContent value="flow"><SettingSection title="Flow tạo kịch bản" icon={Bot}><Field label="Flow đang dùng"><Select value={settings.active_workflow_id||presets[0]?.id||""} onValueChange={applyWorkflowPreset} options={presets.map(x=>({value:x.id,label:x.name}))}/></Field>{workflowSteps.map((step,i)=><div className="workflow-edit" key={i}><Switch checked={step.enabled} onCheckedChange={v=>updateStep(i,{enabled:v})}/><Input value={step.name} onChange={e=>updateStep(i,{name:e.target.value})}/><Textarea value={step.prompt} onChange={e=>updateStep(i,{prompt:e.target.value})}/></div>)}<Button variant="secondary" onClick={()=>setWorkflowSteps(x=>[...x,{enabled:true,name:`Bước ${x.length+1}`,prompt:""}])}><Plus className="h-4 w-4"/> Thêm bước</Button><div className="flex gap-2"><Input value={presetName} onChange={e=>setPresetName(e.target.value)} placeholder="Tên flow mới"/><Button onClick={saveCurrentWorkflowAsPreset}>Lưu flow</Button></div></SettingSection></TabsContent>
-      <TabsContent value="ai"><SettingSection title="AI dùng để hiểu nội dung và kiểm ảnh" icon={Bot}><Field label="Nhà cung cấp"><Select value={settings.keyword_ai_provider||"auto"} onValueChange={v=>setSettings({...settings,keyword_ai_provider:v})} options={[{value:"auto",label:"Tự động"},{value:"gemini",label:"Gemini"},{value:"openai",label:"OpenAI"}]}/></Field><Field label="Gemini API key"><Input type="password" value={settings.gemini_api_key||""} onChange={e=>setSettings({...settings,gemini_api_key:e.target.value})}/></Field><div className="setting-note">Nếu không biết chọn gì, để Tự động và chỉ nhập Gemini API key.</div></SettingSection></TabsContent>
+      <TabsContent value="ai"><SettingSection title="AI dùng để hiểu nội dung và kiểm ảnh" icon={Bot}><Field label="Nhà cung cấp"><Select value={settings.keyword_ai_provider||"auto"} onValueChange={v=>setSettings({...settings,keyword_ai_provider:v})} options={[{value:"auto",label:"Tự động"},{value:"gemini",label:"Gemini"},{value:"openai",label:"OpenAI"}]}/></Field><Field label="Gemini API key"><div className="relative"><Input type={showKey?"text":"password"} className="pr-11" value={settings.gemini_api_key||""} onChange={e=>setSettings({...settings,gemini_api_key:e.target.value})}/><button type="button" onClick={()=>setShowKey(v=>!v)} aria-label={showKey?"Ẩn key":"Hiện key"} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-zinc-500 hover:bg-white/10 hover:text-white">{showKey?<EyeOff className="h-4 w-4"/>:<Eye className="h-4 w-4"/>}</button></div></Field><div className="setting-note">Nếu không biết chọn gì, để Tự động và chỉ nhập Gemini API key.</div></SettingSection></TabsContent>
       <TabsContent value="advanced"><div className="settings-grid">
-        <SettingSection title="Cảnh và chất lượng hình ảnh" icon={Aperture}><Switch checked={!!settings.whisper_timing_enabled} onCheckedChange={v=>setSettings({...settings,whisper_timing_enabled:v})} label="Căn lời đọc chính xác theo thời gian"/><Switch checked={!!settings.scene_ai_enabled} onCheckedChange={v=>setSettings({...settings,scene_ai_enabled:v})} label="Tự gom các câu cùng ý thành một cảnh"/><div className="grid grid-cols-2 gap-4"><Field label="Cảnh ngắn nhất (giây)"><Input type="number" value={settings.scene_min_seconds||3} onChange={e=>setSettings({...settings,scene_min_seconds:Number(e.target.value)})}/></Field><Field label="Thời lượng cảnh mong muốn (giây)"><Input type="number" value={settings.scene_target_max_seconds||10} onChange={e=>setSettings({...settings,scene_target_max_seconds:Number(e.target.value)})}/></Field><Field label="Chiều rộng video"><Input type="number" value={settings.image_target_width||1920} onChange={e=>setSettings({...settings,image_target_width:Number(e.target.value)})}/></Field><Field label="Chiều cao video"><Input type="number" value={settings.image_target_height||1080} onChange={e=>setSettings({...settings,image_target_height:Number(e.target.value)})}/></Field></div><div className="setting-note">Khuyến nghị giữ 1920 × 1080 cho video ngang. Chỉ thay đổi khi bạn cần kích thước xuất khác.</div></SettingSection>
+        <SettingSection title="Cảnh và chất lượng hình ảnh" icon={Aperture}><Switch checked={!!settings.whisper_timing_enabled} onCheckedChange={v=>setSettings({...settings,whisper_timing_enabled:v})} label="Căn lời đọc chính xác theo thời gian"/><Switch checked={!!settings.scene_ai_enabled} onCheckedChange={v=>setSettings({...settings,scene_ai_enabled:v})} label="Tự gom các câu cùng ý thành một cảnh"/><div className="grid grid-cols-2 gap-4"><Field label="Cảnh ngắn nhất (giây)"><Input type="number" min={1} step={1} value={settings.scene_min_seconds??3} onChange={e=>setNum("scene_min_seconds",e.target.value,3)}/></Field><Field label="Thời lượng cảnh mong muốn (giây)"><Input type="number" min={1} step={1} value={settings.scene_target_max_seconds??10} onChange={e=>setNum("scene_target_max_seconds",e.target.value,10)}/></Field><Field label="Chiều rộng video"><Input type="number" min={16} step={2} value={settings.image_target_width??1920} onChange={e=>setNum("image_target_width",e.target.value,1920)}/></Field><Field label="Chiều cao video"><Input type="number" min={16} step={2} value={settings.image_target_height??1080} onChange={e=>setNum("image_target_height",e.target.value,1080)}/></Field></div><div className="setting-note">Khuyến nghị giữ 1920 × 1080 cho video ngang. Chỉ thay đổi khi bạn cần kích thước xuất khác.</div></SettingSection>
       </div></TabsContent>
-      <TabsContent value="validate"><SettingSection title="Kiểm tra cấu hình máy" icon={CheckCircle2}><Button onClick={runPreflight}>Chạy kiểm tra</Button><div className="grid grid-cols-2 gap-3">{(preflight?.checks||[]).map(x=><CheckRow key={x.id} ok={x.ok} label={x.label}/>)}</div></SettingSection></TabsContent>
-    </Tabs><div className="mt-5 flex justify-end gap-2"><Button variant="ghost" onClick={()=>onOpenChange(false)}>Huỷ</Button><Button onClick={()=>saveSettings(true)}>Lưu cài đặt</Button></div></DialogContent></Dialog>
+      <TabsContent value="validate"><SettingSection title="Kiểm tra cấu hình máy" icon={CheckCircle2}><Button onClick={runPreflight} disabled={preflightBusy}>{preflightBusy?<LoaderCircle className="h-4 w-4 animate-spin"/>:<RefreshCw className="h-4 w-4"/>}{preflightBusy?"Đang kiểm tra...":"Chạy kiểm tra"}</Button><div className="grid grid-cols-2 gap-3">{(preflight?.checks||[]).map(x=><CheckRow key={x.id} ok={x.ok} label={x.label}/>)}</div></SettingSection></TabsContent>
+    </Tabs><div className="mt-5 flex justify-end gap-2"><Button variant="ghost" onClick={()=>onOpenChange(false)}>Hủy</Button><Button onClick={()=>saveSettings(true)}>Lưu cài đặt</Button></div></DialogContent></Dialog>
 }
 
 function ProjectsModal({ open, onOpenChange, state, project, openProject, renameProject, deleteProject }) {
@@ -2275,7 +2366,7 @@ function SettingSection({ title, icon: Icon, children }) {
 }
 
 function Field({ label, children }) {
-  return <label className="block min-w-0"><span className="mb-1.5 block text-[11px] font-medium text-zinc-500">{label}</span>{children}</label>
+  return <label className="block min-w-0"><span className="mb-1.5 block text-[12px] font-medium text-zinc-500">{label}</span>{children}</label>
 }
 
 export default App
