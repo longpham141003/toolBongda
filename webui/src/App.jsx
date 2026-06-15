@@ -348,7 +348,7 @@ function App() {
   const scriptFileInputRef = useRef(null)
   const settingsSnapshot = useRef(null)
   // Latest loadProjectIntoState (declared below) so restoration effects can call
-  // it without re-running on every render. Set just before the effect runs.
+  // it without re-running on every render. Assigned during render (before effects fire), so the effect always reads the latest closure without listing the function as a dependency.
   const loadProjectIntoStateRef = useRef(null)
   // Path currently being opened by the restoration effect — prevents duplicate
   // /api/projects/open calls while one is already in flight for the same target.
@@ -471,13 +471,14 @@ function App() {
     }
     // Same video already open → leave the running job (and current step) alone.
     if (project?.path === target) {
+      // Clear in case a render fired after the open settled but before state propagated.
       restoringPathRef.current = null
       return
     }
     // Avoid re-triggering while an open for this same target is already in flight.
     if (restoringPathRef.current === target) return
     restoringPathRef.current = target
-    Promise.resolve(loadProjectIntoStateRef.current?.(target))
+    Promise.resolve(loadProjectIntoStateRef.current?.(target, { notify: false }))
       .catch((err) => setError(err?.message || String(err)))
       .finally(() => {
         if (restoringPathRef.current === target) restoringPathRef.current = null
@@ -495,6 +496,7 @@ function App() {
       if (activeSeries?.path !== found.path) setActiveSeries(found)
       return
     }
+    // Pure client-side lookup (no async call), so no error handler is needed here.
     navigate("/", { replace: true })
     setToast("Không tìm thấy dự án")
   }, [stateLoaded, route, series, activeSeries?.path, navigate])
@@ -777,7 +779,7 @@ function App() {
   // Switching to a different project here will bestEffortCancel the previous one;
   // callers that must preserve a running job (same-video reload) must avoid
   // calling this when the project is already open.
-  async function loadProjectIntoState(path) {
+  async function loadProjectIntoState(path, { notify = true } = {}) {
     await bestEffortCancel(true)
     const data = await api("/api/projects/open", { method: "POST", body: JSON.stringify({ path }) })
     setState((current) => ({ ...current, project: data.project }))
@@ -786,7 +788,7 @@ function App() {
     setScript(data.project.script)
     setTitle(data.project.name)
     setProjectsOpen(false)
-    setToast("Đã mở project")
+    if (notify) setToast("Đã mở project")
     const cat = data.project?.category
     if (cat) {
       const found = series.find(s => s.title === cat && !s.is_virtual)
