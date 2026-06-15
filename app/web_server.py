@@ -54,6 +54,7 @@ class ProjectCreateRequest(BaseModel):
     title: str = ""
     script: str
     category: str = ""
+    series_path: str = ""
 
 
 class ProjectOpenRequest(BaseModel):
@@ -66,6 +67,23 @@ class ProjectUpdateRequest(BaseModel):
 
 
 class ProjectDeleteRequest(BaseModel):
+    path: str
+
+
+class SeriesCreateRequest(BaseModel):
+    title: str
+    description: str = ""
+    settings_overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+class SeriesUpdateRequest(BaseModel):
+    path: str
+    title: str | None = None
+    description: str | None = None
+    settings_overrides: dict[str, Any] | None = None
+
+
+class SeriesDeleteRequest(BaseModel):
     path: str
 
 
@@ -432,6 +450,67 @@ def _project_payload(project: Path | None) -> dict[str, Any] | None:
     }
 
 
+def _read_series_meta(series_dir: Path) -> dict[str, Any]:
+    defaults: dict[str, Any] = {"version": 1, "title": series_dir.name, "description": "", "created_at": 0, "settings_overrides": {}}
+    try:
+        raw = json.loads((series_dir / "project.json").read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            defaults.update({k: v for k, v in raw.items() if k in defaults})
+    except Exception:
+        pass
+    return defaults
+
+
+def _write_series_meta(series_dir: Path, meta: dict[str, Any]) -> None:
+    series_dir.mkdir(parents=True, exist_ok=True)
+    (series_dir / "project.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _series_payload(series_dir: Path, all_projects: list[dict[str, Any]]) -> dict[str, Any]:
+    meta = _read_series_meta(series_dir)
+    videos = [p for p in all_projects if p.get("category") == series_dir.name]
+    latest = max((p.get("updated_at") or 0 for p in videos), default=meta.get("created_at") or 0)
+    return {
+        "path": str(series_dir),
+        "title": meta.get("title") or series_dir.name,
+        "description": meta.get("description") or "",
+        "created_at": meta.get("created_at") or 0,
+        "settings_overrides": meta.get("settings_overrides") or {},
+        "video_count": len(videos),
+        "latest_updated_at": latest,
+        "is_virtual": False,
+        "videos": videos,
+    }
+
+
+def _build_series_list(projects_dir: Path, all_projects: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    series: list[dict[str, Any]] = []
+    if not projects_dir.exists():
+        return series
+    for child in projects_dir.iterdir():
+        if not child.is_dir():
+            continue
+        if (child / "scripts" / "script_final.txt").exists():
+            continue
+        series.append(_series_payload(child, all_projects))
+    orphans = [p for p in all_projects if not p.get("category")]
+    if orphans:
+        latest_orphan = max((p.get("updated_at") or 0 for p in orphans), default=0)
+        series.append({
+            "path": "",
+            "title": "Chưa phân nhóm",
+            "description": "",
+            "created_at": 0,
+            "settings_overrides": {},
+            "video_count": len(orphans),
+            "latest_updated_at": latest_orphan,
+            "is_virtual": True,
+            "videos": orphans,
+        })
+    series.sort(key=lambda s: s["latest_updated_at"], reverse=True)
+    return series
+
+
 def _public_settings() -> dict[str, Any]:
     settings = load_settings()
     steps = normalize_workflow_steps(settings.get("script_workflow_steps"))
@@ -724,11 +803,13 @@ def state() -> dict[str, Any]:
     active = runtime.jobs.get(runtime.active_job_id or "")
     queued = [job.payload() for job, _callback in runtime.pending_jobs]
     live_jobs = ([active.payload()] if active else []) + queued
+    series = _build_series_list(projects_dir, projects)
     return {
         "settings": settings,
         "project": _project_payload(runtime.current_project),
         "projects": projects[:100],
         "categories": categories,
+        "series": series,
         "active_job": active.payload() if active else None,
         "queued_jobs": queued,
         "jobs": live_jobs,
@@ -879,9 +960,18 @@ def preflight() -> dict[str, Any]:
 @app.post("/api/projects")
 def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
     settings = load_settings()
-    projects_dir = Path(str(settings.get("projects_dir") or APP_DIR / "Projects"))
-    category = re.sub(r"[\\/:*?\"<>|]+", " ", request.category or "").strip()
-    target_dir = projects_dir / category if category else projects_dir
+    projects_dir = Path(str(settings.get("projects_dir") or APP_DIR / "Projects")).resolve()
+    if request.series_path:
+        series_dir = Path(request.series_path).resolve()
+        try:
+            series_dir.relative_to(projects_dir)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="series_path nằm ngoài thư mục quản lý.")
+        category = series_dir.name
+        target_dir = series_dir
+    else:
+        category = re.sub(r"[\\/:*?\"<>|]+", " ", request.category or "").strip()
+        target_dir = projects_dir / category if category else projects_dir
     project = create_visual_project(target_dir, request.title, request.script.strip())
     if category:
         meta_path = project / "visual_project.json"
@@ -932,6 +1022,117 @@ def delete_project(request: ProjectDeleteRequest) -> dict[str, Any]:
     if runtime.current_project and runtime.current_project.resolve() == project:
         runtime.current_project = None
     shutil.rmtree(project)
+    return {"ok": True}
+
+
+@app.get("/api/series")
+def list_series() -> dict[str, Any]:
+    settings = load_settings()
+    projects_dir = Path(str(settings.get("projects_dir") or APP_DIR / "Projects"))
+    all_projects: list[dict[str, Any]] = []
+    if projects_dir.exists():
+        project_roots = []
+        for path in projects_dir.rglob("scripts/script_final.txt"):
+            project_roots.append(path.parents[1])
+        for path in sorted(set(project_roots), key=lambda value: value.stat().st_mtime, reverse=True):
+            payload = _project_payload(path)
+            if payload:
+                all_projects.append({
+                    "path": str(path),
+                    "name": payload["name"],
+                    "folder_name": path.name,
+                    "category": payload.get("category") or "",
+                    "updated_at": path.stat().st_mtime,
+                })
+    return {"series": _build_series_list(projects_dir, all_projects)}
+
+
+@app.post("/api/series")
+def create_series(request: SeriesCreateRequest) -> dict[str, Any]:
+    settings = load_settings()
+    projects_dir = Path(str(settings.get("projects_dir") or APP_DIR / "Projects"))
+    safe_name = re.sub(r"[\\/:*?\"<>|]+", " ", request.title or "").strip()
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Tên Dự án không được rỗng.")
+    series_dir = projects_dir / safe_name
+    if series_dir.exists():
+        raise HTTPException(status_code=409, detail=f"Dự án '{safe_name}' đã tồn tại.")
+    meta = {
+        "version": 1,
+        "title": request.title.strip(),
+        "description": request.description.strip(),
+        "created_at": int(time.time()),
+        "settings_overrides": request.settings_overrides or {},
+    }
+    _write_series_meta(series_dir, meta)
+    all_projects: list[dict[str, Any]] = []
+    return {"series": _series_payload(series_dir, all_projects)}
+
+
+@app.patch("/api/series")
+def update_series(request: SeriesUpdateRequest) -> dict[str, Any]:
+    settings = load_settings()
+    projects_dir = Path(str(settings.get("projects_dir") or APP_DIR / "Projects")).resolve()
+    series_dir = Path(request.path).resolve()
+    try:
+        series_dir.relative_to(projects_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Dự án nằm ngoài thư mục quản lý.")
+    if not series_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Không tìm thấy Dự án.")
+    meta = _read_series_meta(series_dir)
+    if request.title is not None:
+        meta["title"] = request.title.strip()
+    if request.description is not None:
+        meta["description"] = request.description.strip()
+    if request.settings_overrides is not None:
+        existing = meta.get("settings_overrides") or {}
+        existing.update(request.settings_overrides)
+        meta["settings_overrides"] = existing
+    _write_series_meta(series_dir, meta)
+    all_projects: list[dict[str, Any]] = []
+    if projects_dir.exists():
+        project_roots = []
+        for path in projects_dir.rglob("scripts/script_final.txt"):
+            project_roots.append(path.parents[1])
+        for path in sorted(set(project_roots), key=lambda value: value.stat().st_mtime, reverse=True):
+            payload = _project_payload(path)
+            if payload:
+                all_projects.append({
+                    "path": str(path),
+                    "name": payload["name"],
+                    "folder_name": path.name,
+                    "category": payload.get("category") or "",
+                    "updated_at": path.stat().st_mtime,
+                })
+    return {"series": _series_payload(series_dir, all_projects)}
+
+
+@app.delete("/api/series")
+def delete_series(request: SeriesDeleteRequest) -> dict[str, Any]:
+    settings = load_settings()
+    projects_dir = Path(str(settings.get("projects_dir") or APP_DIR / "Projects")).resolve()
+    series_dir = Path(request.path).resolve()
+    try:
+        series_dir.relative_to(projects_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Dự án nằm ngoài thư mục quản lý.")
+    if not series_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Không tìm thấy Dự án.")
+    active = runtime.jobs.get(runtime.active_job_id or "")
+    if active and runtime.current_project:
+        try:
+            runtime.current_project.resolve().relative_to(series_dir)
+            raise HTTPException(status_code=400, detail="Đang có tác vụ đang chạy trong Dự án này.")
+        except ValueError:
+            pass
+    if runtime.current_project:
+        try:
+            runtime.current_project.resolve().relative_to(series_dir)
+            runtime.current_project = None
+        except ValueError:
+            pass
+    shutil.rmtree(series_dir)
     return {"ok": True}
 
 

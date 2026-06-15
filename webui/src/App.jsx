@@ -18,6 +18,7 @@ import {
   Image,
   KeyRound,
   LoaderCircle,
+  Lock,
   Mic,
   Pause,
   Pencil,
@@ -290,7 +291,9 @@ function App() {
   const [presetName, setPresetName] = useState("")
   const [preflight, setPreflight] = useState(null)
 
-  const [activeScreen, setActiveScreen] = useState("home")
+  const [activeScreen, setActiveScreen] = useState("dashboard")
+  const [activeSeries, setActiveSeries] = useState(null)
+  const [series, setSeries] = useState([])
   const logContainerRef = useRef(null)
   const scriptFileInputRef = useRef(null)
 
@@ -298,6 +301,10 @@ function App() {
     const data = await api("/api/state")
     setState(data)
     setSettings(data.settings || {})
+    setSeries(data.series || [])
+    if (data.series) {
+      setActiveSeries(current => current ? (data.series.find(s => s.path === current.path) || current) : null)
+    }
     setWorkflowInput(data.settings?.script_workflow_input || "")
     setWorkflowSteps(data.settings?.script_workflow_steps?.length ? data.settings.script_workflow_steps : defaultSteps)
     if (!preserveScript) {
@@ -380,6 +387,12 @@ function App() {
     const timer = setTimeout(() => setToast(""), 2800)
     return () => clearTimeout(timer)
   }, [toast])
+
+  useEffect(() => {
+    if (["step1", "step2", "step3a", "step3b", "step4"].includes(activeScreen) && !activeSeries) {
+      setActiveScreen("dashboard")
+    }
+  }, [activeScreen, activeSeries])
 
   const refreshVoices = useCallback(async (language = settings.text_to_voice_language || "en") => {
     try {
@@ -563,7 +576,8 @@ function App() {
   async function createProject() {
     if (!script.trim()) return setError("Hãy nhập script trước khi tạo project.")
     try {
-      const data = await api("/api/projects", { method: "POST", body: JSON.stringify({ title, script, category: projectCategory }) })
+      const seriesPath = activeSeries?.is_virtual ? "" : (activeSeries?.path || "")
+      const data = await api("/api/projects", { method: "POST", body: JSON.stringify({ title, script, category: projectCategory, series_path: seriesPath }) })
       setState((current) => ({ ...current, project: data.project }))
       setTitle(data.project.name)
       setToast("Đã lưu nội dung. Bước tiếp theo: tạo giọng đọc.")
@@ -598,6 +612,12 @@ function App() {
       setTitle(data.project.name)
       setProjectsOpen(false)
       setToast("Đã mở project")
+      const cat = data.project?.category
+      if (cat) {
+        const found = series.find(s => s.title === cat && !s.is_virtual)
+        if (found) setActiveSeries(found)
+        else setActiveSeries({ path: "", title: cat, is_virtual: false, description: "", settings_overrides: {}, video_count: 0, latest_updated_at: 0, videos: [] })
+      }
       setActiveScreen(nextScreenForProject(data.project))
     } catch (err) {
       setError(err.message)
@@ -614,11 +634,12 @@ function App() {
     setTitle("")
     setVoicePreviewUrl("")
     setLightboxIndex(null)
-    setActiveScreen("home")
+    setActiveSeries(null)
+    setActiveScreen("dashboard")
     setToast("Đã dừng tác vụ và thoát project hiện tại")
   }
 
-  async function startNewVideo() {
+  async function startVideoInSeries(seriesItem) {
     await bestEffortCancel(true)
     setState((current) => ({ ...(current || {}), project: null, active_job: null, queued_jobs: [], jobs: [] }))
     setActiveJob(null)
@@ -626,7 +647,7 @@ function App() {
     setScript("")
     setTitle("")
     setWorkflowInput("")
-    setProjectCategory("")
+    setProjectCategory(seriesItem?.is_virtual ? "" : (seriesItem?.title || ""))
     setLogs([])
     setError("")
     setToast("")
@@ -636,7 +657,37 @@ function App() {
     setEditingKeywordValue("")
     setAssetFilter("all")
     setPreflight(null)
+    setActiveSeries(seriesItem)
     setActiveScreen("step1")
+  }
+
+  async function startNewVideo() {
+    if (!activeSeries) return setActiveScreen("dashboard")
+    await startVideoInSeries(activeSeries)
+  }
+
+  async function createSeries(title, description = "") {
+    const data = await api("/api/series", { method: "POST", body: JSON.stringify({ title, description }) })
+    await loadState(true)
+    return data.series
+  }
+
+  async function deleteSeries(path) {
+    try {
+      await api("/api/series", { method: "DELETE", body: JSON.stringify({ path }) })
+      if (activeSeries?.path === path) setActiveSeries(null)
+      setActiveScreen("dashboard")
+      await loadState(true)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  async function updateSeriesInfo(path, title, description) {
+    const data = await api("/api/series", { method: "PATCH", body: JSON.stringify({ path, title, description }) })
+    setActiveSeries(current => current?.path === path ? data.series : current)
+    await loadState(true)
+    return data.series
   }
 
   async function applyBeginnerVoicePreset() {
@@ -925,12 +976,12 @@ function App() {
       <div className="aurora-bg"><div className="aurora-blob-1" /><div className="aurora-blob-2" /></div>
       <ParticleCanvas />
       <header className="stitch-topbar">
-        {activeScreen !== "home" && (
+        {activeScreen !== "dashboard" && (
           <button className="back-home-button" onClick={goHomeAndStopProject} title="Quay lại trang chủ">
             <ArrowLeft className="h-4 w-4" />
           </button>
         )}
-        <button className="flex items-center gap-2" onClick={() => activeScreen !== "home" && goHomeAndStopProject()}>
+        <button className="flex items-center gap-2" onClick={() => activeScreen !== "dashboard" && goHomeAndStopProject()}>
           <div className="logo-mark"><WandSparkles className="h-4 w-4" /></div>
           <span className="text-[15px] font-bold text-white">Visual CapCut <span className="text-emerald-300">Studio</span></span>
         </button>
@@ -940,7 +991,7 @@ function App() {
         </div>
       </header>
 
-      {activeScreen !== "home" && (
+      {["step1", "step2", "step3a", "step3b", "step4"].includes(activeScreen) && (
         <Sidebar
           activeScreen={activeScreen}
           setActiveScreen={setActiveScreen}
@@ -948,45 +999,33 @@ function App() {
           project={project}
           activeJob={activeJob}
           userProgress={userProgress}
+          activeSeries={activeSeries}
           setSettingsOpen={setSettingsOpen}
           setProjectsOpen={setProjectsOpen}
           setHelpOpen={setHelpOpen}
         />
       )}
-      {activeScreen === "home" ? (
-        <main className="stitch-home customer-home">
-          <section className="home-hero-card fade-in-up">
-            <div className="home-welcome">
-              <span className="home-kicker">AI VIDEO PRODUCTION</span>
-              <h1>Từ kịch bản đến project CapCut hoàn chỉnh</h1>
-              <p>Người dùng chỉ cần nhập nội dung. Tool sẽ tạo giọng đọc, chia cảnh, tìm media, duyệt nhanh và xuất project mở được trong CapCut.</p>
-              <div className="home-cta-row">
-                <Button onClick={startNewVideo} size="lg">
-                  <Plus className="h-4 w-4" /> Tạo video mới
-                </Button>
-                <Button variant="secondary" size="lg" onClick={() => setProjectsOpen(true)}>
-                  <FolderOpen className="h-4 w-4" /> Làm tiếp project cũ
-                </Button>
-              </div>
-            </div>
-            <div className="home-readiness-card simple">
-              <div className={cn("ready-orb", allReady && "ok")}><CheckCircle2 className="h-7 w-7" /></div>
-              <b>{allReady ? "Sẵn sàng tạo video" : "Cần thiết lập lần đầu"}</b>
-              <p>{allReady ? "Mọi thứ đã được chuẩn bị. Bạn có thể bắt đầu ngay." : "Bấm kiểm tra để tool hướng dẫn hoàn thành những mục còn thiếu."}</p>
-              {!allReady && <Button variant="secondary" size="sm" onClick={runPreflight}><RefreshCw className="h-4 w-4" /> Kiểm tra và hướng dẫn</Button>}
-            </div>
-          </section>
-
-          <section className="home-process-strip fade-in-up delay-100">
-            {[
-              ["1", "Nhập nội dung", "Dán script hoặc tải TXT"],
-              ["2", "Chọn giọng", "Giọng có sẵn hoặc clone"],
-              ["3", "Duyệt media", "Tìm lại, tải lên, duyệt"],
-              ["4", "Xuất CapCut", "Mở project để chỉnh sửa"],
-            ].map(([num,title,desc]) => <div key={num}><span>{num}</span><b>{title}</b><small>{desc}</small></div>)}
-          </section>
-
-        </main>
+      {activeScreen === "dashboard" ? (
+        <DashboardScreen
+          series={series}
+          allReady={allReady}
+          runPreflight={runPreflight}
+          preflightChecks={preflightChecks}
+          onOpenSeries={(s) => { setActiveSeries(s); setActiveScreen("project") }}
+          onCreateSeries={createSeries}
+          setError={setError}
+        />
+      ) : activeScreen === "project" ? (
+        <ProjectDetailScreen
+          activeSeries={activeSeries}
+          allProjects={state?.projects || []}
+          onBack={() => setActiveScreen("dashboard")}
+          onOpenVideo={(path) => openProject(path)}
+          onNewVideo={() => startVideoInSeries(activeSeries)}
+          onDeleteSeries={deleteSeries}
+          onUpdateSeries={updateSeriesInfo}
+          setError={setError}
+        />
       ) : (
         <main className="stitch-workspace" style={{ marginLeft: "var(--sidebar-width)" }}>
           {activeScreen === "step1" && <ScriptStepScreen
@@ -1003,6 +1042,7 @@ function App() {
             startJob={startJob}
             projectCategory={projectCategory}
             setProjectCategory={setProjectCategory}
+            categoryLocked={!!activeSeries && !activeSeries.is_virtual}
             categories={state.categories || []}
             settings={settings}
             workflowSteps={workflowSteps}
@@ -1057,7 +1097,7 @@ function App() {
   )
 }
 
-function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, setSettingsOpen, setProjectsOpen, setHelpOpen }) {
+function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, activeSeries, setSettingsOpen, setProjectsOpen, setHelpOpen }) {
   const steps = [
     { id: "step1", label: "Nội dung", hint: "Kịch bản và AI viết" },
     { id: "step2", label: "Giọng đọc", hint: "Chọn giọng, clone voice" },
@@ -1094,10 +1134,17 @@ function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, setSe
   return (
     <aside className="app-sidebar">
       <div className="sidebar-section">
-        <span className="sidebar-label">Dự án</span>
+        {activeSeries && (
+          <button className="sidebar-series-link" onClick={() => setActiveScreen("project")}>
+            <FolderOpen className="h-3.5 w-3.5 flex-shrink-0 text-violet-400" />
+            <span className="text-xs text-violet-300 truncate">{activeSeries.title}</span>
+            <ChevronRight className="h-3 w-3 text-zinc-600 flex-shrink-0" />
+          </button>
+        )}
+        <span className="sidebar-label">{activeSeries ? "Video" : "Dự án"}</span>
         <button className="sidebar-project-name" onClick={() => setProjectsOpen(true)}>
-          <FolderOpen className="h-4 w-4 flex-shrink-0 text-violet-400" />
-          <span>{project?.name || "Chưa có project"}</span>
+          <Film className="h-4 w-4 flex-shrink-0 text-violet-400" />
+          <span>{project?.name || "Chưa có video"}</span>
         </button>
         {project && (
           <div className="sidebar-project-status">
@@ -1385,7 +1432,7 @@ function FlowCard({ icon: Icon, title, desc, accent = "violet", dashed, onClick,
   </button>
 }
 
-function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categories = [], settings, workflowSteps, workflowPresets, applyWorkflowPreset, setSettingsOpen, busyAction, activeJob }) {
+function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categoryLocked = false, categories = [], settings, workflowSteps, workflowPresets, applyWorkflowPreset, setSettingsOpen, busyAction, activeJob }) {
   const [contentMode, setContentMode] = useState("existing")
   const presets = workflowPresets()
   const workflowRunning = isBusy && busyAction === "workflow"
@@ -1406,8 +1453,17 @@ function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputR
       <div className="script-project-fields">
         <Field label="Tên video"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ví dụ: Brazil vs Panama" /></Field>
         <Field label="Thư mục / chủ đề lưu video">
-          <Input list="project-category-list" value={projectCategory} onChange={(e) => setProjectCategory(e.target.value)} placeholder="Ví dụ: Bóng đá, Nấu ăn, Khoa học..." />
-          <datalist id="project-category-list">{categories.map((item) => <option key={item} value={item} />)}</datalist>
+          {categoryLocked ? (
+            <div className="category-locked-field">
+              <Input value={projectCategory} disabled />
+              <Lock className="h-3.5 w-3.5 text-zinc-500 flex-shrink-0" />
+            </div>
+          ) : (
+            <>
+              <Input list="project-category-list" value={projectCategory} onChange={(e) => setProjectCategory(e.target.value)} placeholder="Ví dụ: Bóng đá, Nấu ăn, Khoa học..." />
+              <datalist id="project-category-list">{categories.map((item) => <option key={item} value={item} />)}</datalist>
+            </>
+          )}
         </Field>
       </div>
 
@@ -1840,6 +1896,200 @@ function ProjectsModal({ open, onOpenChange, state, project, openProject, rename
       </DialogContent>
     </Dialog>
   </>
+}
+
+function DashboardScreen({ series, allReady, runPreflight, preflightChecks, onOpenSeries, onCreateSeries, setError }) {
+  const [createOpen, setCreateOpen] = useState(false)
+  const readyCount = preflightChecks.filter(c => c.ok).length
+  return (
+    <main className="dashboard-home fade-in-up">
+      {!allReady && (
+        <div className="dashboard-preflight-banner">
+          <CheckCircle2 className="h-4 w-4 text-amber-400" />
+          <span>Cần thiết lập lần đầu ({readyCount}/{preflightChecks.length} mục sẵn sàng)</span>
+          <button className="dashboard-preflight-btn" onClick={runPreflight}><RefreshCw className="h-3.5 w-3.5" /> Kiểm tra</button>
+        </div>
+      )}
+      <div className="dashboard-header">
+        <div>
+          <h1 className="dashboard-title">Dự án của bạn</h1>
+          <p className="dashboard-subtitle">Chọn một Dự án để xem video bên trong, hoặc tạo Dự án mới.</p>
+        </div>
+        <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> Tạo Dự án mới</Button>
+      </div>
+      {series.length === 0 ? (
+        <div className="dashboard-empty">
+          <FolderOpen className="h-12 w-12 text-zinc-600" />
+          <p>Chưa có Dự án nào. Tạo Dự án đầu tiên để bắt đầu.</p>
+          <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> Tạo Dự án mới</Button>
+        </div>
+      ) : (
+        <div className="series-grid">
+          {series.map(s => (
+            <div
+              key={s.path || "virtual"}
+              className={cn("series-card glass-card", s.is_virtual && "virtual")}
+              onClick={() => onOpenSeries(s)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={e => e.key === "Enter" && onOpenSeries(s)}
+            >
+              <div className="series-card-icon">
+                {s.is_virtual ? <Film className="h-5 w-5" /> : <FolderOpen className="h-5 w-5" />}
+              </div>
+              <div className="series-card-body">
+                <b className="series-card-title">{s.title}</b>
+                {s.description && <p className="series-card-desc">{s.description}</p>}
+                <div className="series-card-meta">
+                  <span className="series-card-count">{s.video_count} video</span>
+                  {s.latest_updated_at > 0 && <span className="series-card-date">{formatProjectDate(s.latest_updated_at)}</span>}
+                </div>
+              </div>
+              <div className="series-card-arrow"><ChevronRight className="h-4 w-4 text-zinc-500" /></div>
+            </div>
+          ))}
+        </div>
+      )}
+      <CreateSeriesDialog open={createOpen} onOpenChange={setCreateOpen} onCreateSeries={onCreateSeries} setError={setError} onSuccess={onOpenSeries} />
+    </main>
+  )
+}
+
+function CreateSeriesDialog({ open, onOpenChange, onCreateSeries, setError, onSuccess }) {
+  const [title, setTitle] = useState("")
+  const [description, setDescription] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState("")
+  const reset = () => { setTitle(""); setDescription(""); setErr(""); setBusy(false) }
+  useEffect(() => { if (!open) reset() }, [open])
+  const submit = async () => {
+    if (!title.trim()) return setErr("Hãy nhập tên Dự án.")
+    setBusy(true)
+    setErr("")
+    try {
+      const created = await onCreateSeries(title.trim(), description.trim())
+      onOpenChange(false)
+      if (onSuccess && created) onSuccess(created)
+    } catch (e) {
+      setErr(e.message || "Tạo thất bại.")
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>Tạo Dự án mới</DialogTitle>
+        <DialogDescription>Dự án là nhóm chứa nhiều video cùng chủ đề.</DialogDescription>
+        <Field label="Tên Dự án">
+          <Input autoFocus value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} placeholder="Ví dụ: Bóng đá, Khoa học vũ trụ..." maxLength={80} />
+        </Field>
+        <Field label="Mô tả (tuỳ chọn)">
+          <Input value={description} onChange={e => setDescription(e.target.value)} placeholder="Ví dụ: Series bình luận các trận đấu lớn" maxLength={200} />
+        </Field>
+        {err && <p className="text-sm text-red-400">{err}</p>}
+        <div className="dialog-actions">
+          <Button variant="secondary" onClick={() => onOpenChange(false)}>Hủy</Button>
+          <Button onClick={submit} disabled={!title.trim() || busy}>{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null} Tạo Dự án</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ProjectDetailScreen({ activeSeries, allProjects, onBack, onOpenVideo, onNewVideo, onDeleteSeries, onUpdateSeries, setError }) {
+  const [editTitle, setEditTitle] = useState(activeSeries?.title || "")
+  const [editDesc, setEditDesc] = useState(activeSeries?.description || "")
+  const [editMode, setEditMode] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    setEditTitle(activeSeries?.title || "")
+    setEditDesc(activeSeries?.description || "")
+    setEditMode(false)
+  }, [activeSeries?.path])
+  if (!activeSeries) return null
+  const videos = allProjects.filter(p => p.category === activeSeries.title || (activeSeries.is_virtual && !p.category))
+  const saveEdit = async () => {
+    if (!editTitle.trim()) return
+    setBusy(true)
+    try {
+      await onUpdateSeries(activeSeries.path, editTitle.trim(), editDesc.trim())
+      setEditMode(false)
+    } catch (e) { setError(e.message) }
+    finally { setBusy(false) }
+  }
+  return (
+    <main className="project-detail fade-in-up">
+      <div className="project-detail-header">
+        <button className="project-detail-back" onClick={onBack}><ArrowLeft className="h-4 w-4" /> Tất cả Dự án</button>
+        {editMode ? (
+          <div className="project-detail-edit-row">
+            <Input autoFocus value={editTitle} onChange={e => setEditTitle(e.target.value)} className="text-lg font-bold" maxLength={80} onKeyDown={e => e.key === "Enter" && saveEdit()} />
+            <Input value={editDesc} onChange={e => setEditDesc(e.target.value)} placeholder="Mô tả..." maxLength={200} />
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setEditMode(false)}>Hủy</Button>
+              <Button onClick={saveEdit} disabled={busy || !editTitle.trim()}>{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null} Lưu</Button>
+            </div>
+          </div>
+        ) : (
+          <div className="project-detail-title-row">
+            <div>
+              <h1 className="project-detail-title">{activeSeries.title}</h1>
+              {activeSeries.description && <p className="project-detail-desc">{activeSeries.description}</p>}
+            </div>
+            {!activeSeries.is_virtual && (
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setEditMode(true)}><Pencil className="h-4 w-4" /> Sửa</Button>
+                <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(true)}><Trash2 className="h-4 w-4 text-red-400" /></Button>
+              </div>
+            )}
+          </div>
+        )}
+        <div className="project-detail-stats">
+          <span>{videos.length} video</span>
+          {activeSeries.is_virtual && <Badge>Chưa phân nhóm</Badge>}
+        </div>
+      </div>
+
+      <div className="project-detail-actions">
+        <Button onClick={onNewVideo}><Plus className="h-4 w-4" /> Tạo video mới</Button>
+      </div>
+
+      {videos.length === 0 ? (
+        <div className="project-detail-empty">
+          <Film className="h-10 w-10 text-zinc-600" />
+          <p>Dự án này chưa có video nào.</p>
+          <Button onClick={onNewVideo}><Plus className="h-4 w-4" /> Tạo video đầu tiên</Button>
+        </div>
+      ) : (
+        <div className="video-grid">
+          {videos.map(v => (
+            <div key={v.path} className="video-card glass-card" onClick={() => onOpenVideo(v.path)} role="button" tabIndex={0} onKeyDown={e => e.key === "Enter" && onOpenVideo(v.path)}>
+              <div className="video-card-title"><Film className="h-4 w-4 text-violet-400 flex-shrink-0" /><b className="truncate">{v.name}</b></div>
+              <div className="video-card-status-dots">
+                <span className={cn("status-dot", v.has_voice !== false && "done")} title="Giọng đọc" />
+                <span className={cn("status-dot", v.has_scenes !== false && "done")} title="Phân cảnh" />
+                <span className={cn("status-dot", v.has_capcut_export !== false && "done")} title="Xuất CapCut" />
+              </div>
+              <div className="video-card-date">{formatProjectDate(v.updated_at)}</div>
+              <ChevronRight className="h-4 w-4 text-zinc-600 flex-shrink-0" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent className="max-w-md">
+          <DialogTitle>Xóa Dự án này?</DialogTitle>
+          <DialogDescription>Toàn bộ video và dữ liệu trong "{activeSeries.title}" sẽ bị xóa vĩnh viễn. Thao tác này không thể hoàn tác.</DialogDescription>
+          <div className="dialog-actions">
+            <Button variant="secondary" onClick={() => setConfirmDelete(false)}>Giữ lại</Button>
+            <Button variant="danger" onClick={() => { setConfirmDelete(false); onDeleteSeries(activeSeries.path) }}><Trash2 className="h-4 w-4" /> Xóa Dự án</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </main>
+  )
 }
 
 function HelpModal({ open, onOpenChange }) {
