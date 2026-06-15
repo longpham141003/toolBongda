@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import App from './App'
+
+// App now derives its screen from the URL, so it must render inside a Router.
+function renderApp() {
+  return render(<MemoryRouter><App /></MemoryRouter>)
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -39,13 +45,13 @@ describe('App', () => {
   it('shows loading spinner before state is fetched', () => {
     // fetch that never resolves so the component stays in loading state
     global.fetch = vi.fn().mockReturnValue(new Promise(() => {}))
-    render(<App />)
+    renderApp()
     expect(screen.getByText(/Đang khởi động/)).toBeInTheDocument()
   })
 
   it('renders the app header after state is loaded', async () => {
     mockFetchOnce(makeState())
-    render(<App />)
+    renderApp()
     await waitFor(() => {
       expect(screen.getByText('Visual CapCut Studio')).toBeInTheDocument()
     })
@@ -53,7 +59,7 @@ describe('App', () => {
 
   it('shows "Chưa có project" when no project is loaded', async () => {
     mockFetchOnce(makeState({ project: null }))
-    render(<App />)
+    renderApp()
     await waitFor(() => {
       expect(screen.getByText('Chưa có project')).toBeInTheDocument()
     })
@@ -70,7 +76,7 @@ describe('App', () => {
       assets: [],
     }
     mockFetchOnce(makeState({ project }))
-    render(<App />)
+    renderApp()
     await waitFor(() => {
       expect(screen.getByText('My Test Project')).toBeInTheDocument()
     })
@@ -78,7 +84,7 @@ describe('App', () => {
 
   it('shows "Sẵn sàng" badge when no active job is running', async () => {
     mockFetchOnce(makeState())
-    render(<App />)
+    renderApp()
     await waitFor(() => {
       expect(screen.getByText('Sẵn sàng')).toBeInTheDocument()
     })
@@ -86,7 +92,7 @@ describe('App', () => {
 
   it('shows the workflow section after state is loaded', async () => {
     mockFetchOnce(makeState())
-    render(<App />)
+    renderApp()
     await waitFor(() => {
       // The B0 script section heading should be visible
       expect(screen.getByText('B0 · Tạo nội dung')).toBeInTheDocument()
@@ -95,7 +101,7 @@ describe('App', () => {
 
   it('shows flow step labels once loaded', async () => {
     mockFetchOnce(makeState())
-    render(<App />)
+    renderApp()
     await waitFor(() => {
       // The step label in the flow-step header has the exact text "B1 · Magic Voice"
       expect(screen.getByText('B1 · Magic Voice')).toBeInTheDocument()
@@ -105,7 +111,7 @@ describe('App', () => {
 
   it('renders "Tạo project" button when no project is loaded', async () => {
     mockFetchOnce(makeState({ project: null }))
-    render(<App />)
+    renderApp()
     await waitFor(() => {
       // Multiple "Tạo project" buttons exist (header area + workflow tabs).
       // We just need at least one to be present.
@@ -120,7 +126,7 @@ describe('App', () => {
       json: async () => makeState(),
     })
     global.fetch = fetch
-    render(<App />)
+    renderApp()
     await waitFor(() => {
       expect(fetch).toHaveBeenCalled()
       const firstCall = fetch.mock.calls[0]

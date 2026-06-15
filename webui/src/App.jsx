@@ -37,6 +37,7 @@ import {
   XCircle,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useLocation, useNavigate } from "react-router-dom"
 import {
   Badge,
   Button,
@@ -55,6 +56,12 @@ import {
   Textarea,
 } from "./components/ui"
 import { cn, formatTime, mediaUrl } from "./lib/utils"
+import {
+  SEGMENT_TO_STEP,
+  STEP_TO_SEGMENT,
+  pathToSeriesSlug,
+  pathToVideoSlug,
+} from "./lib/routing"
 
 const defaultSteps = [
   { enabled: true, name: "Phân tích đề tài", prompt: "Analyze the topic, audience, key facts, named entities, timeline and strongest visual moments." },
@@ -177,6 +184,38 @@ function nextScreenForProject(project) {
   return project?.script ? "step2" : "step1"
 }
 
+/**
+ * Parse a pathname into the derived screen description.
+ * Returns one of:
+ *   { kind: "dashboard" }
+ *   { kind: "project", seriesSlug }
+ *   { kind: "new-video", seriesSlug }     // /du-an/:slug/tao-video
+ *   { kind: "video", videoSlug, step }    // step null = "redirect to next step"
+ *   { kind: "unknown" }
+ */
+function parseRoute(pathname) {
+  const parts = String(pathname || "/").split("/").filter(Boolean)
+  if (parts.length === 0) return { kind: "dashboard" }
+  if (parts[0] === "du-an" && parts[1]) {
+    if (parts.length === 2) return { kind: "project", seriesSlug: parts[1] }
+    if (parts.length === 3 && parts[2] === "tao-video") return { kind: "new-video", seriesSlug: parts[1] }
+    return { kind: "unknown" }
+  }
+  if (parts[0] === "video" && parts[1]) {
+    if (parts.length === 2) return { kind: "video", videoSlug: parts[1], step: null }
+    if (parts.length === 3 && SEGMENT_TO_STEP[parts[2]]) {
+      return { kind: "video", videoSlug: parts[1], step: SEGMENT_TO_STEP[parts[2]] }
+    }
+    return { kind: "unknown" }
+  }
+  return { kind: "unknown" }
+}
+
+/** Build the URL for a video at a given workflow step. */
+function videoStepPath(videoSlug, step) {
+  return `/video/${videoSlug}/${STEP_TO_SEGMENT[step] || "noi-dung"}`
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json", "X-Visual-Client": visualClientId, ...(options.headers || {}) },
@@ -295,7 +334,8 @@ function App() {
   const [preflight, setPreflight] = useState(null)
   const [preflightBusy, setPreflightBusy] = useState(false)
 
-  const [activeScreen, setActiveScreen] = useState("dashboard")
+  const navigate = useNavigate()
+  const location = useLocation()
   const [activeSeries, setActiveSeries] = useState(null)
   const [series, setSeries] = useState([])
   const logContainerRef = useRef(null)
@@ -347,6 +387,62 @@ function App() {
     api("/api/preflight").then(setPreflight).catch(() => {})
   }, [])
 
+  const project = state?.project
+  const assets = useMemo(() => project?.assets || [], [project])
+  const liveJobs = state?.jobs || []
+
+  // ---- Derive the active screen from the URL (no React state) ----
+  // Declared before the job-polling effect because that effect lists goStep in
+  // its dependency array, which React evaluates during render.
+  const route = useMemo(() => parseRoute(location.pathname), [location.pathname])
+  // Slug for the currently-open video (used to build step nav targets).
+  const currentVideoSlug = useMemo(
+    () => (project?.path ? pathToVideoSlug(project.path, state?.projects || []) : null),
+    [project?.path, state?.projects],
+  )
+  // Slug for the active series (used to build the breadcrumb back-link target).
+  const activeSeriesSlug = useMemo(
+    () => (activeSeries?.path != null ? pathToSeriesSlug(activeSeries.path, series) : null),
+    [activeSeries?.path, series],
+  )
+  const activeScreen = useMemo(() => {
+    if (route.kind === "dashboard") return "dashboard"
+    if (route.kind === "project") return "project"
+    if (route.kind === "new-video") return "step1"
+    if (route.kind === "video") {
+      if (route.step) return route.step
+      // Bare /video/:id → fall back to the project-derived step.
+      return nextScreenForProject(project)
+    }
+    return "dashboard"
+  }, [route, project])
+
+  // Navigate a step within the currently-open video by step id.
+  const goStep = useCallback((step) => {
+    if (currentVideoSlug) navigate(videoStepPath(currentVideoSlug, step))
+  }, [currentVideoSlug, navigate])
+
+  // Redirect a bare /video/:id URL to its resolved step, once the project is open.
+  useEffect(() => {
+    if (route.kind === "video" && route.step === null && currentVideoSlug) {
+      navigate(videoStepPath(currentVideoSlug, nextScreenForProject(project)), { replace: true })
+    }
+  }, [route, currentVideoSlug, project, navigate])
+
+  // Unknown URLs fall back to the dashboard.
+  useEffect(() => {
+    if (route.kind === "unknown") navigate("/", { replace: true })
+  }, [route.kind, navigate])
+
+  // A step / new-video URL with no series in memory is orphaned (e.g. after
+  // stopping the project) — and reloading a deep URL is the next task, not this
+  // one — so send the user back to the dashboard. A bare /video/:id redirect is
+  // handled above and must not be treated as orphaned here.
+  useEffect(() => {
+    const onStep = route.kind === "new-video" || (route.kind === "video" && route.step !== null)
+    if (onStep && !activeSeries && !project) navigate("/", { replace: true })
+  }, [route, activeSeries, project, navigate])
+
   useEffect(() => {
     if (!activeJob || !["queued", "running"].includes(activeJob.status)) return
     const timer = setInterval(async () => {
@@ -369,8 +465,8 @@ function App() {
           } else {
             setToast(`${job.name} đã hoàn thành`)
           }
-          if (job.name === "B2 Phan tich canh") setActiveScreen("step3a")
-          if (job.name === "B2+B3 Chia canh va tim media") setActiveScreen("step3b")
+          if (job.name === "B2 Phan tich canh") goStep("step3a")
+          if (job.name === "B2+B3 Chia canh va tim media") goStep("step3b")
           setBusyAction("")
         } else if (job.status === "cancelled") {
           clearInterval(timer)
@@ -398,7 +494,7 @@ function App() {
       }
     }, 900)
     return () => clearInterval(timer)
-  }, [activeJob?.id, activeJob?.status, loadState])
+  }, [activeJob?.id, activeJob?.status, loadState, goStep])
 
   useEffect(() => {
     const container = logContainerRef.current
@@ -410,12 +506,6 @@ function App() {
     const timer = setTimeout(() => setToast(""), 2800)
     return () => clearTimeout(timer)
   }, [toast])
-
-  useEffect(() => {
-    if (["step1", "step2", "step3a", "step3b", "step4"].includes(activeScreen) && !activeSeries) {
-      setActiveScreen("dashboard")
-    }
-  }, [activeScreen, activeSeries])
 
   const refreshVoices = useCallback(async (language = settings.text_to_voice_language || "en") => {
     try {
@@ -437,10 +527,6 @@ function App() {
   useEffect(() => {
     refreshVoices(settings.text_to_voice_language || "en")
   }, [settings.text_to_voice_language])
-
-  const project = state?.project
-  const assets = useMemo(() => project?.assets || [], [project])
-  const liveJobs = state?.jobs || []
 
   useEffect(() => {
     if (lightboxIndex === null) return
@@ -607,8 +693,10 @@ function App() {
       setState((current) => ({ ...current, project: data.project }))
       setTitle(data.project.name)
       setToast("Đã lưu nội dung. Bước tiếp theo: tạo giọng đọc.")
-      await loadState()
-      setActiveScreen("step2")
+      const latest = await loadState()
+      // The new project now exists in state.projects — navigate to its step2 URL.
+      const slug = pathToVideoSlug(data.project.path, latest?.projects || [])
+      if (slug) navigate(videoStepPath(slug, "step2"))
     } catch (err) {
       setError(err.message)
     }
@@ -621,7 +709,8 @@ function App() {
       const data = await api("/api/projects/script", { method: "POST", body: JSON.stringify({ script }) })
       setState((current) => ({ ...current, project: data.project }))
       setToast("Đã lưu nội dung. Bước tiếp theo: tạo giọng đọc.")
-      setActiveScreen("step2")
+      const slug = pathToVideoSlug(data.project.path, state?.projects || [])
+      if (slug) navigate(videoStepPath(slug, "step2"))
     } catch (err) {
       setError(err.message)
     }
@@ -644,7 +733,8 @@ function App() {
         if (found) setActiveSeries(found)
         else setActiveSeries({ path: "", title: cat, is_virtual: false, description: "", settings_overrides: {}, video_count: 0, latest_updated_at: 0, videos: [] })
       }
-      setActiveScreen(nextScreenForProject(data.project))
+      const slug = pathToVideoSlug(data.project.path, state?.projects || [])
+      navigate(slug ? videoStepPath(slug, nextScreenForProject(data.project)) : "/")
     } catch (err) {
       setError(err.message)
     }
@@ -661,7 +751,7 @@ function App() {
     setVoicePreviewUrl("")
     setLightboxIndex(null)
     setActiveSeries(null)
-    setActiveScreen("dashboard")
+    navigate("/")
     setToast("Đã dừng tác vụ và thoát project hiện tại")
   }
 
@@ -684,11 +774,12 @@ function App() {
     setAssetFilter("all")
     setPreflight(null)
     setActiveSeries(seriesItem)
-    setActiveScreen("step1")
+    const slug = pathToSeriesSlug(seriesItem?.path, series)
+    navigate(slug ? `/du-an/${slug}/tao-video` : "/")
   }
 
   async function startNewVideo() {
-    if (!activeSeries) return setActiveScreen("dashboard")
+    if (!activeSeries) return navigate("/")
     await startVideoInSeries(activeSeries)
   }
 
@@ -702,7 +793,7 @@ function App() {
     try {
       await api("/api/series", { method: "DELETE", body: JSON.stringify({ path }) })
       if (activeSeries?.path === path) setActiveSeries(null)
-      setActiveScreen("dashboard")
+      navigate("/")
       await loadState(true)
     } catch (err) {
       setError(err.message)
@@ -754,7 +845,9 @@ function App() {
       await api("/api/projects/delete", { method: "POST", body: JSON.stringify({ path }) })
       if (project?.path === path) {
         setState((current) => ({ ...(current || {}), project: null }))
-        setActiveScreen("home")
+        // The open video was deleted — leave the step screens. Go back to its
+        // series detail if one is active, otherwise the dashboard.
+        navigate(activeSeriesSlug ? `/du-an/${activeSeriesSlug}` : "/")
       }
       await loadState(true)
       setToast("Đã xóa project")
@@ -1017,7 +1110,7 @@ function App() {
         {["step1","step2","step3a","step3b","step4"].includes(activeScreen) && (
           <div className="topbar-breadcrumb">
             {activeSeries && <>
-              <button className="topbar-breadcrumb-item" onClick={() => setActiveScreen("project")}>
+              <button className="topbar-breadcrumb-item" onClick={() => activeSeriesSlug && navigate(`/du-an/${activeSeriesSlug}`)}>
                 <FolderOpen className="h-3.5 w-3.5 flex-shrink-0" />
                 <span>{activeSeries.title}</span>
               </button>
@@ -1039,7 +1132,7 @@ function App() {
       {["step1", "step2", "step3a", "step3b", "step4"].includes(activeScreen) && (
         <StepsBar
           activeScreen={activeScreen}
-          setActiveScreen={setActiveScreen}
+          goStep={goStep}
           completedSteps={completedSteps}
           project={project}
         />
@@ -1050,7 +1143,11 @@ function App() {
           allReady={allReady}
           runPreflight={runPreflight}
           preflightChecks={preflightChecks}
-          onOpenSeries={(s) => { setActiveSeries(s); setActiveScreen("project") }}
+          onOpenSeries={(s) => {
+            setActiveSeries(s)
+            const slug = pathToSeriesSlug(s?.path, series)
+            navigate(slug ? `/du-an/${slug}` : "/")
+          }}
           onCreateSeries={createSeries}
           setError={setError}
         />
@@ -1058,7 +1155,7 @@ function App() {
         <ProjectDetailScreen
           activeSeries={activeSeries}
           allProjects={state?.projects || []}
-          onBack={() => setActiveScreen("dashboard")}
+          onBack={() => navigate("/")}
           onOpenVideo={(path) => openProject(path)}
           onNewVideo={() => startVideoInSeries(activeSeries)}
           onDeleteSeries={deleteSeries}
@@ -1091,10 +1188,10 @@ function App() {
             busyAction={busyAction}
             activeJob={activeJob}
           />}
-          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} isBusy={isBusy} busyAction={busyAction} activeJob={activeJob} setActiveScreen={setActiveScreen} userProgress={userProgress} />}
-          {activeScreen === "step3a" && <SceneScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
-          {activeScreen === "step3b" && <MediaReviewScreen assets={assets} filteredAssets={filteredAssets} assetFilter={assetFilter} setAssetFilter={setAssetFilter} project={project} assetJobs={assetJobs} statusBadge={statusBadge} setLightboxIndex={setLightboxIndex} startJob={startJob} approveAsset={approveAsset} approveAllAssets={approveAllAssets} chooseAssetMedia={chooseAssetMedia} bulkRetryAssets={bulkRetryAssets} isBusy={isBusy} setActiveScreen={setActiveScreen} />}
-          {activeScreen === "step4" && <ExportScreen project={project} assets={assets} preflight={preflight} runPreflight={runPreflight} startJob={startJob} title={title} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
+          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} isBusy={isBusy} busyAction={busyAction} activeJob={activeJob} goStep={goStep} userProgress={userProgress} />}
+          {activeScreen === "step3a" && <SceneScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} goStep={goStep} />}
+          {activeScreen === "step3b" && <MediaReviewScreen assets={assets} filteredAssets={filteredAssets} assetFilter={assetFilter} setAssetFilter={setAssetFilter} project={project} assetJobs={assetJobs} statusBadge={statusBadge} setLightboxIndex={setLightboxIndex} startJob={startJob} approveAsset={approveAsset} approveAllAssets={approveAllAssets} chooseAssetMedia={chooseAssetMedia} bulkRetryAssets={bulkRetryAssets} isBusy={isBusy} goStep={goStep} />}
+          {activeScreen === "step4" && <ExportScreen project={project} assets={assets} preflight={preflight} runPreflight={runPreflight} startJob={startJob} title={title} isBusy={isBusy} busyAction={busyAction} goStep={goStep} />}
         </main>
       )}
 
@@ -1136,104 +1233,7 @@ function App() {
   )
 }
 
-function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, activeSeries, setSettingsOpen, setProjectsOpen, setHelpOpen }) {
-  const steps = [
-    { id: "step1", label: "Nội dung", hint: "Kịch bản và AI viết" },
-    { id: "step2", label: "Giọng đọc", hint: "Chọn giọng, clone voice" },
-    { id: "step3a", label: "Hình ảnh", hint: "Phân cảnh và duyệt media" },
-    { id: "step4", label: "Xuất CapCut", hint: "Kiểm tra và xuất" },
-  ]
-  const doneMap = { step1: completedSteps[0], step2: completedSteps[1], step3a: completedSteps[2], step4: completedSteps[3] }
-
-  const stepLabel = (id) => {
-    if (doneMap[id]) return "Hoàn thành"
-    if (activeScreen === id || (id === "step3a" && activeScreen === "step3b")) return "Đang thực hiện"
-    const idx = steps.findIndex(s => s.id === id)
-    const prevId = idx > 0 ? steps[idx - 1].id : null
-    if (prevId && !doneMap[prevId] && activeScreen !== id) return "Chưa mở"
-    return "Sẵn sàng"
-  }
-
-  const isLocked = (id) => {
-    const idx = steps.findIndex(s => s.id === id)
-    if (idx === 0) return false
-    const prevId = steps[idx - 1].id
-    const isStep3 = id === "step3a" && (activeScreen === "step3a" || activeScreen === "step3b")
-    return !doneMap[prevId] && !isStep3 && activeScreen !== id
-  }
-
-  const navigateToStep = (id) => {
-    if (id === "step3a") {
-      setActiveScreen(project?.has_scenes ? "step3b" : "step3a")
-    } else {
-      setActiveScreen(id)
-    }
-  }
-
-  return (
-    <aside className="app-sidebar">
-      <div className="sidebar-section">
-        {activeSeries && (
-          <button className="sidebar-series-link" onClick={() => setActiveScreen("project")}>
-            <FolderOpen className="h-3.5 w-3.5 flex-shrink-0 text-violet-400" />
-            <span className="text-xs text-violet-300 truncate">{activeSeries.title}</span>
-            <ChevronRight className="h-3 w-3 text-zinc-600 flex-shrink-0" />
-          </button>
-        )}
-        <span className="sidebar-label">{activeSeries ? "Video" : "Dự án"}</span>
-        <button className="sidebar-project-name" onClick={() => setProjectsOpen(true)}>
-          <Film className="h-4 w-4 flex-shrink-0 text-violet-400" />
-          <span>{project?.name || "Chưa có video"}</span>
-        </button>
-        {project && (
-          <div className="sidebar-project-status">
-            {completedSteps.filter(Boolean).length} / 4 bước hoàn thành
-          </div>
-        )}
-      </div>
-
-      <hr className="sidebar-divider" />
-
-      <div className="sidebar-section">
-        <span className="sidebar-label">Các bước</span>
-      </div>
-      <nav className="sidebar-steps">
-        {steps.map((step, idx) => {
-          const done = doneMap[step.id]
-          const active = activeScreen === step.id || (step.id === "step3a" && activeScreen === "step3b")
-          const locked = isLocked(step.id)
-          return (
-            <button
-              key={step.id}
-              className={cn("sidebar-step", active && "active", done && !active && "done", locked && "locked")}
-              disabled={locked}
-              onClick={() => !locked && navigateToStep(step.id)}
-            >
-              <span className="sidebar-step-num">
-                {done && !active ? <Check className="h-3 w-3" /> : idx + 1}
-              </span>
-              <span className="sidebar-step-text">
-                <b>{step.label}</b>
-                <small>{stepLabel(step.id)}</small>
-              </span>
-            </button>
-          )
-        })}
-      </nav>
-
-      <div className="sidebar-bottom">
-        <button className="sidebar-bottom-btn" onClick={() => setSettingsOpen(true)}>
-          <Settings className="h-4 w-4" /> Cài đặt
-        </button>
-        <button className="sidebar-bottom-btn" onClick={() => setHelpOpen(true)}>
-          <Bot className="h-4 w-4" /> Trợ giúp
-        </button>
-      </div>
-    </aside>
-  )
-}
-
-function StepsBar({ activeScreen, setActiveScreen, completedSteps, project }) {
+function StepsBar({ activeScreen, goStep, completedSteps, project }) {
   const steps = [
     { id: "step1", label: "Nội dung" },
     { id: "step2", label: "Giọng đọc" },
@@ -1250,9 +1250,9 @@ function StepsBar({ activeScreen, setActiveScreen, completedSteps, project }) {
     return !doneMap[prevId] && !isStep3Active && activeScreen !== id
   }
 
-  const navigate = (id) => {
+  const goToStep = (id) => {
     if (isLocked(id)) return
-    setActiveScreen(id === "step3a" ? (project?.has_scenes ? "step3b" : "step3a") : id)
+    goStep(id === "step3a" ? (project?.has_scenes ? "step3b" : "step3a") : id)
   }
 
   return (
@@ -1267,7 +1267,7 @@ function StepsBar({ activeScreen, setActiveScreen, completedSteps, project }) {
             <button
               className={cn("step-tab", active && "active", done && !active && "done", locked && "locked")}
               disabled={locked}
-              onClick={() => navigate(step.id)}
+              onClick={() => goToStep(step.id)}
             >
               <span className="step-tab-num">
                 {done && !active ? <Check className="h-3 w-3" /> : idx + 1}
@@ -1613,7 +1613,7 @@ function WorkflowPanel({ workflowInput, setWorkflowInput, workflowSteps, setting
   </div>
 }
 
-function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, saveCloneVoice, selectSavedCloneVoice, isBusy, busyAction, activeJob, setActiveScreen, userProgress }) {
+function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, saveCloneVoice, selectSavedCloneVoice, isBusy, busyAction, activeJob, goStep, userProgress }) {
   const [cloneName, setCloneName] = useState("")
   const [cloneLanguage, setCloneLanguage] = useState("vi")
   const [pendingCloneFile, setPendingCloneFile] = useState(null)
@@ -1757,9 +1757,9 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
         <div className="setting-help">8 tạo nhanh hơn, 16 ưu tiên chất lượng. Tool giới hạn tối đa 16 để tránh lỗi và quá tải bộ nhớ.</div></>}
       </div>
     </div>
-    <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step1")}><ArrowLeft className="h-4 w-4" /> Quay lại Bước 1</Button><span>{voiceRunning ? "Đổi giọng hoặc tốc độ rồi bấm Tạo lại. Tool sẽ dừng bản đang chạy." : project?.voice_path ? "Đã có voice. Bạn có thể tạo lại hoặc tiếp tục phân cảnh." : "Chọn giọng xong hãy bấm Tạo giọng đọc."}</span><div className="voice-footer-actions">
+    <div className="screen-footer"><Button variant="secondary" onClick={()=>goStep("step1")}><ArrowLeft className="h-4 w-4" /> Quay lại Bước 1</Button><span>{voiceRunning ? "Đổi giọng hoặc tốc độ rồi bấm Tạo lại. Tool sẽ dừng bản đang chạy." : project?.voice_path ? "Đã có voice. Bạn có thể tạo lại hoặc tiếp tục phân cảnh." : "Chọn giọng xong hãy bấm Tạo giọng đọc."}</span><div className="voice-footer-actions">
       <Button variant={project?.voice_path || voiceRunning ? "secondary" : "default"} onClick={createVoiceWithQuickSettings} disabled={isBusy && !voiceRunning}>{voiceRunning?<RefreshCw className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} {voiceRunning ? "Dừng và tạo lại" : project?.voice_path ? "Tạo lại giọng đọc" : "Tạo giọng đọc"}</Button>
-      {project?.voice_path && <Button onClick={()=>{setActiveScreen("step3a");startJob("/api/analyze-search",undefined,"analyze-search")}} disabled={isBusy}>{busyAction==="analyze-search"?<LoaderCircle className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} Tạo cảnh và tìm ảnh</Button>}
+      {project?.voice_path && <Button onClick={()=>{goStep("step3a");startJob("/api/analyze-search",undefined,"analyze-search")}} disabled={isBusy}>{busyAction==="analyze-search"?<LoaderCircle className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} Tạo cảnh và tìm ảnh</Button>}
     </div></div>
   </div>
 }
@@ -1778,7 +1778,7 @@ function looksLikeEnglish(text = "") {
   return asciiRatio > 0.92 && hits >= 4
 }
 
-function SceneScreen({ assets, project, startJob, isBusy, busyAction, setActiveScreen }) {
+function SceneScreen({ assets, project, startJob, isBusy, busyAction, goStep }) {
   const loading = busyAction === "analyze-search" && isBusy
   return <div className="step-screen">
     <div className="screen-heading"><h1>Bước 3A - Chuẩn bị cảnh</h1><p>Tool tự đọc mốc thời gian, gom câu cùng ý và chuẩn bị ảnh/video cho từng cảnh.</p></div>
@@ -1787,17 +1787,17 @@ function SceneScreen({ assets, project, startJob, isBusy, busyAction, setActiveS
         <b>{project?.has_voice ? "Tool đang chuẩn bị dữ liệu cho bước duyệt ảnh." : "Cần tạo giọng đọc trước."}</b>
         <span>{loading ? "Đang chia nội dung thành cảnh và tìm media phù hợp. Xong bước này tool sẽ chuyển sang màn duyệt ảnh." : project?.has_voice ? "Nếu đã có dữ liệu, bạn có thể xem lại từng cảnh ở bên dưới hoặc sang bước duyệt ảnh." : "Quay lại Bước 2, bấm tạo giọng đọc. Tool cần voice để biết mỗi câu nằm ở giây nào."}</span>
       </div>
-      {!project?.has_voice && <Button variant="secondary" onClick={()=>setActiveScreen("step2")}><ArrowLeft className="h-4 w-4" /> Về Bước 2</Button>}
+      {!project?.has_voice && <Button variant="secondary" onClick={()=>goStep("step2")}><ArrowLeft className="h-4 w-4" /> Về Bước 2</Button>}
     </div>
     <div className="scene-layout">
       <div className="glass-panel screen-panel"><div className="panel-title"><div><h2>Lời đọc theo thời gian</h2><p>{project?.has_voice ? "Mỗi dòng là một đoạn voice đã được căn mốc" : "Chưa tạo giọng đọc"}</p></div><FileText className="text-violet-300" /></div><div className="srt-preview">{assets.length ? assets.map((a,i)=><div key={a.asset_id}><span>{i+1}</span><b>{formatTime(a.start)} → {formatTime(a.end)}</b><p>{a.sentence_text}</p></div>) : <EmptyState text={loading ? "Đang căn thời gian và gom câu thành cảnh..." : "Chưa có dữ liệu. Hãy hoàn thành Bước 2."} />}</div></div>
       <div className="glass-panel screen-panel"><div className="panel-title"><div><h2>Cảnh video</h2><p>Mỗi cảnh sẽ có ảnh/video riêng ở bước sau</p></div><Aperture className="text-emerald-300" /></div><div className="scene-list">{assets.length ? assets.map((a,i)=><div className="scene-row" key={a.asset_id}><span>{String(i+1).padStart(2,"0")}</span><div><b>{formatTime(a.start)} - {formatTime(a.end)} · {Number(a.duration||0).toFixed(1)}s</b><p>{a.sentence_text}</p><small>{a.scene_break_reason || "Chuyển chủ thể, sự kiện hoặc ý chính"}</small></div></div>) : <EmptyState text={loading ? "Đang tạo phân cảnh và tìm ảnh/video..." : "Chưa có cảnh."} />}</div></div>
     </div>
-    <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step2")}><ArrowLeft className="h-4 w-4"/> Quay lại</Button><span>{loading ? "Đang xử lý, vui lòng chờ..." : assets.length ? `${assets.length} cảnh đã sẵn sàng` : "Chưa có dữ liệu cảnh"}</span><Button variant="secondary" disabled={!assets.length} onClick={()=>setActiveScreen("step3b")}>Xem ảnh từng cảnh <ArrowRight className="h-4 w-4"/></Button></div>
+    <div className="screen-footer"><Button variant="secondary" onClick={()=>goStep("step2")}><ArrowLeft className="h-4 w-4"/> Quay lại</Button><span>{loading ? "Đang xử lý, vui lòng chờ..." : assets.length ? `${assets.length} cảnh đã sẵn sàng` : "Chưa có dữ liệu cảnh"}</span><Button variant="secondary" disabled={!assets.length} onClick={()=>goStep("step3b")}>Xem ảnh từng cảnh <ArrowRight className="h-4 w-4"/></Button></div>
   </div>
 }
 
-function MediaReviewScreen({ assets, filteredAssets, assetFilter, setAssetFilter, project, assetJobs, statusBadge, setLightboxIndex, startJob, approveAsset, approveAllAssets, chooseAssetMedia, bulkRetryAssets, setActiveScreen }) {
+function MediaReviewScreen({ assets, filteredAssets, assetFilter, setAssetFilter, project, assetJobs, statusBadge, setLightboxIndex, startJob, approveAsset, approveAllAssets, chooseAssetMedia, bulkRetryAssets, goStep }) {
   const pageSize = 15
   const [page, setPage] = useState(1)
   const headerRef = useRef(null)
@@ -1888,17 +1888,17 @@ function MediaReviewScreen({ assets, filteredAssets, assetFilter, setAssetFilter
             {job ? "Đang xử lý cảnh này." : categoryOf(asset)==="error" ? (asset.error || "Tìm media bị lỗi.") : categoryOf(asset)==="missing" ? "Cảnh chưa có media." : categoryOf(asset)==="approved" ? "Media đã được duyệt." : "Media đang chờ bạn duyệt."}
           </div>
         </div>
-      </article>}) : <div className="media-empty"><EmptyState text={assets.length ? "Không có cảnh nào theo bộ lọc này." : "Chưa có cảnh. Hãy quay lại Bước 2 và bấm Tạo cảnh và tìm ảnh."} />{!assets.length && <Button variant="secondary" onClick={()=>setActiveScreen("step2")}>Về Bước 2</Button>}</div>}</div>
+      </article>}) : <div className="media-empty"><EmptyState text={assets.length ? "Không có cảnh nào theo bộ lọc này." : "Chưa có cảnh. Hãy quay lại Bước 2 và bấm Tạo cảnh và tìm ảnh."} />{!assets.length && <Button variant="secondary" onClick={()=>goStep("step2")}>Về Bước 2</Button>}</div>}</div>
     {pageCount > 1 && <nav className="media-pagination" aria-label="Phân trang cảnh">
       <Button size="sm" variant="secondary" disabled={currentPage===1} onClick={()=>{setPage(value=>Math.max(1,value-1));headerRef.current?.scrollIntoView({block:"start"})}}><ArrowLeft className="h-4 w-4"/> Trang trước</Button>
       <div>{Array.from({length:pageCount},(_,index)=>index+1).map(number=><button key={number} className={number===currentPage?"active":""} onClick={()=>{setPage(number);headerRef.current?.scrollIntoView({block:"start"})}}>{number}</button>)}</div>
       <Button size="sm" variant="secondary" disabled={currentPage===pageCount} onClick={()=>{setPage(value=>Math.min(pageCount,value+1));headerRef.current?.scrollIntoView({block:"start"})}}>Trang sau <ArrowRight className="h-4 w-4"/></Button>
     </nav>}
-    <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step3a")}><ArrowLeft className="h-4 w-4"/> Phân cảnh</Button><span>{project?.approved_count||0}/{assets.length} cảnh đã duyệt</span><Button disabled={!assets.length} onClick={()=>setActiveScreen("step4")}>Tiếp tục kiểm tra <ArrowRight className="h-4 w-4"/></Button></div>
+    <div className="screen-footer"><Button variant="secondary" onClick={()=>goStep("step3a")}><ArrowLeft className="h-4 w-4"/> Phân cảnh</Button><span>{project?.approved_count||0}/{assets.length} cảnh đã duyệt</span><Button disabled={!assets.length} onClick={()=>goStep("step4")}>Tiếp tục kiểm tra <ArrowRight className="h-4 w-4"/></Button></div>
   </div>
 }
 
-function ExportScreen({ project, assets, preflight, runPreflight, startJob, title, isBusy, busyAction, setActiveScreen }) {
+function ExportScreen({ project, assets, preflight, runPreflight, startJob, title, isBusy, busyAction, goStep }) {
   const ready=project?.has_voice&&assets.length&&assets.every(a=>a.local_path)&&assets.every(a=>a.status==="approved")
   return <div className="step-screen">
     <div className="screen-heading"><h1>Bước 4 - Kiểm tra và xuất CapCut</h1><p>Kiểm tra đủ giọng đọc, cảnh và ảnh đã duyệt trước khi tạo project.</p></div>
@@ -1907,7 +1907,7 @@ function ExportScreen({ project, assets, preflight, runPreflight, startJob, titl
       <div className="glass-panel screen-panel export-hero"><div className="rocket-orb"><Rocket className="h-20 w-20"/></div><h2>{ready ? "Sẵn sàng tạo project CapCut" : "Còn mục cần hoàn thành"}</h2><p>Ảnh/video được gắn theo mốc thời gian, giọng đọc nằm đúng timeline và flow giữ nguyên theo script.</p><div className="timeline-preview" aria-hidden="true">{assets.slice(0, 8).map((asset, index)=><span key={asset.asset_id || index} style={{"--clip": `${Math.max(34, Math.min(90, Number(asset.duration || 5) * 7))}px`}} />)}<i /></div><Button size="lg" className="export-button" disabled={!ready||isBusy} onClick={()=>startJob("/api/export",{title},"export")}>{busyAction==="export"?<LoaderCircle className="h-5 w-5 animate-spin"/>:<Rocket className="h-5 w-5"/>} Xuất và mở CapCut</Button></div>
     </div>
     {preflight&&<div className="glass-panel mt-4 p-4"><div className="grid grid-cols-3 gap-3">{preflight.checks.map(c=><CheckRow key={c.id} ok={c.ok} label={c.label}/>)}</div></div>}
-    <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step3b")}><ArrowLeft className="h-4 w-4"/> Quay lại duyệt ảnh</Button><span>{ready?"Project đã đủ dữ liệu để xuất":"Còn mục chưa hoàn thành"}</span></div>
+    <div className="screen-footer"><Button variant="secondary" onClick={()=>goStep("step3b")}><ArrowLeft className="h-4 w-4"/> Quay lại duyệt ảnh</Button><span>{ready?"Project đã đủ dữ liệu để xuất":"Còn mục chưa hoàn thành"}</span></div>
   </div>
 }
 

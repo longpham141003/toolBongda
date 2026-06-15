@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import App from './App'
+
+// App now derives its screen from the URL, so it must render inside a Router.
+function renderApp() {
+  return render(<MemoryRouter><App /></MemoryRouter>)
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,7 +68,7 @@ describe('SettingsModal', () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 })
     const saved = []
     global.fetch = routedFetch(makeState(), saved)
-    const { container } = render(<App />)
+    const { container } = renderApp()
     await waitFor(() => expect(container.querySelector('.icon-action')).toBeTruthy())
 
     await openSettings(user, container)
@@ -78,7 +84,7 @@ describe('SettingsModal', () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 })
     const saved = []
     global.fetch = routedFetch(makeState(), saved)
-    const { container } = render(<App />)
+    const { container } = renderApp()
     await waitFor(() => expect(container.querySelector('.icon-action')).toBeTruthy())
 
     // Edit then cancel
