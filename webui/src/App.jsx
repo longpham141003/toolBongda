@@ -61,6 +61,8 @@ import {
   STEP_TO_SEGMENT,
   pathToSeriesSlug,
   pathToVideoSlug,
+  seriesSlugToPath,
+  videoSlugToPath,
 } from "./lib/routing"
 
 const defaultSteps = [
@@ -345,6 +347,12 @@ function App() {
   const logContainerRef = useRef(null)
   const scriptFileInputRef = useRef(null)
   const settingsSnapshot = useRef(null)
+  // Latest loadProjectIntoState (declared below) so restoration effects can call
+  // it without re-running on every render. Set just before the effect runs.
+  const loadProjectIntoStateRef = useRef(null)
+  // Path currently being opened by the restoration effect — prevents duplicate
+  // /api/projects/open calls while one is already in flight for the same target.
+  const restoringPathRef = useRef(null)
 
   // Snapshot the last-persisted settings whenever the dialog opens so that
   // closing via Huỷ / X / Esc / overlay reverts unsaved in-memory edits.
@@ -442,15 +450,54 @@ function App() {
     if (route.kind === "unknown") navigate("/", { replace: true })
   }, [route.kind, navigate])
 
-  // A step / new-video URL with no series in memory is orphaned (e.g. after
-  // stopping the project) — and reloading a deep URL is the next task, not this
-  // one — so send the user back to the dashboard. A bare /video/:id redirect is
-  // handled above and must not be treated as orphaned here.
-  // Gate on stateLoaded to avoid firing during the initial /api/state load window.
+  // ---- Deep-link restoration ----------------------------------------------
+  // Reloading a deep URL (/video/:slug/... or /du-an/:slug) must restore the
+  // right page. All restoration is gated on stateLoaded so it never fires during
+  // the initial /api/state load window (when projects/series are still empty).
+
+  // Video routes: ensure the URL's video is the open project, then stay on the
+  // requested step. NO-CANCEL INVARIANT: if the backend already has this exact
+  // video open (project.path === target) we do NOTHING — calling open would run
+  // bestEffortCancel and kill an in-flight job. Only when a DIFFERENT (or no)
+  // project is open do we loadProjectIntoState(target) (not openProject — the
+  // URL already encodes the desired step, so we must not navigate away from it).
   useEffect(() => {
-    const onStep = route.kind === "new-video" || (route.kind === "video" && route.step !== null)
-    if (stateLoaded && onStep && !activeSeries && !project) navigate("/", { replace: true })
-  }, [stateLoaded, route, activeSeries, project, navigate])
+    if (!stateLoaded || route.kind !== "video") return
+    const target = videoSlugToPath(route.videoSlug, state?.projects || [])
+    if (target == null) {
+      navigate("/", { replace: true })
+      setToast("Không tìm thấy video")
+      return
+    }
+    // Same video already open → leave the running job (and current step) alone.
+    if (project?.path === target) {
+      restoringPathRef.current = null
+      return
+    }
+    // Avoid re-triggering while an open for this same target is already in flight.
+    if (restoringPathRef.current === target) return
+    restoringPathRef.current = target
+    Promise.resolve(loadProjectIntoStateRef.current?.(target))
+      .catch((err) => setError(err?.message || String(err)))
+      .finally(() => {
+        if (restoringPathRef.current === target) restoringPathRef.current = null
+      })
+  }, [stateLoaded, route, state?.projects, project?.path, navigate])
+
+  // Series routes (/du-an/:slug and /du-an/:slug/tao-video): restore activeSeries
+  // from the slug. The virtual/ungrouped series uses slug "chua-phan-nhom".
+  useEffect(() => {
+    if (!stateLoaded) return
+    if (route.kind !== "project" && route.kind !== "new-video") return
+    const foundPath = seriesSlugToPath(route.seriesSlug, series)
+    const found = foundPath != null ? series.find((s) => s.path === foundPath) : null
+    if (found) {
+      if (activeSeries?.path !== found.path) setActiveSeries(found)
+      return
+    }
+    navigate("/", { replace: true })
+    setToast("Không tìm thấy dự án")
+  }, [stateLoaded, route, series, activeSeries?.path, navigate])
 
   useEffect(() => {
     if (!activeJob || !["queued", "running"].includes(activeJob.status)) return
@@ -725,25 +772,38 @@ function App() {
     }
   }
 
+  // Open a project into React/backend state WITHOUT navigating. Returns the
+  // opened project object so callers can decide where (if anywhere) to navigate.
+  // Switching to a different project here will bestEffortCancel the previous one;
+  // callers that must preserve a running job (same-video reload) must avoid
+  // calling this when the project is already open.
+  async function loadProjectIntoState(path) {
+    await bestEffortCancel(true)
+    const data = await api("/api/projects/open", { method: "POST", body: JSON.stringify({ path }) })
+    setState((current) => ({ ...current, project: data.project }))
+    setActiveJob(null)
+    setLogs([])
+    setScript(data.project.script)
+    setTitle(data.project.name)
+    setProjectsOpen(false)
+    setToast("Đã mở project")
+    const cat = data.project?.category
+    if (cat) {
+      const found = series.find(s => s.title === cat && !s.is_virtual)
+      if (found) setActiveSeries(found)
+      else setActiveSeries({ path: "", title: cat, is_virtual: false, description: "", settings_overrides: {}, video_count: 0, latest_updated_at: 0, videos: [] })
+    }
+    return data.project
+  }
+  // Keep the ref pointing at the latest closure so restoration effects can call
+  // loadProjectIntoState without taking it as a (per-render-unstable) dependency.
+  loadProjectIntoStateRef.current = loadProjectIntoState
+
   async function openProject(path) {
     try {
-      await bestEffortCancel(true)
-      const data = await api("/api/projects/open", { method: "POST", body: JSON.stringify({ path }) })
-      setState((current) => ({ ...current, project: data.project }))
-      setActiveJob(null)
-      setLogs([])
-      setScript(data.project.script)
-      setTitle(data.project.name)
-      setProjectsOpen(false)
-      setToast("Đã mở project")
-      const cat = data.project?.category
-      if (cat) {
-        const found = series.find(s => s.title === cat && !s.is_virtual)
-        if (found) setActiveSeries(found)
-        else setActiveSeries({ path: "", title: cat, is_virtual: false, description: "", settings_overrides: {}, video_count: 0, latest_updated_at: 0, videos: [] })
-      }
-      const slug = pathToVideoSlug(data.project.path, state?.projects || [])
-      navigate(slug ? videoStepPath(slug, nextScreenForProject(data.project)) : "/")
+      const opened = await loadProjectIntoState(path)
+      const slug = pathToVideoSlug(opened.path, state?.projects || [])
+      navigate(slug ? videoStepPath(slug, nextScreenForProject(opened)) : "/")
     } catch (err) {
       setError(err.message)
     }
