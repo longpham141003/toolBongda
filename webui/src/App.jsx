@@ -19,6 +19,7 @@ import {
   KeyRound,
   LoaderCircle,
   Mic,
+  Pause,
   Pencil,
   Play,
   Plus,
@@ -72,6 +73,88 @@ const voiceLanguageOptions = [
 
 function normalizeVoiceLanguage(language) {
   return voiceLanguageOptions.some((item) => item.value === language) ? language : "en"
+}
+
+const cp1252ReverseMap = {
+  "€": 0x80,
+  "‚": 0x82,
+  "ƒ": 0x83,
+  "„": 0x84,
+  "…": 0x85,
+  "†": 0x86,
+  "‡": 0x87,
+  "ˆ": 0x88,
+  "‰": 0x89,
+  "Š": 0x8a,
+  "‹": 0x8b,
+  "Œ": 0x8c,
+  "Ž": 0x8e,
+  "‘": 0x91,
+  "’": 0x92,
+  "“": 0x93,
+  "”": 0x94,
+  "•": 0x95,
+  "–": 0x96,
+  "—": 0x97,
+  "˜": 0x98,
+  "™": 0x99,
+  "š": 0x9a,
+  "›": 0x9b,
+  "œ": 0x9c,
+  "ž": 0x9e,
+  "Ÿ": 0x9f,
+}
+
+function mojibakeScore(value) {
+  const text = String(value || "")
+  return ["Ã", "Â", "Ä", "Æ", "á»", "áº", "â€", "�", "\u0095", "\u00a3"].reduce((total, marker) => total + text.split(marker).length - 1, 0)
+}
+
+function decodeMojibakeOnce(value) {
+  const text = String(value || "")
+  const bytes = []
+  for (const char of text) {
+    const code = char.codePointAt(0)
+    if (code <= 0xff) {
+      bytes.push(code)
+    } else if (cp1252ReverseMap[char] !== undefined) {
+      bytes.push(cp1252ReverseMap[char])
+    } else {
+      return text
+    }
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes))
+  } catch {
+    return text
+  }
+}
+
+function repairMojibakeText(value) {
+  let text = String(value || "")
+  for (let i = 0; i < 3; i += 1) {
+    const score = mojibakeScore(text)
+    if (!score) break
+    const candidate = decodeMojibakeOnce(text)
+    if (candidate === text || mojibakeScore(candidate) >= score) break
+    text = candidate
+  }
+  return text
+}
+
+function repairWorkflowPreset(preset) {
+  return {
+    ...preset,
+    name: repairMojibakeText(preset?.name || ""),
+    description: repairMojibakeText(preset?.description || ""),
+    steps: Array.isArray(preset?.steps)
+      ? preset.steps.map((step) => ({
+          ...step,
+          name: repairMojibakeText(step?.name || ""),
+          prompt: repairMojibakeText(step?.prompt || ""),
+        }))
+      : [],
+  }
 }
 
 const visualClientId = (() => {
@@ -195,6 +278,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [apiKeyNoticeDismissed, setApiKeyNoticeDismissed] = useState(false)
   const [projectsOpen, setProjectsOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const [voicePreviewBusy, setVoicePreviewBusy] = useState(false)
   const [voicePreviewUrl, setVoicePreviewUrl] = useState("")
   const [lightboxIndex, setLightboxIndex] = useState(null)
@@ -230,6 +314,10 @@ function App() {
   }, [loadState])
 
   useEffect(() => {
+    api("/api/preflight").then(setPreflight).catch(() => {})
+  }, [])
+
+  useEffect(() => {
     if (!activeJob || !["queued", "running"].includes(activeJob.status)) return
     const timer = setInterval(async () => {
       try {
@@ -246,6 +334,8 @@ function App() {
           await loadState(job.name === "AI Workflow")
           if (job.name === "B1 Kokoro Voice") {
             setToast("Đã tạo voice xong. Hãy bấm Tạo cảnh và tìm ảnh để tool tự chia cảnh và tải media.")
+          } else if (job.name === "AI Workflow") {
+            setToast("Đã tạo kịch bản. Hãy kiểm tra và chỉnh sửa nếu cần.")
           } else {
             setToast(`${job.name} đã hoàn thành`)
           }
@@ -430,7 +520,7 @@ function App() {
   }
 
   function workflowPresets() {
-    return Array.isArray(settings.workflow_presets) ? settings.workflow_presets : []
+    return Array.isArray(settings.workflow_presets) ? settings.workflow_presets.map(repairWorkflowPreset) : []
   }
 
   async function saveCurrentWorkflowAsPreset() {
@@ -447,12 +537,19 @@ function App() {
     setToast("Đã lưu flow")
   }
 
-  function applyWorkflowPreset(id) {
+  async function applyWorkflowPreset(id) {
     const preset = workflowPresets().find((item) => item.id === id)
     if (!preset) return
-    setWorkflowSteps(preset.steps?.length ? preset.steps : defaultSteps)
-    setSettings((current) => ({ ...current, active_workflow_id: id, script_workflow_steps: preset.steps || defaultSteps }))
-    setToast(`Đã chọn flow: ${preset.name}`)
+    const steps = preset.steps?.length ? preset.steps : defaultSteps
+    setWorkflowSteps(steps)
+    setSettings((current) => ({ ...current, active_workflow_id: id, script_workflow_steps: steps }))
+    try {
+      const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: { active_workflow_id: id, script_workflow_steps: steps } }) })
+      setSettings(data.settings)
+      setToast(`Đã chọn flow: ${preset.name}`)
+    } catch (err) {
+      setError(err.message)
+    }
   }
 
   async function uploadTxtFile(file) {
@@ -560,8 +657,7 @@ function App() {
     setToast("Đã chọn cấu hình dễ nhất: giọng thường ổn định, tốc độ 1.0.")
   }
 
-  async function renameProject(path, currentName) {
-    const title = window.prompt("Tên project mới", currentName || "")
+  async function renameProject(path, title) {
     if (!title || !title.trim()) return
     try {
       const data = await api("/api/projects/rename", { method: "POST", body: JSON.stringify({ path, title }) })
@@ -577,7 +673,6 @@ function App() {
   }
 
   async function deleteProject(path, name) {
-    if (!window.confirm(`Xóa project "${name}"? Thao tác này không hoàn tác.`)) return
     try {
       await api("/api/projects/delete", { method: "POST", body: JSON.stringify({ path }) })
       if (project?.path === path) {
@@ -595,6 +690,16 @@ function App() {
     try {
       const data = await api(`/api/assets/${assetId}/approve`, { method: "POST" })
       setState((current) => ({ ...current, project: data.project }))
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  async function approveAllAssets() {
+    try {
+      const data = await api("/api/assets/approve-all", { method: "POST" })
+      setState((current) => ({ ...current, project: data.project }))
+      setToast("Đã duyệt tất cả media đã tải")
     } catch (err) {
       setError(err.message)
     }
@@ -688,6 +793,24 @@ function App() {
   async function createVoiceWithQuickSettings() {
     setError("")
     try {
+      const voiceIsRunning = Boolean(activeJob && ["queued", "running"].includes(activeJob.status) && inferActionFromJob(activeJob) === "voice")
+      if (voiceIsRunning) {
+        setToast("Đang dừng bản voice cũ để tạo lại bằng giọng mới...")
+        await api("/api/jobs/cancel", { method: "POST" })
+        const deadline = Date.now() + 45000
+        while (Date.now() < deadline) {
+          const current = await api(`/api/jobs/${activeJob.id}`).catch(() => ({ job: null }))
+          if (!current.job || !["queued", "running"].includes(current.job.status)) break
+          await new Promise((resolve) => setTimeout(resolve, 300))
+        }
+        const latest = await loadState(true)
+        if (latest.active_job) throw new Error("Voice cũ vẫn đang dừng. Hãy đợi vài giây rồi bấm Tạo lại.")
+        setActiveJob(null)
+        setLogs([])
+        setBusyAction("")
+      } else if (isBusy) {
+        throw new Error("Một bước khác đang chạy. Hãy dừng hoặc chờ bước đó hoàn thành trước khi tạo lại voice.")
+      }
       setVoicePreviewUrl("")
       const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
       const voiceSettings = {
@@ -700,6 +823,11 @@ function App() {
         voice_clone_reference_path: settings.voice_clone_reference_path || "",
         voice_clone_reference_name: settings.voice_clone_reference_name || "",
         voice_clone_preview_url: settings.voice_clone_preview_url || "",
+        magicvoice_steps: Math.max(8, Math.min(16, Number(settings.magicvoice_steps || 16))),
+        magicvoice_sentence_pause: Number(settings.magicvoice_sentence_pause || 0.28),
+        magicvoice_clause_pause: Number(settings.magicvoice_clause_pause || 0.12),
+        magicvoice_paragraph_pause: Number(settings.magicvoice_paragraph_pause || 0.43),
+        magicvoice_clarity_speed: Number(settings.magicvoice_clarity_speed || 0.96),
       }
       const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: voiceSettings }) })
       setSettings(data.settings)
@@ -788,6 +916,9 @@ function App() {
   ]
   const missingGeminiApiKey = !String(settings.gemini_api_key || "").trim()
   const showApiKeyNotice = missingGeminiApiKey && !apiKeyNoticeDismissed && !settingsOpen
+  const preflightChecks = preflight?.checks || []
+  const readyChecks = preflightChecks.filter((item) => item.ok).length
+  const allReady = preflightChecks.length > 0 && readyChecks === preflightChecks.length
 
   return (
     <div className="stitch-app min-h-screen overflow-hidden bg-[#131315] text-[#e5e1e4]">
@@ -819,32 +950,42 @@ function App() {
           userProgress={userProgress}
           setSettingsOpen={setSettingsOpen}
           setProjectsOpen={setProjectsOpen}
+          setHelpOpen={setHelpOpen}
         />
       )}
       {activeScreen === "home" ? (
-        <main className="stitch-home" style={{ paddingTop: "var(--sp-8)" }}>
-          <div className="home-welcome fade-in-up">
-            <h1>Tạo video AI<br />trong 4 bước đơn giản</h1>
-            <p>Không cần biết AI hay kỹ thuật. Nhập kịch bản, chọn giọng, duyệt ảnh, xuất CapCut.</p>
-            <div className="home-cta-row">
-              <Button onClick={startNewVideo} size="lg">
-                <Plus className="h-4 w-4" /> Tạo video mới
-              </Button>
-              <Button variant="secondary" size="lg" onClick={() => setProjectsOpen(true)}>
-                <FolderOpen className="h-4 w-4" /> Mở project gần đây
-              </Button>
+        <main className="stitch-home customer-home">
+          <section className="home-hero-card fade-in-up">
+            <div className="home-welcome">
+              <span className="home-kicker">AI VIDEO PRODUCTION</span>
+              <h1>Từ kịch bản đến project CapCut hoàn chỉnh</h1>
+              <p>Người dùng chỉ cần nhập nội dung. Tool sẽ tạo giọng đọc, chia cảnh, tìm media, duyệt nhanh và xuất project mở được trong CapCut.</p>
+              <div className="home-cta-row">
+                <Button onClick={startNewVideo} size="lg">
+                  <Plus className="h-4 w-4" /> Tạo video mới
+                </Button>
+                <Button variant="secondary" size="lg" onClick={() => setProjectsOpen(true)}>
+                  <FolderOpen className="h-4 w-4" /> Làm tiếp project cũ
+                </Button>
+              </div>
             </div>
-          </div>
+            <div className="home-readiness-card simple">
+              <div className={cn("ready-orb", allReady && "ok")}><CheckCircle2 className="h-7 w-7" /></div>
+              <b>{allReady ? "Sẵn sàng tạo video" : "Cần thiết lập lần đầu"}</b>
+              <p>{allReady ? "Mọi thứ đã được chuẩn bị. Bạn có thể bắt đầu ngay." : "Bấm kiểm tra để tool hướng dẫn hoàn thành những mục còn thiếu."}</p>
+              {!allReady && <Button variant="secondary" size="sm" onClick={runPreflight}><RefreshCw className="h-4 w-4" /> Kiểm tra và hướng dẫn</Button>}
+            </div>
+          </section>
 
-          <div className="home-flow-section fade-in-up delay-100">
-            <h3>Flow phổ biến</h3>
-            <div className="home-flow-grid">
-              <FlowCard icon={Circle} title="Tin tức bóng đá" desc="Cập nhật nhanh trận đấu" />
-              <FlowCard icon={Rocket} title="Khoa học & vũ trụ" desc="Kiến thức khám phá" accent="emerald" />
-              <FlowCard icon={FileText} title="Kể chuyện" desc="Truyện, tóm tắt sách" accent="blue" />
-              <FlowCard icon={Settings} title="Tạo flow riêng" desc="Tuỳ chỉnh mọi bước" dashed onClick={() => setSettingsOpen(true)} />
-            </div>
-          </div>
+          <section className="home-process-strip fade-in-up delay-100">
+            {[
+              ["1", "Nhập nội dung", "Dán script hoặc tải TXT"],
+              ["2", "Chọn giọng", "Giọng có sẵn hoặc clone"],
+              ["3", "Duyệt media", "Tìm lại, tải lên, duyệt"],
+              ["4", "Xuất CapCut", "Mở project để chỉnh sửa"],
+            ].map(([num,title,desc]) => <div key={num}><span>{num}</span><b>{title}</b><small>{desc}</small></div>)}
+          </section>
+
         </main>
       ) : (
         <main className="stitch-workspace" style={{ marginLeft: "var(--sidebar-width)" }}>
@@ -863,17 +1004,25 @@ function App() {
             projectCategory={projectCategory}
             setProjectCategory={setProjectCategory}
             categories={state.categories || []}
+            settings={settings}
+            workflowSteps={workflowSteps}
+            workflowPresets={workflowPresets}
+            applyWorkflowPreset={applyWorkflowPreset}
+            setSettingsOpen={setSettingsOpen}
+            busyAction={busyAction}
+            activeJob={activeJob}
           />}
-          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} userProgress={userProgress} />}
+          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} isBusy={isBusy} busyAction={busyAction} activeJob={activeJob} setActiveScreen={setActiveScreen} userProgress={userProgress} />}
           {activeScreen === "step3a" && <SceneScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
-          {activeScreen === "step3b" && <MediaReviewScreen assets={assets} filteredAssets={filteredAssets} assetFilter={assetFilter} setAssetFilter={setAssetFilter} project={project} assetJobs={assetJobs} statusBadge={statusBadge} setLightboxIndex={setLightboxIndex} startJob={startJob} approveAsset={approveAsset} chooseAssetMedia={chooseAssetMedia} bulkRetryAssets={bulkRetryAssets} isBusy={isBusy} setActiveScreen={setActiveScreen} />}
+          {activeScreen === "step3b" && <MediaReviewScreen assets={assets} filteredAssets={filteredAssets} assetFilter={assetFilter} setAssetFilter={setAssetFilter} project={project} assetJobs={assetJobs} statusBadge={statusBadge} setLightboxIndex={setLightboxIndex} startJob={startJob} approveAsset={approveAsset} approveAllAssets={approveAllAssets} chooseAssetMedia={chooseAssetMedia} bulkRetryAssets={bulkRetryAssets} isBusy={isBusy} setActiveScreen={setActiveScreen} />}
           {activeScreen === "step4" && <ExportScreen project={project} assets={assets} preflight={preflight} runPreflight={runPreflight} startJob={startJob} title={title} isBusy={isBusy} busyAction={busyAction} setActiveScreen={setActiveScreen} />}
         </main>
       )}
 
       <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} setSettings={setSettings} workflowSteps={workflowSteps} setWorkflowSteps={setWorkflowSteps} workflowPresets={workflowPresets} applyWorkflowPreset={applyWorkflowPreset} updateStep={updateStep} presetName={presetName} setPresetName={setPresetName} saveCurrentWorkflowAsPreset={saveCurrentWorkflowAsPreset} saveSettings={saveSettings} runPreflight={runPreflight} preflight={preflight} />
       <ProjectsModal open={projectsOpen} onOpenChange={setProjectsOpen} state={state} project={project} openProject={openProject} renameProject={renameProject} deleteProject={deleteProject} />
-      <Lightbox open={lightboxIndex !== null} setLightboxIndex={setLightboxIndex} lightboxIndex={lightboxIndex} assets={assets} lightboxAsset={lightboxAsset} assetJobs={assetJobs} statusBadge={statusBadge} startJob={startJob} approveAsset={approveAsset} chooseAssetMedia={chooseAssetMedia} editingAssetId={editingAssetId} setEditingAssetId={setEditingAssetId} editingKeywordValue={editingKeywordValue} setEditingKeywordValue={setEditingKeywordValue} saveKeyword={saveKeyword} />
+      <HelpModal open={helpOpen} onOpenChange={setHelpOpen} />
+      <Lightbox open={lightboxIndex !== null} setLightboxIndex={setLightboxIndex} lightboxIndex={lightboxIndex} assets={assets} project={project} lightboxAsset={lightboxAsset} assetJobs={assetJobs} statusBadge={statusBadge} startJob={startJob} approveAsset={approveAsset} chooseAssetMedia={chooseAssetMedia} editingAssetId={editingAssetId} setEditingAssetId={setEditingAssetId} editingKeywordValue={editingKeywordValue} setEditingKeywordValue={setEditingKeywordValue} saveKeyword={saveKeyword} />
       <Dialog open={showApiKeyNotice} onOpenChange={(open) => !open && setApiKeyNoticeDismissed(true)}>
         <DialogContent className="api-key-dialog max-w-xl">
           <div className="api-key-dialog-glow" />
@@ -908,7 +1057,7 @@ function App() {
   )
 }
 
-function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, setSettingsOpen, setProjectsOpen }) {
+function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, setSettingsOpen, setProjectsOpen, setHelpOpen }) {
   const steps = [
     { id: "step1", label: "Nội dung", hint: "Kịch bản và AI viết" },
     { id: "step2", label: "Giọng đọc", hint: "Chọn giọng, clone voice" },
@@ -990,7 +1139,7 @@ function Sidebar({ activeScreen, setActiveScreen, completedSteps, project, setSe
         <button className="sidebar-bottom-btn" onClick={() => setSettingsOpen(true)}>
           <Settings className="h-4 w-4" /> Cài đặt
         </button>
-        <button className="sidebar-bottom-btn">
+        <button className="sidebar-bottom-btn" onClick={() => setHelpOpen(true)}>
           <Bot className="h-4 w-4" /> Trợ giúp
         </button>
       </div>
@@ -1219,45 +1368,79 @@ function normalizeUserLog(line) {
   if (!line) return ""
   const text = String(line).replace(/\s+/g, " ").trim()
   if (!text) return ""
-  if (/error|loi|lỗi|failed/i.test(text)) return text
+  if (/error|loi|lỗi|failed/i.test(text)) return "Có lỗi khi xử lý. Mở thông báo để xem hướng khắc phục."
   if (/queue|hàng đợi|dang cho|chờ/i.test(text)) return "Tác vụ đã vào hàng đợi, tool sẽ xử lý lần lượt."
   if (/download|tai|tải/i.test(text)) return "Đang tải media phù hợp cho cảnh."
-  if (/keyword/i.test(text)) return "Đang tạo keyword tìm ảnh/video."
-  if (/srt|whisper/i.test(text)) return "Đang căn timing và tạo SRT."
-  if (/capcut|timeline/i.test(text)) return "Đang dựng timeline CapCut."
+  if (/keyword/i.test(text)) return "Đang chọn từ khóa phù hợp với nội dung từng cảnh."
+  if (/srt|whisper|timing/i.test(text)) return "Đang căn lời đọc khớp với thời gian."
+  if (/kokoro|magicvoice|text to voice|tts/i.test(text)) return "Đang tạo giọng đọc từ nội dung video."
+  if (/capcut|timeline/i.test(text)) return "Đang sắp xếp giọng đọc và media vào project CapCut."
   if (text.length > 120) return `${text.slice(0, 117)}...`
   return text
 }
 
-function FlowCard({ icon: Icon, title, desc, accent = "violet", dashed, onClick }) {
+function FlowCard({ icon: Icon, title, desc, accent = "violet", dashed, onClick, cta = "Chọn" }) {
   return <button onClick={onClick} className={cn("flow-card text-left", dashed && "border-dashed")}>
-    <div className={cn("flow-icon", accent)}><Icon className="h-5 w-5" /></div><div><b>{title}</b><p>{desc}</p></div>
+    <div className={cn("flow-icon", accent)}><Icon className="h-5 w-5" /></div><div><b>{title}</b><p>{desc}</p></div><span className="flow-card-cta">{cta}<ArrowRight className="h-3.5 w-3.5" /></span>
   </button>
 }
 
-function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categories = [] }) {
+function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categories = [], settings, workflowSteps, workflowPresets, applyWorkflowPreset, setSettingsOpen, busyAction, activeJob }) {
+  const [contentMode, setContentMode] = useState("existing")
+  const presets = workflowPresets()
+  const workflowRunning = isBusy && busyAction === "workflow"
+  const workflowPercent = Math.max(0, Math.min(100, Math.round(Number(activeJob?.progress || 0))))
+  const runWorkflow = () => startJob("/api/workflow", {
+    source_input: workflowInput,
+    steps: workflowSteps,
+    settings: {
+      active_workflow_id: settings.active_workflow_id,
+      script_workflow_input: workflowInput,
+      script_workflow_steps: workflowSteps,
+    },
+  }, "workflow")
+
   return <div className="step-screen">
-    <div className="screen-heading"><h1>Bước 1 - Chuẩn bị nội dung</h1><p>Dán kịch bản cuối hoặc tải file TXT. Đây là nội dung giọng đọc sẽ đọc ở bước sau.</p></div>
+    <div className="screen-heading"><h1>Bước 1 - Chuẩn bị nội dung</h1><p>Chọn cách bắt đầu phù hợp. Kịch bản cuối luôn có thể chỉnh sửa trước khi tạo giọng đọc.</p></div>
     <div className="panel">
-      <div className="panel-title"><div><h2>Kịch bản cuối</h2><p>Nội dung giọng đọc sẽ đọc</p></div><FileText className="text-violet-300" /></div>
-      <Field label="Tên project"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ví dụ: Brazil vs Panama" /></Field>
-      <Field label="Chủ đề / thư mục lưu project">
-        <Input list="project-category-list" value={projectCategory} onChange={(e) => setProjectCategory(e.target.value)} placeholder="Ví dụ: Bóng đá, Nấu ăn, Khoa học..." />
-        <datalist id="project-category-list">{categories.map((item) => <option key={item} value={item} />)}</datalist>
-      </Field>
-      <div className="mt-4 flex-1"><Textarea className="h-full min-h-[400px]" value={script} onChange={(e) => setScript(e.target.value)} placeholder="Dán kịch bản cuối vào đây..." /></div>
-      <div className="mt-4 flex items-center gap-2">
-        <input ref={scriptFileInputRef} type="file" accept=".txt,text/plain" className="hidden" onChange={(e) => uploadTxtFile(e.target.files?.[0])} />
-        <Button variant="secondary" onClick={() => scriptFileInputRef.current?.click()}><Upload className="h-4 w-4" /> Tải file TXT</Button>
-        <span className="ml-auto text-xs text-slate-500">{script.trim() ? script.trim().split(/\s+/).length : 0} từ</span>
+      <div className="script-project-fields">
+        <Field label="Tên video"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ví dụ: Brazil vs Panama" /></Field>
+        <Field label="Thư mục / chủ đề lưu video">
+          <Input list="project-category-list" value={projectCategory} onChange={(e) => setProjectCategory(e.target.value)} placeholder="Ví dụ: Bóng đá, Nấu ăn, Khoa học..." />
+          <datalist id="project-category-list">{categories.map((item) => <option key={item} value={item} />)}</datalist>
+        </Field>
       </div>
-      <div className="ai-row-divider">Hoặc nhờ AI viết</div>
-      <div className="flex gap-2">
-        <Input className="flex-1" value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} placeholder="Chủ đề, ý tưởng, tài liệu thô..." />
-        <Button onClick={() => startJob("/api/run-workflow", { input: workflowInput }, "workflow")} disabled={!workflowInput.trim() || isBusy}><Sparkles className="h-4 w-4" /> Chạy AI</Button>
+
+      <div className="script-mode-switch">
+        <button className={cn(contentMode === "existing" && "active")} onClick={()=>setContentMode("existing")}><FileText/><span><b>Tôi đã có kịch bản</b><small>Dán nội dung hoặc tải file TXT</small></span></button>
+        <button className={cn(contentMode === "idea" && "active")} onClick={()=>setContentMode("idea")}><Sparkles/><span><b>Tạo kịch bản từ ý tưởng</b><small>Nhập tóm tắt, AI chạy theo flow đã lưu</small></span></button>
       </div>
+
+      {contentMode === "existing" ? <div className="script-mode-content">
+        <div className="panel-title"><div><h2>Kịch bản dùng để đọc</h2><p>Dán nguyên văn nội dung bạn muốn xuất hiện trong giọng đọc.</p></div><FileText className="text-violet-300" /></div>
+        <Textarea className="script-editor" value={script} onChange={(e) => setScript(e.target.value)} placeholder="Dán kịch bản cuối vào đây..." />
+        <div className="script-editor-actions">
+          <input ref={scriptFileInputRef} type="file" accept=".txt,text/plain" className="hidden" onChange={(e) => uploadTxtFile(e.target.files?.[0])} />
+          <Button variant="secondary" onClick={() => scriptFileInputRef.current?.click()}><Upload className="h-4 w-4" /> Tải file TXT</Button>
+          <span>{script.trim() ? script.trim().split(/\s+/).length : 0} từ</span>
+        </div>
+      </div> : <div className="script-mode-content workflow-create">
+        <div className="workflow-create-head">
+          <div><h2>Tạo kịch bản bằng flow</h2><p>AI sẽ chạy lần lượt các bước bạn đã lưu trong Cài đặt.</p></div>
+        </div>
+        <div className="workflow-flow-picker">
+          <Field label="Chọn flow tạo kịch bản"><Select value={settings.active_workflow_id || presets[0]?.id || ""} onValueChange={applyWorkflowPreset} options={presets.map((preset) => ({ value: preset.id, label: preset.name }))} /></Field>
+          <Button variant="secondary" onClick={()=>setSettingsOpen(true)}><Settings className="h-4 w-4"/> Cấu hình flow</Button>
+        </div>
+        <Field label="Tóm tắt chủ đề muốn làm">
+          <Textarea className="workflow-topic-input" value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} placeholder="Ví dụ: Video 2 phút phân tích trận Brazil sáng nay, tập trung vào diễn biến chính, cầu thủ nổi bật và kết quả cuối cùng. Giọng tin tức, dễ hiểu." />
+        </Field>
+        {workflowRunning && <div className="workflow-live-progress"><div><b>{activeJob?.current_label || "Đang chuẩn bị..."}</b><span>{workflowPercent}%</span></div><i><em style={{width:`${workflowPercent}%`}} /></i></div>}
+        <Button className="workflow-generate-button" onClick={runWorkflow} disabled={!workflowInput.trim() || isBusy}>{workflowRunning ? <LoaderCircle className="h-4 w-4 animate-spin"/> : <Sparkles className="h-4 w-4"/>}{workflowRunning ? "Đang tạo kịch bản..." : "Tạo kịch bản"}</Button>
+        {script.trim() && <div className="workflow-result"><div><b>Kịch bản đã tạo</b><span>Có thể chỉnh trực tiếp trước khi tiếp tục.</span></div><Textarea className="script-editor generated" value={script} onChange={(e)=>setScript(e.target.value)} /></div>}
+      </div>}
     </div>
-    <div className="screen-footer"><span>Việc cần làm: dán kịch bản final, sau đó bấm lưu để sang bước 2.</span><Button onClick={saveScriptStep} disabled={!script.trim() || isBusy}>Lưu nội dung và sang Bước 2 <ArrowRight className="h-4 w-4" /></Button></div>
+    <div className="screen-footer"><span>{script.trim() ? "Nội dung đã có. Bấm nút bên phải để lưu và chọn giọng." : "Hãy nhập nội dung hoặc nhờ AI viết kịch bản trước."}</span><Button onClick={saveScriptStep} disabled={!script.trim() || isBusy}>Lưu và chọn giọng đọc <ArrowRight className="h-4 w-4" /></Button></div>
   </div>
 }
 
@@ -1287,7 +1470,7 @@ function WorkflowPanel({ workflowInput, setWorkflowInput, workflowSteps, setting
   </div>
 }
 
-function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, saveCloneVoice, selectSavedCloneVoice, isBusy, busyAction, setActiveScreen, userProgress }) {
+function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, saveCloneVoice, selectSavedCloneVoice, isBusy, busyAction, activeJob, setActiveScreen, userProgress }) {
   const [cloneName, setCloneName] = useState("")
   const [cloneLanguage, setCloneLanguage] = useState("vi")
   const [pendingCloneFile, setPendingCloneFile] = useState(null)
@@ -1310,6 +1493,7 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
   }, [cloneProfiles, cloneLanguage])
   const filteredCloneProfiles = cloneProfiles.filter((item) => (item.language || "vi") === cloneLanguage)
   const cloneProfileOptions = filteredCloneProfiles.map((item) => ({ value: item.id, label: item.name || item.file_name || "Giọng clone" }))
+  const voiceRunning = Boolean(isBusy && (busyAction === "voice" || inferActionFromJob(activeJob) === "voice"))
   const changeVoiceLanguage = (language) => setSettings({
     ...settings,
     text_to_voice_language: language,
@@ -1426,17 +1610,14 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
         <div className="panel-title mt-4"><div><h3>Cài đặt giọng đọc</h3><p>Chỉnh tốc độ, mức clone và nghe thử kết quả.</p></div><Settings className="text-emerald-300" /></div>
         <RangeField label="Tốc độ đọc" value={settings.text_to_voice_speed ?? 1} min={.5} max={2} step={.05} onChange={(v)=>setSettings({...settings,text_to_voice_speed:v})} />
         <div className="setting-help">0.9-1.0 là tự nhiên. Tăng lên nếu muốn đọc nhanh, giảm xuống nếu muốn chậm và rõ hơn.</div>
-        <RangeField label="Mức xử lý giọng clone" value={settings.magicvoice_steps ?? 16} min={8} max={32} step={1} onChange={(v)=>setSettings({...settings, magicvoice_steps:v})} />
-        <div className="setting-help">16 là cân bằng. Số cao hơn có thể giống giọng mẫu hơn nhưng tạo voice lâu hơn.</div>
-        <div className="voice-next-help">
-          <b>Sau khi bấm “Tạo giọng đọc”</b>
-          <span>Tool sẽ tạo WAV + timing cho script hiện tại. Clone voice chỉ là chọn chất giọng, không thay thế bước tạo voice video.</span>
-        </div>
+        {voiceMode === "clone" && <><RangeField label="Mức xử lý giọng clone" value={Math.max(8, Math.min(16, settings.magicvoice_steps ?? 16))} min={8} max={16} step={1} onChange={(v)=>setSettings({...settings, magicvoice_steps:v})} />
+        <div className="setting-help">8 tạo nhanh hơn, 16 ưu tiên chất lượng. Tool giới hạn tối đa 16 để tránh lỗi và quá tải bộ nhớ.</div></>}
       </div>
     </div>
-    <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step1")}><ArrowLeft className="h-4 w-4" /> Quay lại Bước 1</Button><span>{project?.voice_path ? "Đã có voice video. Có thể tạo cảnh và tìm ảnh." : "Chọn giọng xong hãy bấm Tạo giọng đọc."}</span>{project?.voice_path
-      ? <Button onClick={()=>{setActiveScreen("step3a");startJob("/api/analyze-search",undefined,"analyze-search")}} disabled={isBusy}>{busyAction==="analyze-search"?<LoaderCircle className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} Tạo cảnh và tìm ảnh</Button>
-      : <Button onClick={createVoiceWithQuickSettings} disabled={isBusy}>{busyAction==="voice"?<LoaderCircle className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} Tạo giọng đọc</Button>}</div>
+    <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step1")}><ArrowLeft className="h-4 w-4" /> Quay lại Bước 1</Button><span>{voiceRunning ? "Đổi giọng hoặc tốc độ rồi bấm Tạo lại. Tool sẽ dừng bản đang chạy." : project?.voice_path ? "Đã có voice. Bạn có thể tạo lại hoặc tiếp tục phân cảnh." : "Chọn giọng xong hãy bấm Tạo giọng đọc."}</span><div className="voice-footer-actions">
+      <Button variant={project?.voice_path || voiceRunning ? "secondary" : "default"} onClick={createVoiceWithQuickSettings} disabled={isBusy && !voiceRunning}>{voiceRunning?<RefreshCw className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} {voiceRunning ? "Dừng và tạo lại" : project?.voice_path ? "Tạo lại giọng đọc" : "Tạo giọng đọc"}</Button>
+      {project?.voice_path && <Button onClick={()=>{setActiveScreen("step3a");startJob("/api/analyze-search",undefined,"analyze-search")}} disabled={isBusy}>{busyAction==="analyze-search"?<LoaderCircle className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} Tạo cảnh và tìm ảnh</Button>}
+    </div></div>
   </div>
 }
 
@@ -1457,23 +1638,23 @@ function looksLikeEnglish(text = "") {
 function SceneScreen({ assets, project, startJob, isBusy, busyAction, setActiveScreen }) {
   const loading = busyAction === "analyze-search" && isBusy
   return <div className="step-screen">
-    <div className="screen-heading"><h1>Bước 3A - Tạo cảnh tự động</h1><p>Tool nghe lại voice, chia nội dung thành từng cảnh và chuẩn bị từ khóa tìm ảnh.</p></div>
+    <div className="screen-heading"><h1>Bước 3A - Chuẩn bị cảnh</h1><p>Tool tự đọc mốc thời gian, gom câu cùng ý và chuẩn bị ảnh/video cho từng cảnh.</p></div>
     <div className={cn("step-guidance", project?.has_voice && "ready")}>
       <div>
-        <b>{project?.has_voice ? "Đã có giọng đọc. Có thể tạo cảnh." : "Chưa có giọng đọc."}</b>
-        <span>{loading ? "Đang đọc SRT, hiểu toàn bộ script, chia cảnh và tìm media. Khi đủ dữ liệu tool sẽ tự chuyển sang màn duyệt ảnh." : project?.has_voice ? "Cảnh và media sẽ được tạo từ nút ở Bước 2. Màn này dùng để xem lại kết quả phân cảnh." : "Hãy quay lại Bước 2 để tạo giọng đọc trước. Bước này cần file voice để biết thời gian từng cảnh."}</span>
+        <b>{project?.has_voice ? "Tool đang chuẩn bị dữ liệu cho bước duyệt ảnh." : "Cần tạo giọng đọc trước."}</b>
+        <span>{loading ? "Đang chia nội dung thành cảnh và tìm media phù hợp. Xong bước này tool sẽ chuyển sang màn duyệt ảnh." : project?.has_voice ? "Nếu đã có dữ liệu, bạn có thể xem lại từng cảnh ở bên dưới hoặc sang bước duyệt ảnh." : "Quay lại Bước 2, bấm tạo giọng đọc. Tool cần voice để biết mỗi câu nằm ở giây nào."}</span>
       </div>
       {!project?.has_voice && <Button variant="secondary" onClick={()=>setActiveScreen("step2")}><ArrowLeft className="h-4 w-4" /> Về Bước 2</Button>}
     </div>
     <div className="scene-layout">
-      <div className="glass-panel screen-panel"><div className="panel-title"><div><h2>Lời đọc đã căn thời gian</h2><p>{project?.has_voice ? "Đã có giọng đọc và mốc thời gian" : "Chưa tạo giọng đọc"}</p></div><FileText className="text-violet-300" /></div><div className="srt-preview">{assets.length ? assets.map((a,i)=><div key={a.asset_id}><span>{i+1}</span><b>{formatTime(a.start)} → {formatTime(a.end)}</b><p>{a.sentence_text}</p></div>) : <EmptyState text={loading ? "Đang căn thời gian và gom câu thành cảnh..." : "Chưa có dữ liệu. Hãy hoàn thành Bước 2."} />}</div></div>
-      <div className="glass-panel screen-panel"><div className="panel-title"><div><h2>Các cảnh đã chia</h2><p>Không cắt giữa một ý đang nói</p></div><Aperture className="text-emerald-300" /></div><div className="scene-list">{assets.length ? assets.map((a,i)=><div className="scene-row" key={a.asset_id}><span>{String(i+1).padStart(2,"0")}</span><div><b>{formatTime(a.start)} - {formatTime(a.end)} · {Number(a.duration||0).toFixed(1)}s</b><p>{a.sentence_text}</p><small>{a.scene_break_reason || "Chuyển ý hoặc chủ thể"}</small></div></div>) : <EmptyState text={loading ? "Đang tạo phân cảnh và tìm ảnh/video..." : "Chưa có cảnh."} />}</div></div>
+      <div className="glass-panel screen-panel"><div className="panel-title"><div><h2>Lời đọc theo thời gian</h2><p>{project?.has_voice ? "Mỗi dòng là một đoạn voice đã được căn mốc" : "Chưa tạo giọng đọc"}</p></div><FileText className="text-violet-300" /></div><div className="srt-preview">{assets.length ? assets.map((a,i)=><div key={a.asset_id}><span>{i+1}</span><b>{formatTime(a.start)} → {formatTime(a.end)}</b><p>{a.sentence_text}</p></div>) : <EmptyState text={loading ? "Đang căn thời gian và gom câu thành cảnh..." : "Chưa có dữ liệu. Hãy hoàn thành Bước 2."} />}</div></div>
+      <div className="glass-panel screen-panel"><div className="panel-title"><div><h2>Cảnh video</h2><p>Mỗi cảnh sẽ có ảnh/video riêng ở bước sau</p></div><Aperture className="text-emerald-300" /></div><div className="scene-list">{assets.length ? assets.map((a,i)=><div className="scene-row" key={a.asset_id}><span>{String(i+1).padStart(2,"0")}</span><div><b>{formatTime(a.start)} - {formatTime(a.end)} · {Number(a.duration||0).toFixed(1)}s</b><p>{a.sentence_text}</p><small>{a.scene_break_reason || "Chuyển chủ thể, sự kiện hoặc ý chính"}</small></div></div>) : <EmptyState text={loading ? "Đang tạo phân cảnh và tìm ảnh/video..." : "Chưa có cảnh."} />}</div></div>
     </div>
     <div className="screen-footer"><Button variant="secondary" onClick={()=>setActiveScreen("step2")}><ArrowLeft className="h-4 w-4"/> Quay lại</Button><span>{loading ? "Đang xử lý, vui lòng chờ..." : assets.length ? `${assets.length} cảnh đã sẵn sàng` : "Chưa có dữ liệu cảnh"}</span><Button variant="secondary" disabled={!assets.length} onClick={()=>setActiveScreen("step3b")}>Xem ảnh từng cảnh <ArrowRight className="h-4 w-4"/></Button></div>
   </div>
 }
 
-function MediaReviewScreen({ assets, filteredAssets, assetFilter, setAssetFilter, project, assetJobs, statusBadge, setLightboxIndex, startJob, approveAsset, chooseAssetMedia, bulkRetryAssets, setActiveScreen }) {
+function MediaReviewScreen({ assets, filteredAssets, assetFilter, setAssetFilter, project, assetJobs, statusBadge, setLightboxIndex, startJob, approveAsset, approveAllAssets, chooseAssetMedia, bulkRetryAssets, setActiveScreen }) {
   const pageSize = 15
   const [page, setPage] = useState(1)
   const headerRef = useRef(null)
@@ -1529,23 +1710,18 @@ function MediaReviewScreen({ assets, filteredAssets, assetFilter, setAssetFilter
       <div><AlertTriangle className="h-4 w-4" /><b>{counts.error + counts.missing}</b><span>cần xử lý</span></div>
     </div>
     <div className="media-filter-row">
-      <div className="media-filter-tabs">
-        {filterOptions.map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            className={cn("media-filter-tab", assetFilter === value && "active")}
-            onClick={() => changeFilter(value)}
-          >
-            {label}
-            <span className="tab-count">{counts[value]}</span>
-          </button>
-        ))}
+      <div className="media-filter-control">
+        <span>Hiển thị</span>
+        <Select
+          value={assetFilter}
+          onValueChange={changeFilter}
+          options={filterOptions.map(([value,label])=>({value,label:`${label} (${counts[value]})`}))}
+        />
       </div>
       <div className="media-filter-actions">
         <small>{filteredAssets.length} cảnh · trang {currentPage}/{pageCount}</small>
         <Button size="sm" variant="secondary" disabled={!retryableAssets.length} onClick={()=>bulkRetryAssets(retryableAssets.map(a=>a.asset_id))}><RefreshCw className="h-4 w-4" /> Tìm lại ảnh lỗi</Button>
-        <Button size="sm" variant="secondary" disabled={!assets.some(a=>a.local_path && a.status !== "approved")} onClick={()=>assets.filter(a=>a.local_path && a.status !== "approved").forEach(a=>approveAsset(a.asset_id))}><Check className="h-4 w-4" /> Duyệt ảnh đã tải</Button>
+        <Button size="sm" variant="secondary" disabled={!assets.some(a=>a.local_path && a.status !== "approved")} onClick={approveAllAssets}><Check className="h-4 w-4" /> Duyệt tất cả</Button>
       </div>
     </div>
     <div className="media-grid">{visibleAssets.length ? visibleAssets.map((asset)=>{
@@ -1569,7 +1745,7 @@ function MediaReviewScreen({ assets, filteredAssets, assetFilter, setAssetFilter
             {job ? "Đang xử lý cảnh này." : categoryOf(asset)==="error" ? (asset.error || "Tìm media bị lỗi.") : categoryOf(asset)==="missing" ? "Cảnh chưa có media." : categoryOf(asset)==="approved" ? "Media đã được duyệt." : "Media đang chờ bạn duyệt."}
           </div>
         </div>
-      </article>}) : <div className="media-empty"><EmptyState text={assets.length ? "Không có cảnh nào theo bộ lọc này." : "Chưa có cảnh. Hãy bấm Tạo cảnh và tìm ảnh ở Bước 3A."} />{!assets.length && <Button variant="secondary" onClick={()=>setActiveScreen("step3a")}>Về Bước 3A</Button>}</div>}</div>
+      </article>}) : <div className="media-empty"><EmptyState text={assets.length ? "Không có cảnh nào theo bộ lọc này." : "Chưa có cảnh. Hãy quay lại Bước 2 và bấm Tạo cảnh và tìm ảnh."} />{!assets.length && <Button variant="secondary" onClick={()=>setActiveScreen("step2")}>Về Bước 2</Button>}</div>}</div>
     {pageCount > 1 && <nav className="media-pagination" aria-label="Phân trang cảnh">
       <Button size="sm" variant="secondary" disabled={currentPage===1} onClick={()=>{setPage(value=>Math.max(1,value-1));headerRef.current?.scrollIntoView({block:"start"})}}><ArrowLeft className="h-4 w-4"/> Trang trước</Button>
       <div>{Array.from({length:pageCount},(_,index)=>index+1).map(number=><button key={number} className={number===currentPage?"active":""} onClick={()=>{setPage(number);headerRef.current?.scrollIntoView({block:"start"})}}>{number}</button>)}</div>
@@ -1613,25 +1789,130 @@ function SettingsModal({ open, onOpenChange, settings, setSettings, workflowStep
       <TabsContent value="flow"><SettingSection title="Flow tạo kịch bản" icon={Bot}><Field label="Flow đang dùng"><Select value={settings.active_workflow_id||presets[0]?.id||""} onValueChange={applyWorkflowPreset} options={presets.map(x=>({value:x.id,label:x.name}))}/></Field>{workflowSteps.map((step,i)=><div className="workflow-edit" key={i}><Switch checked={step.enabled} onCheckedChange={v=>updateStep(i,{enabled:v})}/><Input value={step.name} onChange={e=>updateStep(i,{name:e.target.value})}/><Textarea value={step.prompt} onChange={e=>updateStep(i,{prompt:e.target.value})}/></div>)}<Button variant="secondary" onClick={()=>setWorkflowSteps(x=>[...x,{enabled:true,name:`Bước ${x.length+1}`,prompt:""}])}><Plus className="h-4 w-4"/> Thêm bước</Button><div className="flex gap-2"><Input value={presetName} onChange={e=>setPresetName(e.target.value)} placeholder="Tên flow mới"/><Button onClick={saveCurrentWorkflowAsPreset}>Lưu flow</Button></div></SettingSection></TabsContent>
       <TabsContent value="ai"><SettingSection title="AI dùng để hiểu nội dung và kiểm ảnh" icon={Bot}><Field label="Nhà cung cấp"><Select value={settings.keyword_ai_provider||"auto"} onValueChange={v=>setSettings({...settings,keyword_ai_provider:v})} options={[{value:"auto",label:"Tự động"},{value:"gemini",label:"Gemini"},{value:"openai",label:"OpenAI"}]}/></Field><Field label="Gemini API key"><Input type="password" value={settings.gemini_api_key||""} onChange={e=>setSettings({...settings,gemini_api_key:e.target.value})}/></Field><div className="setting-note">Nếu không biết chọn gì, để Tự động và chỉ nhập Gemini API key.</div></SettingSection></TabsContent>
       <TabsContent value="advanced"><div className="settings-grid">
-        <SettingSection title="Cảnh và chất lượng ảnh" icon={Aperture}><Switch checked={!!settings.whisper_timing_enabled} onCheckedChange={v=>setSettings({...settings,whisper_timing_enabled:v})} label="Căn thời gian bằng Whisper"/><Switch checked={!!settings.scene_ai_enabled} onCheckedChange={v=>setSettings({...settings,scene_ai_enabled:v})} label="AI gom câu thành cảnh"/><div className="grid grid-cols-2 gap-4"><Field label="Cảnh tối thiểu"><Input type="number" value={settings.scene_min_seconds||3} onChange={e=>setSettings({...settings,scene_min_seconds:Number(e.target.value)})}/></Field><Field label="Cảnh mục tiêu"><Input type="number" value={settings.scene_target_max_seconds||10} onChange={e=>setSettings({...settings,scene_target_max_seconds:Number(e.target.value)})}/></Field><Field label="Output width"><Input type="number" value={settings.image_target_width||1920} onChange={e=>setSettings({...settings,image_target_width:Number(e.target.value)})}/></Field><Field label="Output height"><Input type="number" value={settings.image_target_height||1080} onChange={e=>setSettings({...settings,image_target_height:Number(e.target.value)})}/></Field></div></SettingSection>
+        <SettingSection title="Cảnh và chất lượng hình ảnh" icon={Aperture}><Switch checked={!!settings.whisper_timing_enabled} onCheckedChange={v=>setSettings({...settings,whisper_timing_enabled:v})} label="Căn lời đọc chính xác theo thời gian"/><Switch checked={!!settings.scene_ai_enabled} onCheckedChange={v=>setSettings({...settings,scene_ai_enabled:v})} label="Tự gom các câu cùng ý thành một cảnh"/><div className="grid grid-cols-2 gap-4"><Field label="Cảnh ngắn nhất (giây)"><Input type="number" value={settings.scene_min_seconds||3} onChange={e=>setSettings({...settings,scene_min_seconds:Number(e.target.value)})}/></Field><Field label="Thời lượng cảnh mong muốn (giây)"><Input type="number" value={settings.scene_target_max_seconds||10} onChange={e=>setSettings({...settings,scene_target_max_seconds:Number(e.target.value)})}/></Field><Field label="Chiều rộng video"><Input type="number" value={settings.image_target_width||1920} onChange={e=>setSettings({...settings,image_target_width:Number(e.target.value)})}/></Field><Field label="Chiều cao video"><Input type="number" value={settings.image_target_height||1080} onChange={e=>setSettings({...settings,image_target_height:Number(e.target.value)})}/></Field></div><div className="setting-note">Khuyến nghị giữ 1920 × 1080 cho video ngang. Chỉ thay đổi khi bạn cần kích thước xuất khác.</div></SettingSection>
       </div></TabsContent>
       <TabsContent value="validate"><SettingSection title="Kiểm tra cấu hình máy" icon={CheckCircle2}><Button onClick={runPreflight}>Chạy kiểm tra</Button><div className="grid grid-cols-2 gap-3">{(preflight?.checks||[]).map(x=><CheckRow key={x.id} ok={x.ok} label={x.label}/>)}</div></SettingSection></TabsContent>
     </Tabs><div className="mt-5 flex justify-end gap-2"><Button variant="ghost" onClick={()=>onOpenChange(false)}>Huỷ</Button><Button onClick={()=>saveSettings(true)}>Lưu cài đặt</Button></div></DialogContent></Dialog>
 }
 
 function ProjectsModal({ open, onOpenChange, state, project, openProject, renameProject, deleteProject }) {
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-w-3xl"><DialogTitle>Project gần đây</DialogTitle><DialogDescription>Chọn project muốn làm tiếp, đổi tên hoặc xóa project không cần nữa.</DialogDescription><div className="project-list">{state.projects?.map(item=>{
+  const [editingProject, setEditingProject] = useState(null)
+  const [deletingProject, setDeletingProject] = useState(null)
+  const [editingName, setEditingName] = useState("")
+  const beginRename = (item) => {
+    setEditingProject(item)
+    setEditingName(item.name || "")
+  }
+  const confirmRename = async () => {
+    if (!editingProject || !editingName.trim()) return
+    await renameProject(editingProject.path, editingName.trim())
+    setEditingProject(null)
+  }
+  const confirmDelete = async () => {
+    if (!deletingProject) return
+    await deleteProject(deletingProject.path, deletingProject.name)
+    setDeletingProject(null)
+  }
+  return <>
+    <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-w-3xl"><DialogTitle>Project gần đây</DialogTitle><DialogDescription>Chọn project muốn làm tiếp, đổi tên hoặc xóa project không cần nữa.</DialogDescription><div className="project-list">{state.projects?.map(item=>{
     const isOpen = project?.path===item.path
     return <div className={cn("project-row managed", isOpen && "active")} key={item.path}>
       <button onClick={()=>openProject(item.path)}><FolderOpen/><div><b>{item.name}</b><small>{item.category ? `${item.category} · ` : ""}{formatProjectDate(item.updated_at)} · {shortPath(item.path)}</small></div>{isOpen&&<Badge>Đang mở</Badge>}</button>
       <div className="project-row-actions">
-        <Button size="sm" variant="ghost" onClick={()=>renameProject(item.path, item.name)}><Pencil className="h-3.5 w-3.5"/> Sửa</Button>
-        <Button size="sm" variant="ghost" onClick={()=>deleteProject(item.path, item.name)}><Trash2 className="h-3.5 w-3.5"/> Xóa</Button>
+        <Button size="sm" variant="ghost" onClick={()=>beginRename(item)}><Pencil className="h-3.5 w-3.5"/> Đổi tên</Button>
+        <Button size="sm" variant="ghost" onClick={()=>setDeletingProject(item)}><Trash2 className="h-3.5 w-3.5"/> Xóa</Button>
       </div>
     </div>
   })}</div></DialogContent></Dialog>
+    <Dialog open={!!editingProject} onOpenChange={(value)=>!value&&setEditingProject(null)}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>Đổi tên project</DialogTitle>
+        <DialogDescription>Tên mới sẽ được dùng ở trang chủ và danh sách project.</DialogDescription>
+        <Field label="Tên project"><Input autoFocus value={editingName} onChange={(event)=>setEditingName(event.target.value)} onKeyDown={(event)=>event.key==="Enter"&&confirmRename()} maxLength={120} /></Field>
+        <div className="dialog-actions"><Button variant="secondary" onClick={()=>setEditingProject(null)}>Hủy</Button><Button disabled={!editingName.trim()} onClick={confirmRename}>Lưu tên mới</Button></div>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={!!deletingProject} onOpenChange={(value)=>!value&&setDeletingProject(null)}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>Xóa project này?</DialogTitle>
+        <DialogDescription>Project “{deletingProject?.name}” và dữ liệu bên trong sẽ bị xóa. Thao tác này không thể hoàn tác.</DialogDescription>
+        <div className="dialog-actions"><Button variant="secondary" onClick={()=>setDeletingProject(null)}>Giữ lại</Button><Button variant="danger" onClick={confirmDelete}><Trash2 className="h-4 w-4"/> Xóa project</Button></div>
+      </DialogContent>
+    </Dialog>
+  </>
 }
-function Lightbox({ open, setLightboxIndex, lightboxIndex, assets, lightboxAsset, assetJobs, statusBadge, startJob, approveAsset, chooseAssetMedia, editingAssetId, setEditingAssetId, editingKeywordValue, setEditingKeywordValue, saveKeyword }) {
+
+function HelpModal({ open, onOpenChange }) {
+  const steps = [
+    ["1", "Nhập nội dung", "Dán kịch bản hoặc tải file TXT, sau đó lưu để sang bước chọn giọng."],
+    ["2", "Tạo giọng đọc", "Chọn giọng có sẵn hoặc giọng đã clone, nghe thử rồi bấm Tạo giọng đọc."],
+    ["3", "Duyệt hình ảnh", "Cảnh chưa phù hợp có thể Tìm lại hoặc Tải lên media từ máy."],
+    ["4", "Xuất CapCut", "Duyệt đủ các cảnh, kiểm tra cấu hình rồi bấm Xuất và mở CapCut."],
+  ]
+  return <Dialog open={open} onOpenChange={onOpenChange}>
+    <DialogContent className="max-w-2xl">
+      <DialogTitle>Cách tạo một video</DialogTitle>
+      <DialogDescription>Làm lần lượt bốn bước dưới đây. Tool sẽ báo rõ khi bước hiện tại hoàn thành.</DialogDescription>
+      <div className="help-step-list">
+        {steps.map(([number, title, description]) => <div key={number}><span>{number}</span><div><b>{title}</b><p>{description}</p></div></div>)}
+      </div>
+      <div className="setting-note">Khi gặp lỗi, đọc thông báo ở góc phải. Nếu một ảnh chưa đúng, chỉ cần bấm Tìm lại tại cảnh đó.</div>
+      <div className="dialog-actions"><Button onClick={()=>onOpenChange(false)}>Đã hiểu</Button></div>
+    </DialogContent>
+  </Dialog>
+}
+
+function SceneAudioClip({ src, start, end }) {
+  const audioRef = useRef(null)
+  const [playing, setPlaying] = useState(false)
+  const [position, setPosition] = useState(0)
+  const duration = Math.max(0.1, Number(end || 0) - Number(start || 0))
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.pause()
+    setPlaying(false)
+    setPosition(0)
+  }, [src, start, end])
+  const toggle = async () => {
+    const audio = audioRef.current
+    if (!audio) return
+    if (!audio.paused) {
+      audio.pause()
+      setPlaying(false)
+      return
+    }
+    if (audio.currentTime < Number(start || 0) || audio.currentTime >= Number(end || 0)) {
+      audio.currentTime = Number(start || 0)
+    }
+    try {
+      await audio.play()
+      setPlaying(true)
+    } catch {
+      setPlaying(false)
+    }
+  }
+  const update = () => {
+    const audio = audioRef.current
+    if (!audio) return
+    const elapsed = Math.max(0, audio.currentTime - Number(start || 0))
+    setPosition(Math.min(duration, elapsed))
+    if (audio.currentTime >= Number(end || 0)) {
+      audio.pause()
+      audio.currentTime = Number(start || 0)
+      setPlaying(false)
+      setPosition(0)
+    }
+  }
+  if (!src) return null
+  return <div className="scene-audio-clip">
+    <audio ref={audioRef} src={src} preload="metadata" onTimeUpdate={update} onPause={()=>setPlaying(false)} />
+    <Button size="sm" variant="secondary" onClick={toggle}>{playing?<Pause/>:<Play/>}{playing?"Dừng":"Nghe đoạn voice"}</Button>
+    <div><i><em style={{width:`${Math.min(100,(position/duration)*100)}%`}} /></i><span>{formatTime(position)} / {formatTime(duration)}</span></div>
+  </div>
+}
+
+function Lightbox({ open, setLightboxIndex, lightboxIndex, assets, project, lightboxAsset, assetJobs, statusBadge, startJob, approveAsset, chooseAssetMedia, editingAssetId, setEditingAssetId, editingKeywordValue, setEditingKeywordValue, saveKeyword }) {
   if (!lightboxAsset) return null
   const job = assetJobs.get(lightboxAsset.asset_id)
   const badge = statusBadge(lightboxAsset.status)
@@ -1652,6 +1933,7 @@ function Lightbox({ open, setLightboxIndex, lightboxIndex, assets, lightboxAsset
             {job&&<div className="media-busy"><LoaderCircle className="h-8 w-8 animate-spin"/>{job.status==="queued"?`Đang chờ #${job.queue_position}`:"Đang tìm media phù hợp..."}</div>}
           </div>
           <div className="scene-preview-timeline"><span>{formatTime(lightboxAsset.start)}</span><i/><span>{formatTime(lightboxAsset.end)}</span></div>
+          <SceneAudioClip src={mediaUrl(project?.voice_path)} start={lightboxAsset.start} end={lightboxAsset.end} />
           <div className="scene-dialog-script"><span>Lời đọc trong cảnh</span><p>{lightboxAsset.sentence_text || "Chưa có nội dung lời đọc."}</p></div>
         </div>
         <aside className="scene-detail-sidebar">

@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import APP_DIR, load_settings, save_settings
-from .script_workflow import default_workflow_steps, normalize_workflow_steps, run_script_workflow
+from .script_workflow import default_workflow_steps, normalize_workflow_steps, repair_mojibake, run_script_workflow
 from .text_to_voice_queue import (
     TextToVoiceRunner,
     kokoro_custom_voice_dir,
@@ -105,7 +105,7 @@ def _normalize_workflow_presets(values: Any) -> list[dict[str, Any]]:
     for raw in values:
         if not isinstance(raw, dict):
             continue
-        name = str(raw.get("name") or "").strip()[:80]
+        name = repair_mojibake(raw.get("name")).strip()[:80]
         if not name:
             continue
         preset_id = str(raw.get("id") or "").strip() or uuid.uuid4().hex[:10]
@@ -113,7 +113,7 @@ def _normalize_workflow_presets(values: Any) -> list[dict[str, Any]]:
             {
                 "id": preset_id,
                 "name": name,
-                "description": str(raw.get("description") or "").strip()[:260],
+                "description": repair_mojibake(raw.get("description")).strip()[:260],
                 "steps": normalize_workflow_steps(raw.get("steps")) or default_workflow_steps(),
             }
         )
@@ -532,6 +532,16 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
         settings["script_workflow_steps"] = normalize_workflow_steps(values["script_workflow_steps"])
     if "workflow_presets" in values:
         settings["workflow_presets"] = _normalize_workflow_presets(values["workflow_presets"])
+    if "text_to_voice_speed" in values:
+        try:
+            settings["text_to_voice_speed"] = max(0.5, min(2.0, float(values["text_to_voice_speed"])))
+        except (TypeError, ValueError):
+            settings["text_to_voice_speed"] = 1.0
+    if "magicvoice_steps" in values:
+        try:
+            settings["magicvoice_steps"] = max(8, min(16, int(values["magicvoice_steps"])))
+        except (TypeError, ValueError):
+            settings["magicvoice_steps"] = 16
     save_settings(settings)
     return settings
 

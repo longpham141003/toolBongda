@@ -354,6 +354,40 @@ def _estimated_segments_from_text(text: str, duration: float) -> list[dict]:
     return segments
 
 
+def _audio_duration_seconds(path: Path) -> float:
+    """Read duration from regular and float WAV files."""
+    try:
+        import soundfile as sf
+
+        info = sf.info(str(path))
+        if info.samplerate and info.frames:
+            return max(0.0, float(info.frames) / float(info.samplerate))
+    except Exception:
+        pass
+    try:
+        import wave
+
+        with wave.open(str(path), "rb") as wav:
+            return max(0.0, wav.getnframes() / max(1, wav.getframerate()))
+    except Exception:
+        pass
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+            **_win_hidden_kwargs(),
+        )
+        return max(0.0, float(result.stdout.strip() or 0.0))
+    except Exception:
+        return 0.0
+
+
 def text_to_voice_url(settings: dict) -> str:
     host = str(settings.get("text_to_voice_host") or "127.0.0.1")
     port = int(settings.get("text_to_voice_port") or 7860)
@@ -571,6 +605,10 @@ class TextToVoiceRunner:
                     },
                     timeout_seconds=timeout_seconds,
                 )
+                if self.stop_check():
+                    source_path = Path(str(result.get("path") or ""))
+                    source_path.unlink(missing_ok=True)
+                    raise RuntimeError("Stopped.")
                 source_path = Path(str(result["path"]))
                 if not source_path.exists():
                     raise RuntimeError(f"Kokoro không tạo file: {source_path}")
@@ -651,7 +689,7 @@ class TextToVoiceRunner:
                     "--out",
                     str(part_path),
                     "--steps",
-                    str(int(self.settings.get("magicvoice_steps") or 16)),
+                    str(max(8, min(16, int(self.settings.get("magicvoice_steps") or 16)))),
                     "--speed",
                     str(float(self.settings.get("text_to_voice_speed") or 1.0)),
                     "--device",
@@ -672,36 +710,65 @@ class TextToVoiceRunner:
                     str(int(self.settings.get("magicvoice_batch_size") or 3)),
                 ]
                 with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout, stderr_path.open("w", encoding="utf-8", errors="replace") as stderr:
-                    result = subprocess.run(
+                    process = subprocess.Popen(
                         command,
                         cwd=str(Path(__file__).resolve().parents[1]),
                         stdout=stdout,
                         stderr=stderr,
                         text=True,
-                        timeout=timeout_seconds,
-                        check=False,
                         **_win_hidden_kwargs(),
                     )
-                if result.returncode != 0 or not part_path.exists():
-                    detail = ""
+                    deadline = time.time() + timeout_seconds
+                    while process.poll() is None:
+                        if self.stop_check():
+                            _terminate_process_tree(process, timeout=5)
+                            part_path.unlink(missing_ok=True)
+                            raise RuntimeError("Stopped.")
+                        if time.time() >= deadline:
+                            _terminate_process_tree(process, timeout=5)
+                            raise TimeoutError(f"MagicVoice quá thời gian ở đoạn {index}/{len(chunks)}.")
+                        time.sleep(0.25)
+                    returncode = int(process.returncode or 0)
+                part_duration = _audio_duration_seconds(part_path) if part_path.exists() else 0.0
+                if part_duration <= 0:
+                    detail_lines: list[str] = []
                     for path in (stderr_path, stdout_path):
-                        if path.exists():
-                            detail += "\n" + path.read_text(encoding="utf-8", errors="replace")[-1600:]
-                    raise RuntimeError(f"MagicVoice clone thất bại ở đoạn {index}/{len(chunks)}.{detail}")
+                        if not path.exists():
+                            continue
+                        for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                            line = raw_line.strip()
+                            if not line:
+                                continue
+                            lowered = line.lower()
+                            if (
+                                "loading weights:" in lowered
+                                or "fetching " in lowered
+                                or line.startswith("[transformers]")
+                                or "%|" in line
+                            ):
+                                continue
+                            detail_lines.append(line)
+                    detail = " ".join(detail_lines[-8:])
+                    if not detail:
+                        detail = f"MagicVoice không tạo được file WAV hợp lệ (mã thoát {returncode})."
+                    raise RuntimeError(f"MagicVoice clone thất bại ở đoạn {index}/{len(chunks)}. {detail}")
+                if returncode != 0:
+                    self.log(
+                        f"Text to Voice {label}: đoạn {index}/{len(chunks)} đã có audio hợp lệ; "
+                        "bỏ qua cảnh báo phụ của MagicVoice."
+                    )
                 generated_paths.append(part_path)
                 text_part_path.unlink(missing_ok=True)
 
             if len(generated_paths) == 1:
                 shutil.copy2(generated_paths[0], output_path)
-                duration = 0.0
-                try:
-                    import wave
-                    with wave.open(str(output_path), "rb") as wav:
-                        duration = wav.getnframes() / max(1, wav.getframerate())
-                except Exception:
-                    pass
+                duration = _audio_duration_seconds(output_path)
             else:
                 duration = combine_wavs(generated_paths, output_path)
+                if duration <= 0:
+                    duration = _audio_duration_seconds(output_path)
+            if duration <= 0:
+                raise RuntimeError("Không đọc được thời lượng file voice MagicVoice vừa tạo.")
             estimated_segments = _estimated_segments_from_text(text, duration)
 
             output_path.with_suffix(".segments.json").write_text(
@@ -712,7 +779,7 @@ class TextToVoiceRunner:
                         "sampleRate": 24000,
                         "lang": str(self.settings.get("text_to_voice_language") or "vi"),
                         "voice": str(reference_path),
-                        "speed": 1.0,
+                        "speed": float(self.settings.get("text_to_voice_speed") or 1.0),
                         "delivery": "magicvoice-clone",
                         "engine": "magicvoice",
                         "segments": estimated_segments,
@@ -836,6 +903,11 @@ class TextToVoiceRunner:
             "engine": "magicvoice" if bool(self.settings.get("voice_clone_enabled")) and _clone_reference_path(self.settings) else "kokoro",
             "voice_clone_reference_path": str(self.settings.get("voice_clone_reference_path") or ""),
             "voice_clone_engine": str(self.settings.get("voice_clone_engine") or ""),
+            "magicvoice_steps": str(max(8, min(16, int(self.settings.get("magicvoice_steps") or 16)))),
+            "magicvoice_sentence_pause": str(float(self.settings.get("magicvoice_sentence_pause") or 0.28)),
+            "magicvoice_clause_pause": str(float(self.settings.get("magicvoice_clause_pause") or 0.12)),
+            "magicvoice_paragraph_pause": str(float(self.settings.get("magicvoice_paragraph_pause") or 0.43)),
+            "magicvoice_clarity_speed": str(float(self.settings.get("magicvoice_clarity_speed") or 0.96)),
             "segment_cleaner": "tts_clean_v11_magicvoice_sentence_batch",
         }
 

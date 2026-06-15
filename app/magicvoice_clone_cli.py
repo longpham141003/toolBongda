@@ -318,7 +318,7 @@ def main() -> int:
             "language": [str(args.language or "vi")] * len(batch_texts),
             "voice_clone_prompt": [clone_prompt] * len(batch_texts),
             "speed": batch_speeds,
-            "num_step": max(16, int(args.steps)),
+            "num_step": max(8, min(16, int(args.steps))),
             "guidance_scale": 2.0,
             # Preserve consonant attacks at sentence starts. OmniVoice's edge
             # post-processing can trim Vietnamese initial sounds too tightly.

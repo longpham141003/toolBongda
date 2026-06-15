@@ -7,6 +7,7 @@ settings.json
 Projects/
 .webui_state
 .voice_preview/
+logs/
 tmp_*/
 *.log
 

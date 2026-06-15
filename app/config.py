@@ -159,6 +159,14 @@ def load_settings() -> dict:
         pass
     settings = dict(DEFAULT_SETTINGS)
     settings.update(data)
+    try:
+        settings["text_to_voice_speed"] = max(0.5, min(2.0, float(settings.get("text_to_voice_speed") or 1.0)))
+    except (TypeError, ValueError):
+        settings["text_to_voice_speed"] = 1.0
+    try:
+        settings["magicvoice_steps"] = max(8, min(16, int(settings.get("magicvoice_steps") or 16)))
+    except (TypeError, ValueError):
+        settings["magicvoice_steps"] = 16
     for deprecated_key in (
         "text_to_voice_mode",
         "chatterbox_exaggeration",
@@ -251,6 +259,14 @@ def load_settings() -> dict:
 def save_settings(settings: dict) -> None:
     data = dict(DEFAULT_SETTINGS)
     data.update(settings or {})
+    try:
+        data["text_to_voice_speed"] = max(0.5, min(2.0, float(data.get("text_to_voice_speed") or 1.0)))
+    except (TypeError, ValueError):
+        data["text_to_voice_speed"] = 1.0
+    try:
+        data["magicvoice_steps"] = max(8, min(16, int(data.get("magicvoice_steps") or 16)))
+    except (TypeError, ValueError):
+        data["magicvoice_steps"] = 16
     projects = _expand_config_path(data.get("projects_dir")) or default_projects_dir()
     if not projects.is_absolute():
         projects = default_projects_dir().parent / projects

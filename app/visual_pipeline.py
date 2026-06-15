@@ -12,8 +12,8 @@ import shutil
 import subprocess
 import sys
 import time
-import unicodedata
 import uuid
+import unicodedata
 from pathlib import Path
 from typing import Callable
 from urllib.parse import quote_plus, urlparse
@@ -95,6 +95,14 @@ def write_json(path: Path, data) -> None:
 
 
 def probe_duration(path: Path) -> float:
+    try:
+        import soundfile as sf
+
+        info = sf.info(str(path))
+        if info.samplerate and info.frames:
+            return max(0.0, float(info.frames) / float(info.samplerate))
+    except Exception:
+        pass
     if path.suffix.lower() == ".wav":
         try:
             import wave
@@ -135,13 +143,64 @@ def create_visual_project(projects_dir: Path, title: str, script: str) -> Path:
 def generate_voice(project: Path, settings: dict, log: Callable[[str], None], stop_check=lambda: False) -> Path:
     script_path = project / "scripts" / "script_final.txt"
     output_path = project / "voices" / "voice.wav"
+    temporary_path = output_path.with_name(f"voice.{uuid.uuid4().hex}.working.wav")
     runner = TextToVoiceRunner(settings, log=log, stop_check=stop_check)
     runner.start()
     try:
-        runner.submit_file(script_path, "visual_pipeline", output_path)
+        runner.submit_file(script_path, "visual_pipeline", temporary_path)
+        if stop_check():
+            raise RuntimeError("Stopped.")
+        replacements = [
+            (temporary_path, output_path),
+            (temporary_path.with_suffix(".segments.json"), output_path.with_suffix(".segments.json")),
+            (temporary_path.with_suffix(".ttv.meta.json"), output_path.with_suffix(".ttv.meta.json")),
+        ]
+        for source, target in replacements:
+            if source.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source.replace(target)
+        # A new voice means the old scene/timing-to-asset mapping is no longer
+        # trustworthy. Force the next analyze-search run to rebuild scenes from
+        # the new voice instead of showing/reusing stale media.
+        (project / "assets" / "asset_manifest.json").unlink(missing_ok=True)
     finally:
         runner.close()
+        temporary_path.unlink(missing_ok=True)
+        temporary_path.with_suffix(".segments.json").unlink(missing_ok=True)
+        temporary_path.with_suffix(".ttv.meta.json").unlink(missing_ok=True)
     return output_path
+
+
+def voice_signature(project: Path) -> dict[str, int]:
+    signature: dict[str, int] = {}
+    for key, path in (
+        ("voice", project / "voices" / "voice.wav"),
+        ("timing", project / "voices" / "voice.segments.json"),
+    ):
+        if path.exists():
+            stat = path.stat()
+            signature[f"{key}_mtime_ns"] = int(stat.st_mtime_ns)
+            signature[f"{key}_size"] = int(stat.st_size)
+        else:
+            signature[f"{key}_mtime_ns"] = 0
+            signature[f"{key}_size"] = 0
+    return signature
+
+
+def _manifest_matches_current_voice(project: Path, data: dict) -> bool:
+    if not isinstance(data, dict):
+        return False
+    stored = data.get("voice_signature")
+    current = voice_signature(project)
+    if isinstance(stored, dict):
+        return all(int(stored.get(key) or 0) == int(value or 0) for key, value in current.items())
+    # Compatibility for older manifests: accept them only while their file is
+    # newer than the voice. New voice generation deletes old manifests anyway.
+    manifest_path = project / "assets" / "asset_manifest.json"
+    voice_path = project / "voices" / "voice.wav"
+    if not manifest_path.exists() or not voice_path.exists():
+        return False
+    return manifest_path.stat().st_mtime_ns >= voice_path.stat().st_mtime_ns
 
 
 def refine_timing_with_whisper(
@@ -174,6 +233,10 @@ def refine_timing_with_whisper(
     python_path = Path(raw_python) if raw_python else Path(sys.executable)
     if not python_path.is_absolute():
         python_path = Path(__file__).resolve().parents[1] / python_path
+    if not python_path.is_file():
+        if callable(log):
+            log(f"Whisper timing: Python đã cấu hình không còn tồn tại, tự dùng {sys.executable}.")
+        python_path = Path(sys.executable)
     worker = Path(__file__).with_name("whisper_timing_cli.py")
     whisper_json = project / "voices" / "voice.whisper.json"
     whisper_srt = project / "voices" / "voice.whisper.srt"
@@ -397,6 +460,31 @@ def normalize_voice_segments(timing: dict) -> list[dict]:
     return result
 
 
+def _timing_needs_repair(segments: list[dict], audio_duration: float) -> tuple[bool, str]:
+    if not segments:
+        return True, "bị rỗng"
+    if audio_duration <= 2.0:
+        return False, ""
+    starts = [float(item.get("start") or 0.0) for item in segments]
+    ends = [float(item.get("end") or 0.0) for item in segments]
+    timing_duration = max(ends, default=0.0)
+    if timing_duration < audio_duration * 0.7 or timing_duration > audio_duration * 1.3:
+        return True, "sai thời lượng"
+    gaps = [
+        max(0.0, starts[index] - ends[index - 1])
+        for index in range(1, len(segments))
+    ]
+    max_gap = max(gaps, default=0.0)
+    # Faster-Whisper can occasionally return one huge silent gap for cloned voices.
+    # That breaks scene grouping, so prefer a proportional script estimate.
+    if max_gap > max(4.0, audio_duration * 0.18):
+        return True, "có khoảng trống timestamp bất thường"
+    very_short = sum(1 for item in segments if (float(item.get("end") or 0.0) - float(item.get("start") or 0.0)) < 0.35)
+    if len(segments) >= 4 and very_short / len(segments) > 0.45:
+        return True, "có quá nhiều câu bị căn dưới 0.35 giây"
+    return False, ""
+
+
 def estimate_timing_from_script(project: Path, timing: dict | None = None) -> dict:
     script_path = project / "scripts" / "script_final.txt"
     audio_path = project / "voices" / "voice.wav"
@@ -405,8 +493,9 @@ def estimate_timing_from_script(project: Path, timing: dict | None = None) -> di
     if not sentences:
         return timing or {}
     duration = float((timing or {}).get("duration") or 0.0)
-    if duration <= 0 and audio_path.exists():
-        duration = probe_duration(audio_path)
+    audio_duration = probe_duration(audio_path) if audio_path.exists() else 0.0
+    if audio_duration > 0 and (duration <= 0 or duration < audio_duration * 0.7 or duration > audio_duration * 1.3):
+        duration = audio_duration
     duration = max(0.5, duration)
     weights = [max(1, len(re.findall(r"\S+", sentence))) for sentence in sentences]
     total_weight = max(1, sum(weights))
@@ -658,11 +747,14 @@ def build_asset_manifest(
         if callable(log):
             log(f"Whisper timing lỗi, dùng timing voice hiện tại: {exc}")
     segments = normalize_voice_segments(timing)
-    if not segments:
+    audio_path = project / "voices" / "voice.wav"
+    audio_duration = probe_duration(audio_path) if audio_path.exists() else 0.0
+    timing_is_invalid, timing_invalid_reason = _timing_needs_repair(segments, audio_duration)
+    if timing_is_invalid:
         timing = estimate_timing_from_script(project, timing)
         segments = normalize_voice_segments(timing)
         if segments and callable(log):
-            log("Timing voice bị rỗng, đã tạo timing tạm từ script để tiếp tục phân cảnh.")
+            log(f"Timing voice {timing_invalid_reason}, đã tự căn lại theo thời lượng WAV để tiếp tục phân cảnh.")
     if not segments:
         raise RuntimeError("Timing không có câu thoại.")
     sentences = merge_segments_into_sentences(segments)
@@ -686,6 +778,7 @@ def build_asset_manifest(
         manifest_path,
         {
             "version": 3,
+            "voice_signature": voice_signature(project),
             "split_mode": split_mode,
             "timing_engine": str(timing.get("engine") or "voice"),
             "source_segment_count": len(segments),
@@ -1201,7 +1294,8 @@ def _enforce_scene_duration_limit(
 ) -> list[tuple[dict, list[dict]]]:
     max_seconds = max(3.0, float(max_seconds or 15.0))
     min_seconds = min(10.0, max_seconds)
-    soft_merge_max_seconds = max_seconds + 5.0
+    # Never merge short tail scenes past the configured hard limit.
+    soft_merge_max_seconds = max_seconds
     split_groups: list[tuple[dict, list[dict]]] = []
     for row, grouped in groups:
         if not grouped:
@@ -1334,11 +1428,24 @@ def _manifest_item(index: int, sentences: list[dict], break_reason: str) -> dict
 
 def load_manifest(project: Path) -> list[dict]:
     data = read_json(project / "assets" / "asset_manifest.json", {})
-    return list(data.get("items") or []) if isinstance(data, dict) else []
+    if not isinstance(data, dict) or not _manifest_matches_current_voice(project, data):
+        return []
+    return list(data.get("items") or [])
 
 
 def save_manifest(project: Path, items: list[dict]) -> None:
-    write_json(project / "assets" / "asset_manifest.json", {"version": 1, "items": items})
+    data = read_json(project / "assets" / "asset_manifest.json", {})
+    if not isinstance(data, dict) or not _manifest_matches_current_voice(project, data):
+        data = {}
+    data.update(
+        {
+            "version": max(3, int(data.get("version") or 3)),
+            "voice_signature": voice_signature(project),
+            "scene_count": len(items),
+            "items": items,
+        }
+    )
+    write_json(project / "assets" / "asset_manifest.json", data)
 
 
 def attach_local_media_to_asset(project: Path, asset_id: str, source: Path, settings: dict | None = None) -> dict:

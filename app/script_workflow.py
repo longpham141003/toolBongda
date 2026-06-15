@@ -4,6 +4,31 @@ import time
 from typing import Callable
 
 
+def repair_mojibake(value: object) -> str:
+    """Repair common UTF-8 text that was previously decoded as Windows-1252."""
+    text = str(value or "")
+    markers = ("Ã", "Â", "Ä", "Æ", "á»", "áº", "â€", "ðŸ")
+    for _ in range(3):
+        current_score = sum(text.count(marker) for marker in markers)
+        if current_score == 0:
+            break
+        candidates = []
+        for encoding in ("cp1252", "latin1"):
+            try:
+                candidate = text.encode(encoding).decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                continue
+            score = sum(candidate.count(marker) for marker in markers)
+            candidates.append((score, candidate))
+        if not candidates:
+            break
+        score, candidate = min(candidates, key=lambda item: item[0])
+        if score >= current_score:
+            break
+        text = candidate
+    return text
+
+
 def default_workflow_steps() -> list[dict]:
     return [
         {
@@ -39,13 +64,13 @@ def normalize_workflow_steps(raw_steps) -> list[dict]:
     for index, raw in enumerate(raw_steps or [], start=1):
         if not isinstance(raw, dict):
             continue
-        prompt = str(raw.get("prompt") or "").strip()
+        prompt = repair_mojibake(raw.get("prompt")).strip()
         if not prompt:
             continue
         result.append(
             {
                 "enabled": bool(raw.get("enabled", True)),
-                "name": str(raw.get("name") or f"Bước {index}").strip() or f"Bước {index}",
+                "name": repair_mojibake(raw.get("name") or f"Bước {index}").strip() or f"Bước {index}",
                 "prompt": prompt,
             }
         )
