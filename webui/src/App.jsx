@@ -203,7 +203,7 @@ function parseRoute(pathname) {
   }
   if (parts[0] === "video" && parts[1]) {
     if (parts.length === 2) return { kind: "video", videoSlug: parts[1], step: null }
-    if (parts.length === 3 && SEGMENT_TO_STEP[parts[2]]) {
+    if (parts.length === 3 && parts[2] in SEGMENT_TO_STEP) {
       return { kind: "video", videoSlug: parts[1], step: SEGMENT_TO_STEP[parts[2]] }
     }
     return { kind: "unknown" }
@@ -215,6 +215,9 @@ function parseRoute(pathname) {
 function videoStepPath(videoSlug, step) {
   return `/video/${videoSlug}/${STEP_TO_SEGMENT[step] || "noi-dung"}`
 }
+
+/** Build the URL for a series detail page. */
+function seriesPath(slug) { return `/du-an/${slug}` }
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -336,6 +339,7 @@ function App() {
 
   const navigate = useNavigate()
   const location = useLocation()
+  const [stateLoaded, setStateLoaded] = useState(false)
   const [activeSeries, setActiveSeries] = useState(null)
   const [series, setSeries] = useState([])
   const logContainerRef = useRef(null)
@@ -380,7 +384,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    loadState().catch((err) => setError(err.message))
+    loadState().catch((err) => setError(err.message)).finally(() => setStateLoaded(true))
   }, [loadState])
 
   useEffect(() => {
@@ -419,7 +423,11 @@ function App() {
 
   // Navigate a step within the currently-open video by step id.
   const goStep = useCallback((step) => {
-    if (currentVideoSlug) navigate(videoStepPath(currentVideoSlug, step))
+    if (!currentVideoSlug) {
+      if (import.meta.env.DEV) console.warn("goStep called with no current video, step =", step)
+      return
+    }
+    navigate(videoStepPath(currentVideoSlug, step))
   }, [currentVideoSlug, navigate])
 
   // Redirect a bare /video/:id URL to its resolved step, once the project is open.
@@ -438,10 +446,11 @@ function App() {
   // stopping the project) — and reloading a deep URL is the next task, not this
   // one — so send the user back to the dashboard. A bare /video/:id redirect is
   // handled above and must not be treated as orphaned here.
+  // Gate on stateLoaded to avoid firing during the initial /api/state load window.
   useEffect(() => {
     const onStep = route.kind === "new-video" || (route.kind === "video" && route.step !== null)
-    if (onStep && !activeSeries && !project) navigate("/", { replace: true })
-  }, [route, activeSeries, project, navigate])
+    if (stateLoaded && onStep && !activeSeries && !project) navigate("/", { replace: true })
+  }, [stateLoaded, route, activeSeries, project, navigate])
 
   useEffect(() => {
     if (!activeJob || !["queued", "running"].includes(activeJob.status)) return
@@ -847,7 +856,7 @@ function App() {
         setState((current) => ({ ...(current || {}), project: null }))
         // The open video was deleted — leave the step screens. Go back to its
         // series detail if one is active, otherwise the dashboard.
-        navigate(activeSeriesSlug ? `/du-an/${activeSeriesSlug}` : "/")
+        navigate(activeSeriesSlug ? seriesPath(activeSeriesSlug) : "/")
       }
       await loadState(true)
       setToast("Đã xóa project")
@@ -1110,7 +1119,7 @@ function App() {
         {["step1","step2","step3a","step3b","step4"].includes(activeScreen) && (
           <div className="topbar-breadcrumb">
             {activeSeries && <>
-              <button className="topbar-breadcrumb-item" onClick={() => activeSeriesSlug && navigate(`/du-an/${activeSeriesSlug}`)}>
+              <button className="topbar-breadcrumb-item" onClick={() => activeSeriesSlug && navigate(seriesPath(activeSeriesSlug))}>
                 <FolderOpen className="h-3.5 w-3.5 flex-shrink-0" />
                 <span>{activeSeries.title}</span>
               </button>
@@ -1146,7 +1155,7 @@ function App() {
           onOpenSeries={(s) => {
             setActiveSeries(s)
             const slug = pathToSeriesSlug(s?.path, series)
-            navigate(slug ? `/du-an/${slug}` : "/")
+            navigate(slug ? seriesPath(slug) : "/")
           }}
           onCreateSeries={createSeries}
           setError={setError}
