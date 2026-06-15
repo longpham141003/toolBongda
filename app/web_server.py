@@ -56,6 +56,7 @@ class ProjectCreateRequest(BaseModel):
     script: str
     category: str = ""
     series_path: str = ""
+    flow_id: str = ""
 
 
 class ProjectOpenRequest(BaseModel):
@@ -75,6 +76,7 @@ class SeriesCreateRequest(BaseModel):
     title: str
     description: str = ""
     settings_overrides: dict[str, Any] = Field(default_factory=dict)
+    default_flow_id: str = ""
 
 
 class SeriesUpdateRequest(BaseModel):
@@ -82,10 +84,28 @@ class SeriesUpdateRequest(BaseModel):
     title: str | None = None
     description: str | None = None
     settings_overrides: dict[str, Any] | None = None
+    default_flow_id: str | None = None
 
 
 class SeriesDeleteRequest(BaseModel):
     path: str
+
+
+class FlowCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FlowUpdateRequest(BaseModel):
+    id: str
+    name: str | None = None
+    description: str | None = None
+    steps: list[dict[str, Any]] | None = None
+
+
+class FlowDeleteRequest(BaseModel):
+    id: str
 
 
 class SettingsRequest(BaseModel):
@@ -452,7 +472,7 @@ def _project_payload(project: Path | None) -> dict[str, Any] | None:
 
 
 def _read_series_meta(series_dir: Path) -> dict[str, Any]:
-    defaults: dict[str, Any] = {"version": 1, "title": series_dir.name, "description": "", "created_at": 0, "settings_overrides": {}}
+    defaults: dict[str, Any] = {"version": 1, "title": series_dir.name, "description": "", "created_at": 0, "settings_overrides": {}, "default_flow_id": ""}
     try:
         raw = json.loads((series_dir / "project.json").read_text(encoding="utf-8"))
         if isinstance(raw, dict):
@@ -467,6 +487,55 @@ def _write_series_meta(series_dir: Path, meta: dict[str, Any]) -> None:
     (series_dir / "project.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _flows_path() -> Path:
+    settings = load_settings()
+    projects_dir = Path(str(settings.get("projects_dir") or APP_DIR / "Projects")).resolve()
+    return projects_dir.parent / "flows.json"
+
+
+def _load_flows() -> list[dict[str, Any]]:
+    path = _flows_path()
+    if not path.exists():
+        return _bootstrap_flows()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("flows") or []
+    except Exception:
+        return []
+
+
+def _save_flows(flows: list[dict[str, Any]]) -> None:
+    path = _flows_path()
+    path.write_text(json.dumps({"version": 1, "flows": flows}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _bootstrap_flows() -> list[dict[str, Any]]:
+    """Migrate workflow_presets from settings → flows.json on first run, or create defaults."""
+    import time as _time
+    settings = load_settings()
+    presets = settings.get("workflow_presets") or []
+    flows: list[dict[str, Any]] = []
+    for p in presets:
+        if isinstance(p, dict) and p.get("name"):
+            flows.append({
+                "id": str(p.get("id") or uuid.uuid4().hex[:8]),
+                "name": repair_mojibake(p.get("name", "")).strip()[:80],
+                "description": repair_mojibake(p.get("description", "")).strip()[:260],
+                "steps": normalize_workflow_steps(p.get("steps")) or default_workflow_steps(),
+                "created_at": int(_time.time()),
+            })
+    if not flows:
+        flows = [{
+            "id": "default",
+            "name": "Flow mặc định",
+            "description": "Phân tích đề tài, lập dàn ý, viết script",
+            "steps": default_workflow_steps(),
+            "created_at": int(_time.time()),
+        }]
+    _save_flows(flows)
+    return flows
+
+
 def _series_payload(series_dir: Path, all_projects: list[dict[str, Any]]) -> dict[str, Any]:
     meta = _read_series_meta(series_dir)
     videos = [p for p in all_projects if p.get("category") == series_dir.name]
@@ -477,6 +546,7 @@ def _series_payload(series_dir: Path, all_projects: list[dict[str, Any]]) -> dic
         "description": meta.get("description") or "",
         "created_at": meta.get("created_at") or 0,
         "settings_overrides": meta.get("settings_overrides") or {},
+        "default_flow_id": meta.get("default_flow_id") or "",
         "video_count": len(videos),
         "latest_updated_at": latest,
         "is_virtual": False,
@@ -829,6 +899,7 @@ def state() -> dict[str, Any]:
         "projects": projects[:100],
         "categories": categories,
         "series": series,
+        "flows": _load_flows(),
         "active_job": active.payload() if active else None,
         "queued_jobs": queued,
         "jobs": live_jobs,
@@ -992,10 +1063,13 @@ def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
         category = re.sub(r"[\\/:*?\"<>|]+", " ", request.category or "").strip()
         target_dir = projects_dir / category if category else projects_dir
     project = create_visual_project(target_dir, request.title, request.script.strip())
-    if category:
+    if category or request.flow_id:
         meta_path = project / "visual_project.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        meta["category"] = category
+        if category:
+            meta["category"] = category
+        if request.flow_id:
+            meta["flow_id"] = request.flow_id
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     runtime.set_project(project)
     return {"project": _project_payload(project)}
@@ -1082,6 +1156,7 @@ def create_series(request: SeriesCreateRequest) -> dict[str, Any]:
         "description": request.description.strip(),
         "created_at": int(time.time()),
         "settings_overrides": request.settings_overrides or {},
+        "default_flow_id": request.default_flow_id or "",
     }
     _write_series_meta(series_dir, meta)
     all_projects: list[dict[str, Any]] = []
@@ -1108,6 +1183,8 @@ def update_series(request: SeriesUpdateRequest) -> dict[str, Any]:
         existing = meta.get("settings_overrides") or {}
         existing.update(request.settings_overrides)
         meta["settings_overrides"] = existing
+    if request.default_flow_id is not None:
+        meta["default_flow_id"] = request.default_flow_id
     _write_series_meta(series_dir, meta)
     all_projects: list[dict[str, Any]] = []
     if projects_dir.exists():
@@ -1153,6 +1230,55 @@ def delete_series(request: SeriesDeleteRequest) -> dict[str, Any]:
             pass
     shutil.rmtree(series_dir)
     return {"ok": True}
+
+
+@app.get("/api/flows")
+def get_flows() -> dict[str, Any]:
+    return {"flows": _load_flows()}
+
+
+@app.post("/api/flows")
+def create_flow(request: FlowCreateRequest) -> dict[str, Any]:
+    import time as _time
+    flows = _load_flows()
+    new_flow: dict[str, Any] = {
+        "id": uuid.uuid4().hex[:8],
+        "name": request.name.strip()[:80],
+        "description": request.description.strip()[:260],
+        "steps": normalize_workflow_steps(request.steps) if request.steps else default_workflow_steps(),
+        "created_at": int(_time.time()),
+    }
+    flows.append(new_flow)
+    _save_flows(flows)
+    return {"flow": new_flow, "flows": flows}
+
+
+@app.patch("/api/flows")
+def update_flow(request: FlowUpdateRequest) -> dict[str, Any]:
+    flows = _load_flows()
+    updated: dict[str, Any] | None = None
+    for i, f in enumerate(flows):
+        if f["id"] == request.id:
+            if request.name is not None:
+                flows[i]["name"] = request.name.strip()[:80]
+            if request.description is not None:
+                flows[i]["description"] = request.description.strip()[:260]
+            if request.steps is not None:
+                flows[i]["steps"] = normalize_workflow_steps(request.steps)
+            updated = flows[i]
+            break
+    if not updated:
+        raise HTTPException(status_code=404, detail="Flow không tồn tại.")
+    _save_flows(flows)
+    return {"flow": updated, "flows": flows}
+
+
+@app.delete("/api/flows")
+def delete_flow(request: FlowDeleteRequest) -> dict[str, Any]:
+    flows = _load_flows()
+    flows = [f for f in flows if f["id"] != request.id]
+    _save_flows(flows)
+    return {"flows": flows}
 
 
 @app.post("/api/projects/script")

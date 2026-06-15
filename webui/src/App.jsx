@@ -1,4 +1,4 @@
-import {
+﻿import {
   Activity,
   AlertTriangle,
   Aperture,
@@ -9,7 +9,9 @@ import {
   Bot,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Circle,
   Eye,
   EyeOff,
@@ -19,6 +21,7 @@ import {
   FolderOpen,
   Image,
   KeyRound,
+  Layers,
   LoaderCircle,
   Lock,
   Mic,
@@ -28,6 +31,7 @@ import {
   Plus,
   RefreshCw,
   Rocket,
+  Save,
   Settings,
   Sparkles,
   Trash2,
@@ -335,7 +339,6 @@ function App() {
   const [editingAssetId, setEditingAssetId] = useState(null)
   const [editingKeywordValue, setEditingKeywordValue] = useState("")
   const [assetFilter, setAssetFilter] = useState("all")
-  const [presetName, setPresetName] = useState("")
   const [preflight, setPreflight] = useState(null)
   const [preflightBusy, setPreflightBusy] = useState(false)
 
@@ -344,6 +347,9 @@ function App() {
   const [stateLoaded, setStateLoaded] = useState(false)
   const [activeSeries, setActiveSeries] = useState(null)
   const [series, setSeries] = useState([])
+  const [flows, setFlows] = useState([])
+  const [flowsOpen, setFlowsOpen] = useState(false)
+  const [activeFlowId, setActiveFlowId] = useState(null)
   const logContainerRef = useRef(null)
   const scriptFileInputRef = useRef(null)
   const settingsSnapshot = useRef(null)
@@ -379,6 +385,10 @@ function App() {
     setSeries(data.series || [])
     if (data.series) {
       setActiveSeries(current => current ? (data.series.find(s => s.path === current.path) || current) : null)
+    }
+    if (data.flows) {
+      setFlows(data.flows)
+      setActiveFlowId(current => current || data.flows[0]?.id || null)
     }
     setWorkflowInput(data.settings?.script_workflow_input || "")
     setWorkflowSteps(data.settings?.script_workflow_steps?.length ? data.settings.script_workflow_steps : defaultSteps)
@@ -704,21 +714,6 @@ function App() {
     return Array.isArray(settings.workflow_presets) ? settings.workflow_presets.map(repairWorkflowPreset) : []
   }
 
-  async function saveCurrentWorkflowAsPreset() {
-    const name = presetName.trim()
-    if (!name) return setError("Hãy nhập tên flow trước khi lưu.")
-    const id = name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || `flow-${Date.now()}`
-    const next = [
-      ...workflowPresets().filter((item) => item.id !== id),
-      { id, name, description: "Flow do người dùng tạo", steps: workflowSteps },
-    ]
-    const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: { ...settings, active_workflow_id: id, workflow_presets: next, script_workflow_steps: workflowSteps } }) })
-    setSettings(data.settings)
-    settingsSnapshot.current = { settings: data.settings, workflowSteps, workflowInput }
-    setPresetName("")
-    setToast("Đã lưu flow")
-  }
-
   async function applyWorkflowPreset(id) {
     const preset = workflowPresets().find((item) => item.id === id)
     if (!preset) return
@@ -747,7 +742,7 @@ function App() {
     if (!script.trim()) return setError("Hãy nhập script trước khi tạo project.")
     try {
       const seriesPath = activeSeries?.is_virtual ? "" : (activeSeries?.path || "")
-      const data = await api("/api/projects", { method: "POST", body: JSON.stringify({ title, script, category: projectCategory, series_path: seriesPath }) })
+      const data = await api("/api/projects", { method: "POST", body: JSON.stringify({ title, script, category: projectCategory, series_path: seriesPath, flow_id: activeFlowId || "" }) })
       setState((current) => ({ ...current, project: data.project }))
       setTitle(data.project.name)
       setToast("Đã lưu nội dung. Bước tiếp theo: tạo giọng đọc.")
@@ -845,6 +840,7 @@ function App() {
     setAssetFilter("all")
     setPreflight(null)
     setActiveSeries(seriesItem)
+    setActiveFlowId(seriesItem?.default_flow_id || flows[0]?.id || null)
     const slug = pathToSeriesSlug(seriesItem?.path, series)
     navigate(slug ? `/du-an/${slug}/tao-video` : "/")
   }
@@ -854,8 +850,8 @@ function App() {
     await startVideoInSeries(activeSeries)
   }
 
-  async function createSeries(title, description = "") {
-    const data = await api("/api/series", { method: "POST", body: JSON.stringify({ title, description }) })
+  async function createSeries(title, description = "", defaultFlowId = "") {
+    const data = await api("/api/series", { method: "POST", body: JSON.stringify({ title, description, default_flow_id: defaultFlowId || "" }) })
     await loadState(true)
     return data.series
   }
@@ -871,11 +867,32 @@ function App() {
     }
   }
 
-  async function updateSeriesInfo(path, title, description) {
-    const data = await api("/api/series", { method: "PATCH", body: JSON.stringify({ path, title, description }) })
+  async function updateSeriesInfo(path, title, description, defaultFlowId) {
+    const body = { path }
+    if (title !== null && title !== undefined) body.title = title
+    if (description !== null && description !== undefined) body.description = description
+    if (defaultFlowId !== null && defaultFlowId !== undefined) body.default_flow_id = defaultFlowId
+    const data = await api("/api/series", { method: "PATCH", body: JSON.stringify(body) })
     setActiveSeries(current => current?.path === path ? data.series : current)
     await loadState(true)
     return data.series
+  }
+
+  async function createFlow(name, description, steps) {
+    const data = await api("/api/flows", { method: "POST", body: JSON.stringify({ name, description, steps }) })
+    setFlows(data.flows)
+    return data.flow
+  }
+
+  async function updateFlow(id, patch) {
+    const data = await api("/api/flows", { method: "PATCH", body: JSON.stringify({ id, ...patch }) })
+    setFlows(data.flows)
+  }
+
+  async function deleteFlow(id) {
+    const data = await api("/api/flows", { method: "DELETE", body: JSON.stringify({ id }) })
+    setFlows(data.flows)
+    if (activeFlowId === id) setActiveFlowId(data.flows[0]?.id || null)
   }
 
   async function applyBeginnerVoicePreset() {
@@ -1121,19 +1138,6 @@ function App() {
     }
   }
 
-  function updateStep(index, patch) {
-    setWorkflowSteps((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item))
-  }
-
-  function moveStep(index, direction) {
-    const target = index + direction
-    if (target < 0 || target >= workflowSteps.length) return
-    setWorkflowSteps((items) => {
-      const next = [...items]
-      ;[next[index], next[target]] = [next[target], next[index]]
-      return next
-    })
-  }
 
   const flowSteps = [
     { code: "1", label: "Nội dung", hint: "Nhập chủ đề hoặc kịch bản", icon: FileText },
@@ -1194,6 +1198,7 @@ function App() {
           </div>
         )}
         <div className="ml-auto flex items-center gap-2">
+          <button className="icon-action" aria-label="Kho Flow" onClick={() => setFlowsOpen(true)} title="Kho Flow"><Layers className="h-4 w-4" /></button>
           <button className="icon-action" aria-label="Trợ giúp" onClick={() => setHelpOpen(true)}><Bot className="h-4 w-4" /></button>
           <button className="icon-action" aria-label="Cài đặt" onClick={() => setSettingsOpen(true)}><Settings className="h-4 w-4" /></button>
           <div className="avatar-dot">L</div>
@@ -1220,6 +1225,7 @@ function App() {
             navigate(slug ? seriesPath(slug) : "/")
           }}
           onCreateSeries={createSeries}
+          flows={flows}
           setError={setError}
         />
       ) : activeScreen === "project" ? (
@@ -1232,6 +1238,7 @@ function App() {
           onDeleteSeries={deleteSeries}
           onUpdateSeries={updateSeriesInfo}
           setError={setError}
+          flows={flows}
         />
       ) : (
         <main className="stitch-workspace">
@@ -1252,10 +1259,10 @@ function App() {
             categoryLocked={!!activeSeries && !activeSeries.is_virtual}
             categories={state.categories || []}
             settings={settings}
-            workflowSteps={workflowSteps}
-            workflowPresets={workflowPresets}
-            applyWorkflowPreset={applyWorkflowPreset}
-            setSettingsOpen={setSettingsOpen}
+            flows={flows}
+            activeFlowId={activeFlowId}
+            setActiveFlowId={setActiveFlowId}
+            setFlowsOpen={setFlowsOpen}
             busyAction={busyAction}
             activeJob={activeJob}
           />}
@@ -1266,9 +1273,10 @@ function App() {
         </main>
       )}
 
-      <SettingsModal open={settingsOpen} onOpenChange={handleSettingsOpenChange} settings={settings} setSettings={setSettings} workflowSteps={workflowSteps} setWorkflowSteps={setWorkflowSteps} workflowPresets={workflowPresets} applyWorkflowPreset={applyWorkflowPreset} updateStep={updateStep} presetName={presetName} setPresetName={setPresetName} saveCurrentWorkflowAsPreset={saveCurrentWorkflowAsPreset} saveSettings={saveSettings} runPreflight={runPreflight} preflight={preflight} preflightBusy={preflightBusy} />
+      <SettingsModal open={settingsOpen} onOpenChange={handleSettingsOpenChange} settings={settings} setSettings={setSettings} saveSettings={saveSettings} runPreflight={runPreflight} preflight={preflight} preflightBusy={preflightBusy} />
       <ProjectsModal open={projectsOpen} onOpenChange={setProjectsOpen} state={state} project={project} openProject={openProject} renameProject={renameProject} deleteProject={deleteProject} />
       <HelpModal open={helpOpen} onOpenChange={setHelpOpen} />
+      <FlowsModal open={flowsOpen} onClose={() => setFlowsOpen(false)} flows={flows} onCreate={createFlow} onUpdate={updateFlow} onDelete={deleteFlow} />
       <Lightbox open={lightboxIndex !== null} setLightboxIndex={setLightboxIndex} lightboxIndex={lightboxIndex} assets={assets} project={project} lightboxAsset={lightboxAsset} assetJobs={assetJobs} statusBadge={statusBadge} startJob={startJob} approveAsset={approveAsset} chooseAssetMedia={chooseAssetMedia} editingAssetId={editingAssetId} setEditingAssetId={setEditingAssetId} editingKeywordValue={editingKeywordValue} setEditingKeywordValue={setEditingKeywordValue} saveKeyword={saveKeyword} />
       <Dialog open={showApiKeyNotice} onOpenChange={(open) => !open && setApiKeyNoticeDismissed(true)}>
         <DialogContent className="api-key-dialog max-w-xl">
@@ -1590,19 +1598,15 @@ function FlowCard({ icon: Icon, title, desc, accent = "violet", dashed, onClick,
   </button>
 }
 
-function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categoryLocked = false, categories = [], settings, workflowSteps, workflowPresets, applyWorkflowPreset, setSettingsOpen, busyAction, activeJob }) {
+function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categoryLocked = false, categories = [], settings, flows = [], activeFlowId, setActiveFlowId, setFlowsOpen, busyAction, activeJob }) {
   const [contentMode, setContentMode] = useState("existing")
-  const presets = workflowPresets()
+  const activeFlow = flows.find(f => f.id === activeFlowId) || flows[0] || null
   const workflowRunning = isBusy && busyAction === "workflow"
   const workflowPercent = Math.max(0, Math.min(100, Math.round(Number(activeJob?.progress || 0))))
   const runWorkflow = () => startJob("/api/workflow", {
     source_input: workflowInput,
-    steps: workflowSteps,
-    settings: {
-      active_workflow_id: settings.active_workflow_id,
-      script_workflow_input: workflowInput,
-      script_workflow_steps: workflowSteps,
-    },
+    steps: activeFlow?.steps || [],
+    settings: { script_workflow_input: workflowInput },
   }, "workflow")
 
   return <div className="step-screen">
@@ -1627,7 +1631,7 @@ function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputR
 
       <div className="script-mode-switch">
         <button className={cn(contentMode === "existing" && "active")} onClick={()=>setContentMode("existing")}><FileText/><span><b>Tôi đã có kịch bản</b><small>Dán nội dung hoặc tải file TXT</small></span></button>
-        <button className={cn(contentMode === "idea" && "active")} onClick={()=>setContentMode("idea")}><Sparkles/><span><b>Tạo kịch bản từ ý tưởng</b><small>Nhập tóm tắt, AI chạy theo flow đã lưu</small></span></button>
+        <button className={cn(contentMode === "idea" && "active")} onClick={()=>setContentMode("idea")}><Sparkles/><span><b>Tạo kịch bản từ ý tưởng</b><small>Nhập tóm tắt, AI chạy theo flow đã cấu hình</small></span></button>
       </div>
 
       {contentMode === "existing" ? <div className="script-mode-content">
@@ -1640,17 +1644,26 @@ function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputR
         </div>
       </div> : <div className="script-mode-content workflow-create">
         <div className="workflow-create-head">
-          <div><h2>Tạo kịch bản bằng flow</h2><p>AI sẽ chạy lần lượt các bước bạn đã lưu trong Cài đặt.</p></div>
+          <div><h2>Tạo kịch bản bằng flow</h2><p>AI sẽ chạy lần lượt các bước trong flow bạn chọn.</p></div>
         </div>
         <div className="workflow-flow-picker">
-          <Field label="Chọn flow tạo kịch bản"><Select value={settings.active_workflow_id || presets[0]?.id || ""} onValueChange={applyWorkflowPreset} options={presets.map((preset) => ({ value: preset.id, label: preset.name }))} /></Field>
-          <Button variant="secondary" onClick={()=>setSettingsOpen(true)}><Settings className="h-4 w-4"/> Cấu hình flow</Button>
+          <Field label="Flow tạo kịch bản">
+            <Select value={activeFlowId || flows[0]?.id || ""} onValueChange={setActiveFlowId} options={flows.map(f => ({ value: f.id, label: f.name }))} />
+          </Field>
+          <Button variant="secondary" onClick={() => setFlowsOpen(true)}><Layers className="h-4 w-4" /> Quản lý Flow</Button>
         </div>
+        {activeFlow && (
+          <div className="flow-steps-preview">
+            {activeFlow.steps?.filter(s => s.enabled !== false).map((s, i) => (
+              <span key={i} className="flow-step-chip">{i + 1}. {s.name}</span>
+            ))}
+          </div>
+        )}
         <Field label="Tóm tắt chủ đề muốn làm">
           <Textarea className="workflow-topic-input" value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} placeholder="Ví dụ: Video 2 phút phân tích trận Brazil sáng nay, tập trung vào diễn biến chính, cầu thủ nổi bật và kết quả cuối cùng. Giọng tin tức, dễ hiểu." />
         </Field>
         {workflowRunning && <div className="workflow-live-progress"><div><b>{activeJob?.current_label || "Đang chuẩn bị..."}</b><span>{workflowPercent}%</span></div><i><em style={{width:`${workflowPercent}%`}} /></i></div>}
-        <Button className="workflow-generate-button" onClick={runWorkflow} disabled={!workflowInput.trim() || isBusy}>{workflowRunning ? <LoaderCircle className="h-4 w-4 animate-spin"/> : <Sparkles className="h-4 w-4"/>}{workflowRunning ? "Đang tạo kịch bản..." : "Tạo kịch bản"}</Button>
+        <Button className="workflow-generate-button" onClick={runWorkflow} disabled={!workflowInput.trim() || isBusy || !activeFlow}>{workflowRunning ? <LoaderCircle className="h-4 w-4 animate-spin"/> : <Sparkles className="h-4 w-4"/>}{workflowRunning ? "Đang tạo kịch bản..." : "Tạo kịch bản"}</Button>
         {script.trim() && <div className="workflow-result"><div><b>Kịch bản đã tạo</b><span>Có thể chỉnh trực tiếp trước khi tiếp tục.</span></div><Textarea className="script-editor generated" value={script} onChange={(e)=>setScript(e.target.value)} /></div>}
       </div>}
     </div>
@@ -1985,14 +1998,13 @@ function ExportScreen({ project, assets, preflight, runPreflight, startJob, titl
 function CheckRow({ ok, label }) { return <div className={cn("check-row",ok?"ok":"bad")}>{ok?<CheckCircle2/>:<XCircle/>}<span>{label}</span></div> }
 function EmptyState({ text }) { return <div className="empty-state"><Image className="h-10 w-10"/><p>{text}</p></div> }
 
-function SettingsModal({ open, onOpenChange, settings, setSettings, workflowSteps, setWorkflowSteps, workflowPresets, applyWorkflowPreset, updateStep, presetName, setPresetName, saveCurrentWorkflowAsPreset, saveSettings, runPreflight, preflight, preflightBusy }) {
-  const presets=workflowPresets()
+function SettingsModal({ open, onOpenChange, settings, setSettings, saveSettings, runPreflight, preflight, preflightBusy }) {
   const [showKey, setShowKey] = useState(false)
   // Keep the previous value when the field is blank or not a finite number,
   // so clearing the box never stores 0/NaN. Backend clamps the final range.
   const setNum = (key, raw, fallback) => { const n = Number(raw); setSettings({ ...settings, [key]: raw === "" || !Number.isFinite(n) ? fallback : n }) }
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="settings-dialog max-w-6xl"><DialogTitle>Cài đặt</DialogTitle><DialogDescription>Chỉnh những thứ hay dùng. Các thông số kỹ thuật nằm trong tab Nâng cao.</DialogDescription>
-    <Tabs defaultValue="basic" className="mt-5"><TabsList className="grid w-full grid-cols-5"><TabsTrigger value="basic">Cơ bản</TabsTrigger><TabsTrigger value="flow">Flow</TabsTrigger><TabsTrigger value="ai">AI</TabsTrigger><TabsTrigger value="advanced">Nâng cao</TabsTrigger><TabsTrigger value="validate">Kiểm tra</TabsTrigger></TabsList>
+    <Tabs defaultValue="basic" className="mt-5"><TabsList className="grid w-full grid-cols-4"><TabsTrigger value="basic">Cơ bản</TabsTrigger><TabsTrigger value="ai">AI</TabsTrigger><TabsTrigger value="advanced">Nâng cao</TabsTrigger><TabsTrigger value="validate">Kiểm tra</TabsTrigger></TabsList>
       <TabsContent value="basic"><div className="settings-grid">
         <SettingSection title="Giọng đọc mặc định" icon={FileAudio}>
           <Field label="Ngôn ngữ hay dùng"><Select value={normalizeVoiceLanguage(settings.text_to_voice_language||"en")} onValueChange={v=>setSettings({...settings,text_to_voice_language:v})} options={voiceLanguageOptions}/></Field>
@@ -2004,7 +2016,6 @@ function SettingsModal({ open, onOpenChange, settings, setSettings, workflowStep
           <div className="setting-note">Khuyến nghị: bật cả hai mục trên để ảnh ít sai hơn và đủ nét khi xuất CapCut.</div>
         </SettingSection>
       </div></TabsContent>
-      <TabsContent value="flow"><SettingSection title="Flow tạo kịch bản" icon={Bot}><Field label="Flow đang dùng"><Select value={settings.active_workflow_id||presets[0]?.id||""} onValueChange={applyWorkflowPreset} options={presets.map(x=>({value:x.id,label:x.name}))}/></Field>{workflowSteps.map((step,i)=><div className="workflow-edit" key={i}><Switch checked={step.enabled} onCheckedChange={v=>updateStep(i,{enabled:v})}/><Input value={step.name} onChange={e=>updateStep(i,{name:e.target.value})}/><Textarea value={step.prompt} onChange={e=>updateStep(i,{prompt:e.target.value})}/></div>)}<Button variant="secondary" onClick={()=>setWorkflowSteps(x=>[...x,{enabled:true,name:`Bước ${x.length+1}`,prompt:""}])}><Plus className="h-4 w-4"/> Thêm bước</Button><div className="flex gap-2"><Input value={presetName} onChange={e=>setPresetName(e.target.value)} placeholder="Tên flow mới"/><Button onClick={saveCurrentWorkflowAsPreset}>Lưu flow</Button></div></SettingSection></TabsContent>
       <TabsContent value="ai"><SettingSection title="AI dùng để hiểu nội dung và kiểm ảnh" icon={Bot}><Field label="Nhà cung cấp"><Select value={settings.keyword_ai_provider||"auto"} onValueChange={v=>setSettings({...settings,keyword_ai_provider:v})} options={[{value:"auto",label:"Tự động"},{value:"gemini",label:"Gemini"},{value:"openai",label:"OpenAI"}]}/></Field><Field label="Gemini API key"><div className="relative"><Input type={showKey?"text":"password"} className="pr-11" value={settings.gemini_api_key||""} onChange={e=>setSettings({...settings,gemini_api_key:e.target.value})}/><button type="button" onClick={()=>setShowKey(v=>!v)} aria-label={showKey?"Ẩn key":"Hiện key"} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-zinc-500 hover:bg-white/10 hover:text-white">{showKey?<EyeOff className="h-4 w-4"/>:<Eye className="h-4 w-4"/>}</button></div></Field><div className="setting-note">Nếu không biết chọn gì, để Tự động và chỉ nhập Gemini API key.</div></SettingSection></TabsContent>
       <TabsContent value="advanced"><div className="settings-grid">
         <SettingSection title="Cảnh và chất lượng hình ảnh" icon={Aperture}><Switch checked={!!settings.whisper_timing_enabled} onCheckedChange={v=>setSettings({...settings,whisper_timing_enabled:v})} label="Căn lời đọc chính xác theo thời gian"/><Switch checked={!!settings.scene_ai_enabled} onCheckedChange={v=>setSettings({...settings,scene_ai_enabled:v})} label="Tự gom các câu cùng ý thành một cảnh"/><div className="grid grid-cols-2 gap-4"><Field label="Cảnh ngắn nhất (giây)"><Input type="number" min={1} step={1} value={settings.scene_min_seconds??3} onChange={e=>setNum("scene_min_seconds",e.target.value,3)}/></Field><Field label="Thời lượng cảnh mong muốn (giây)"><Input type="number" min={1} step={1} value={settings.scene_target_max_seconds??10} onChange={e=>setNum("scene_target_max_seconds",e.target.value,10)}/></Field><Field label="Chiều rộng video"><Input type="number" min={16} step={2} value={settings.image_target_width??1920} onChange={e=>setNum("image_target_width",e.target.value,1920)}/></Field><Field label="Chiều cao video"><Input type="number" min={16} step={2} value={settings.image_target_height??1080} onChange={e=>setNum("image_target_height",e.target.value,1080)}/></Field></div><div className="setting-note">Khuyến nghị giữ 1920 × 1080 cho video ngang. Chỉ thay đổi khi bạn cần kích thước xuất khác.</div></SettingSection>
@@ -2060,7 +2071,7 @@ function ProjectsModal({ open, onOpenChange, state, project, openProject, rename
   </>
 }
 
-function DashboardScreen({ series, allReady, runPreflight, preflightChecks, onOpenSeries, onCreateSeries, setError }) {
+function DashboardScreen({ series, allReady, runPreflight, preflightChecks, onOpenSeries, onCreateSeries, setError, flows = [] }) {
   const [createOpen, setCreateOpen] = useState(false)
   const hasAny = series.length > 0
   const totalVideos = series.reduce((acc, s) => acc + (s.video_count || 0), 0)
@@ -2150,24 +2161,27 @@ function DashboardScreen({ series, allReady, runPreflight, preflightChecks, onOp
         </div>
       )}
 
-      <CreateSeriesDialog open={createOpen} onOpenChange={setCreateOpen} onCreateSeries={onCreateSeries} setError={setError} onSuccess={onOpenSeries} />
+      <CreateSeriesDialog open={createOpen} onOpenChange={setCreateOpen} onCreateSeries={onCreateSeries} flows={flows} setError={setError} onSuccess={onOpenSeries} />
     </main>
   )
 }
 
-function CreateSeriesDialog({ open, onOpenChange, onCreateSeries, setError, onSuccess }) {
+function CreateSeriesDialog({ open, onOpenChange, onCreateSeries, flows = [], setError, onSuccess }) {
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
+  const [flowId, setFlowId] = useState("")
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState("")
-  const reset = () => { setTitle(""); setDescription(""); setErr(""); setBusy(false) }
+  const reset = () => { setTitle(""); setDescription(""); setFlowId(""); setErr(""); setBusy(false) }
   useEffect(() => { if (!open) reset() }, [open])
+  // Default the flow to the first available one when the dialog opens.
+  useEffect(() => { if (open && flows.length > 0) setFlowId(current => current || flows[0].id) }, [open, flows])
   const submit = async () => {
     if (!title.trim()) return setErr("Hãy nhập tên Dự án.")
     setBusy(true)
     setErr("")
     try {
-      const created = await onCreateSeries(title.trim(), description.trim())
+      const created = await onCreateSeries(title.trim(), description.trim(), flowId)
       onOpenChange(false)
       if (onSuccess && created) onSuccess(created)
     } catch (e) {
@@ -2186,6 +2200,16 @@ function CreateSeriesDialog({ open, onOpenChange, onCreateSeries, setError, onSu
         <Field label="Mô tả (tuỳ chọn)">
           <Input value={description} onChange={e => setDescription(e.target.value)} placeholder="Ví dụ: Series bình luận các trận đấu lớn" maxLength={200} />
         </Field>
+        {flows.length > 0 && (
+          <Field label="Flow mặc định cho Dự án">
+            <Select
+              value={flowId || "__none__"}
+              onValueChange={v => setFlowId(v === "__none__" ? "" : v)}
+              options={[{ value: "__none__", label: "— Không gắn flow —" }, ...flows.map(f => ({ value: f.id, label: f.name }))]}
+            />
+          </Field>
+        )}
+        {flows.length > 0 && <p className="text-xs text-zinc-500">Video mới trong Dự án sẽ dùng flow này; bạn vẫn có thể đổi flow ở từng video.</p>}
         {err && <p className="text-sm text-red-400">{err}</p>}
         <div className="dialog-actions">
           <Button variant="secondary" onClick={() => onOpenChange(false)}>Hủy</Button>
@@ -2196,7 +2220,7 @@ function CreateSeriesDialog({ open, onOpenChange, onCreateSeries, setError, onSu
   )
 }
 
-function ProjectDetailScreen({ activeSeries, allProjects, onBack, onOpenVideo, onNewVideo, onDeleteSeries, onUpdateSeries, setError }) {
+function ProjectDetailScreen({ activeSeries, allProjects, onBack, onOpenVideo, onNewVideo, onDeleteSeries, onUpdateSeries, setError, flows = [] }) {
   const [editTitle, setEditTitle] = useState(activeSeries?.title || "")
   const [editDesc, setEditDesc] = useState(activeSeries?.description || "")
   const [editMode, setEditMode] = useState(false)
@@ -2250,6 +2274,18 @@ function ProjectDetailScreen({ activeSeries, allProjects, onBack, onOpenVideo, o
           {activeSeries.is_virtual && <Badge>Chưa phân nhóm</Badge>}
         </div>
       </div>
+
+      {!activeSeries.is_virtual && flows.length > 0 && (
+        <div className="project-detail-flow-row">
+          <Field label="Flow mặc định cho Dự án">
+            <Select
+              value={activeSeries.default_flow_id || "__none__"}
+              onValueChange={id => onUpdateSeries(activeSeries.path, null, null, id === "__none__" ? null : id)}
+              options={[{ value: "__none__", label: "— Không gắn flow —" }, ...flows.map(f => ({ value: f.id, label: f.name }))]}
+            />
+          </Field>
+        </div>
+      )}
 
       <div className="project-detail-actions">
         <Button onClick={onNewVideo}><Plus className="h-4 w-4" /> Tạo video mới</Button>
@@ -2438,6 +2474,226 @@ function SettingSection({ title, icon: Icon, children }) {
 
 function Field({ label, children }) {
   return <label className="block min-w-0"><span className="mb-1.5 block text-[12px] font-medium text-zinc-500">{label}</span>{children}</label>
+}
+
+function FlowsModal({ open, onClose, flows, onCreate, onUpdate, onDelete }) {
+  const [selectedId, setSelectedId] = useState(null)
+  const [selectedStepIdx, setSelectedStepIdx] = useState(0)
+  const [isNew, setIsNew] = useState(false)
+  const [editName, setEditName] = useState("")
+  const [editDesc, setEditDesc] = useState("")
+  const [editSteps, setEditSteps] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+
+  const selectedFlow = flows.find(f => f.id === selectedId) || null
+
+  useEffect(() => {
+    if (open && !selectedId && !isNew && flows.length > 0) {
+      selectFlow(flows[0].id)
+    }
+  }, [open, flows])
+
+  function selectFlow(id) {
+    const flow = flows.find(f => f.id === id)
+    if (!flow) return
+    setSelectedId(id)
+    setIsNew(false)
+    setEditName(flow.name)
+    setEditDesc(flow.description || "")
+    setEditSteps(flow.steps ? [...flow.steps] : [])
+    setSelectedStepIdx(0)
+  }
+
+  function startNew() {
+    setSelectedId(null)
+    setIsNew(true)
+    setEditName("")
+    setEditDesc("")
+    setEditSteps([...defaultSteps])
+    setSelectedStepIdx(0)
+  }
+
+  async function save() {
+    if (!editName.trim()) return
+    setBusy(true)
+    try {
+      if (isNew) {
+        const flow = await onCreate(editName.trim(), editDesc.trim(), editSteps)
+        setSelectedId(flow.id)
+        setIsNew(false)
+      } else {
+        await onUpdate(selectedId, { name: editName.trim(), description: editDesc.trim(), steps: editSteps })
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(id) {
+    setBusy(true)
+    try {
+      await onDelete(id)
+      setConfirmDeleteId(null)
+      const next = flows.find(f => f.id !== id)
+      if (next) selectFlow(next.id)
+      else { setSelectedId(null); setIsNew(false) }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const updateStep = (idx, patch) => setEditSteps(steps => steps.map((s, i) => i === idx ? { ...s, ...patch } : s))
+  const addStep = () => {
+    const newIdx = editSteps.length
+    setEditSteps(steps => [...steps, { name: "Bước mới", prompt: "", enabled: true }])
+    setSelectedStepIdx(newIdx)
+  }
+  const removeStep = (idx) => {
+    setEditSteps(steps => steps.filter((_, i) => i !== idx))
+    setSelectedStepIdx(prev => Math.max(0, Math.min(prev, editSteps.length - 2)))
+  }
+  const moveStep = (idx, dir) => {
+    const target = idx + dir
+    if (target < 0 || target >= editSteps.length) return
+    setEditSteps(steps => { const next = [...steps]; ;[next[idx], next[target]] = [next[target], next[idx]]; return next })
+    setSelectedStepIdx(target)
+  }
+
+  const currentStep = editSteps[selectedStepIdx] ?? null
+  const hasEditor = selectedFlow || isNew
+
+  if (!open) return null
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box flows-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <div className="flex items-center gap-2"><Layers className="h-4 w-4 text-violet-400" /><h2>Kho Flow</h2></div>
+          <button className="modal-close" onClick={onClose}><X className="h-4 w-4" /></button>
+        </div>
+        <div className="flows-modal-layout">
+
+          {/* Pane 1: Flow library list */}
+          <div className="flows-list">
+            <div className="flows-list-header">Thư viện flow</div>
+            {flows.map(flow => (
+              <button key={flow.id} className={cn("flow-list-item", selectedId === flow.id && !isNew && "active")} onClick={() => selectFlow(flow.id)}>
+                <span className="flow-list-name">{flow.name}</span>
+                <span className="flow-list-meta">{flow.steps?.filter(s => s.enabled !== false).length || 0} bước</span>
+              </button>
+            ))}
+            <button className="flow-list-add" onClick={startNew}><Plus className="h-3.5 w-3.5" /> Tạo flow mới</button>
+          </div>
+
+          {/* Pane 2: Steps of selected flow */}
+          {hasEditor && (
+            <div className="flows-steps-pane">
+              <div className="flow-meta-compact">
+                <input
+                  className="flow-meta-name-input"
+                  value={editName}
+                  onChange={e => setEditName(e.target.value)}
+                  placeholder="Tên flow..."
+                  maxLength={80}
+                />
+                <input
+                  className="flow-meta-desc-input"
+                  value={editDesc}
+                  onChange={e => setEditDesc(e.target.value)}
+                  placeholder="Mô tả ngắn về flow này..."
+                  maxLength={260}
+                />
+              </div>
+              <div className="flows-steps-pane-header">
+                <span className="flows-list-header" style={{padding:0}}>Các bước</span>
+                <button className="flow-add-step-btn" onClick={addStep}><Plus className="h-3.5 w-3.5" /> Thêm</button>
+              </div>
+              <div className="flow-steps-compact-list">
+                {editSteps.length === 0 && (
+                  <div className="flow-steps-empty">Chưa có bước nào</div>
+                )}
+                {editSteps.map((step, idx) => (
+                  <button
+                    key={idx}
+                    className={cn("flow-step-compact-item", idx === selectedStepIdx && "active", step.enabled === false && "off")}
+                    onClick={() => setSelectedStepIdx(idx)}
+                  >
+                    <span className="flow-step-compact-num">{idx + 1}</span>
+                    <span className="flow-step-compact-name">{step.name || "Bước mới"}</span>
+                    {step.enabled === false && <span className="flow-step-compact-off">Tắt</span>}
+                  </button>
+                ))}
+              </div>
+              <div className="flow-editor-actions">
+                {!isNew && selectedFlow && (
+                  confirmDeleteId === selectedId ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-red-400">Xóa flow?</span>
+                      <Button variant="ghost" size="sm" onClick={() => setConfirmDeleteId(null)}>Hủy</Button>
+                      <Button size="sm" onClick={() => remove(selectedId)} disabled={busy}>Xóa</Button>
+                    </div>
+                  ) : (
+                    <button className="flow-delete-btn" onClick={() => setConfirmDeleteId(selectedId)} disabled={busy}><Trash2 className="h-3.5 w-3.5" /></button>
+                  )
+                )}
+                <Button onClick={save} disabled={busy || !editName.trim()}>
+                  {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  {isNew ? "Tạo flow" : "Lưu"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Pane 3: Selected step editor */}
+          <div className="flow-step-editor-pane">
+            {hasEditor && currentStep ? (
+              <>
+                <div className="flow-step-editor-header">
+                  <span className="flows-list-header" style={{padding:0}}>Bước {selectedStepIdx + 1}</span>
+                  <div className="flow-step-editor-controls">
+                    <label className="flow-step-enable-toggle" title="Bật/tắt bước">
+                      <input type="checkbox" checked={currentStep.enabled !== false} onChange={e => updateStep(selectedStepIdx, { enabled: e.target.checked })} />
+                      <span>{currentStep.enabled !== false ? "Bật" : "Tắt"}</span>
+                    </label>
+                    <button onClick={() => moveStep(selectedStepIdx, -1)} disabled={selectedStepIdx === 0} className="flow-step-ctrl-btn" title="Lên"><ChevronUp className="h-3.5 w-3.5" /></button>
+                    <button onClick={() => moveStep(selectedStepIdx, 1)} disabled={selectedStepIdx === editSteps.length - 1} className="flow-step-ctrl-btn" title="Xuống"><ChevronDown className="h-3.5 w-3.5" /></button>
+                    <button onClick={() => removeStep(selectedStepIdx)} className="flow-step-ctrl-btn danger" title="Xóa bước"><Trash2 className="h-3.5 w-3.5" /></button>
+                  </div>
+                </div>
+                <div className="flow-step-editor-body">
+                  <label className="flow-step-field-label">Tên bước</label>
+                  <Input
+                    value={currentStep.name || ""}
+                    onChange={e => updateStep(selectedStepIdx, { name: e.target.value })}
+                    placeholder="Tên bước..."
+                    className="mb-3"
+                  />
+                  <label className="flow-step-field-label">Prompt AI</label>
+                  <Textarea
+                    value={currentStep.prompt || ""}
+                    onChange={e => updateStep(selectedStepIdx, { prompt: e.target.value })}
+                    placeholder="Nhập prompt cho AI ở bước này..."
+                    className="flow-step-prompt-full"
+                  />
+                </div>
+              </>
+            ) : hasEditor ? (
+              <div className="flow-editor-empty">
+                <p>Chọn một bước từ danh sách<br />hoặc bấm "Thêm" để tạo bước mới</p>
+              </div>
+            ) : (
+              <div className="flow-editor-empty">
+                <Layers className="h-10 w-10 text-zinc-700" />
+                <p>Chọn một flow để chỉnh sửa<br />hoặc tạo flow mới</p>
+              </div>
+            )}
+          </div>
+
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export default App
