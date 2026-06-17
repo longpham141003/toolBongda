@@ -984,3 +984,24 @@ class TestPromptAnalysisEndpoint:
     def test_save_prompt_analysis_requires_project(self, client):
         r = client.post("/api/prompt-analysis", json={"analysis": {}})
         assert r.status_code == 400
+
+
+class TestPromptSearchEndpoint:
+    def test_prompt_search_requires_project(self):
+        ws.runtime.current_project = None
+        client = TestClient(ws.app)
+        resp = client.post("/api/prompt-search")
+        assert resp.status_code == 400  # require_project → HTTPException
+
+    def test_prompt_search_starts_job(self, tmp_path, monkeypatch):
+        project = tmp_path / "proj"
+        (project / "scripts").mkdir(parents=True)
+        (project / "scripts" / "script_final.txt").write_text("x", encoding="utf-8")
+        ws.runtime.current_project = project
+        monkeypatch.setattr(ws, "apply_prompt_keywords", lambda p, s, log=None: [])
+        monkeypatch.setattr(ws, "_search_assets_parallel", lambda p, items, s, job, **k: items)
+        monkeypatch.setattr(ws, "load_manifest", lambda p: [])
+        client = TestClient(ws.app)
+        resp = client.post("/api/prompt-search")
+        assert resp.status_code == 200
+        assert resp.json().get("job")

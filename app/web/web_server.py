@@ -33,7 +33,7 @@ from ..voice.text_to_voice_queue import (
     warm_kokoro_server,
 )
 from ..voice.text_to_voice_cli import build_srt_from_segments
-from ..pipeline.prompt_studio import analyze_story, generate_line_prompts, load_prompt_analysis, save_prompt_analysis
+from ..pipeline.prompt_studio import analyze_story, apply_prompt_keywords, generate_line_prompts, load_prompt_analysis, save_prompt_analysis
 from ..pipeline.subtitle_store import load_subtitle, save_subtitle
 from ..pipeline.visual_pipeline import (
     _concise_match_query,
@@ -1736,6 +1736,29 @@ def search_all() -> dict[str, Any]:
         return {"items": items, "project": _project_payload(project)}
 
     return {"job": runtime.start_job("B3 Tim anh", task).payload()}
+
+
+@app.post("/api/prompt-search")
+def prompt_search() -> dict[str, Any]:
+    project = runtime.require_project()
+    settings = load_settings()
+
+    def task(job: Job) -> dict[str, Any]:
+        job.current_label = "Đang tạo keyword từ prompt"
+        if job.cancel_requested:
+            raise RuntimeError("Stopped.")
+        apply_prompt_keywords(project, settings, log=job.log)
+        items = load_manifest(project)
+        job.determinate = True
+        job.total_units = len(items)
+        job.current_label = "Đang tìm ảnh theo keyword"
+        items = _search_assets_parallel(project, items, settings, job)
+        job.completed_units = job.total_units
+        job.progress = 100
+        job.current_label = "Đã tìm ảnh xong"
+        return {"items": items, "project": _project_payload(project)}
+
+    return {"job": runtime.start_job("B3 Tao keyword va tim anh", task).payload()}
 
 
 @app.post("/api/assets/{asset_id}/retry")
