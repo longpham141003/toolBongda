@@ -11,6 +11,17 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.pipeline.subtitle_store import load_subtitle
+
+
+def _ai_call(settings: dict, prompt: str) -> str:
+    """Single AI call returning raw text. Imported lazily to avoid import cycle."""
+    from app.pipeline.visual_pipeline import _pack_ai_caller
+    caller = _pack_ai_caller(settings)
+    if caller is None:
+        raise RuntimeError("Chưa cấu hình AI (thiếu API key) để tạo prompt.")
+    return caller(prompt)
+
 REALISTIC_TAG = "Natural lighting, candid real-life photograph, true-to-life, no text, no captions, no watermark."
 
 # Crude policy-word softening (ported from Auto Prompt's sanitize step).
@@ -96,3 +107,51 @@ def load_prompt_analysis(project: Path) -> dict:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+SYS_ANALYZE = (
+    "You are a story analyst for REAL-LIFE stock photography. Read the numbered "
+    "subtitle lines and return ONLY raw JSON (no markdown, no backticks) with this "
+    "exact shape:\n"
+    "{\n"
+    '  "language": "English or Vietnamese",\n'
+    '  "storyContext": "4-5 sentence plain summary of plot, setting, key events",\n'
+    '  "mainSetting": "primary real-world location",\n'
+    '  "tone": "everyday/tense/heartwarming/etc",\n'
+    '  "characters": [{"name": "name exactly as in text; invent a fitting realistic '
+    'name if unnamed", "role": "their role in 4-6 words", "description": "REAL-LIFE '
+    "UPPER-BODY appearance only: [ethnicity+nationality] [gender], [age bracket], "
+    "[build], [skin tone], [hair: color+length+style], [everyday TOP clothing only — "
+    'no cinematic styling, no pants, no shoes]"}],\n'
+    '  "sceneMap": [{"startLine": N, "endLine": N, "location": "specific real place", '
+    '"timeOfDay": "time + natural light", "sceneSummary": "one plain sentence of the '
+    'action", "charactersPresent": ["Name"], "characterPositions": {"Name": "where"}, '
+    '"spatialLayout": "describe the real space", "crowdNotes": "background people if any"}]\n'
+    "}\n"
+    "RULES: Extract EVERY character who physically appears; description is upper-body, "
+    "real-life, everyday clothing (no film/cinematic styling). For children use 'young "
+    "boy'/'young girl'. sceneMap MUST have one entry per subtitle line (startLine == "
+    "endLine == that line's number), covering all lines with no gaps."
+)
+
+
+def analyze_story(project: Path, settings: dict, log=None) -> dict:
+    lines = load_subtitle(project)
+    if not lines:
+        raise RuntimeError("Chưa có phụ đề. Hãy tạo & lưu phụ đề ở Bước 1 trước khi phân tích.")
+    if callable(log):
+        log(f"Phân tích {len(lines)} dòng phụ đề để dựng bối cảnh & nhân vật...")
+    numbered = build_numbered_srt(lines)
+    prompt = f"{SYS_ANALYZE}\n\nNumbered subtitle lines ({len(lines)} total):\n{numbered}"
+    raw = _ai_call(settings, prompt)
+    try:
+        data = parse_json_block(raw)
+    except Exception as exc:
+        raise RuntimeError(f"AI phân tích trả về JSON không hợp lệ: {exc}")
+    if not isinstance(data, dict):
+        raise RuntimeError("AI phân tích không trả về object JSON.")
+    data.setdefault("characters", [])
+    data.setdefault("sceneMap", [])
+    if callable(log):
+        log(f"Đã nhận {len(data.get('characters') or [])} nhân vật từ AI.")
+    return save_prompt_analysis(project, data)
