@@ -22,6 +22,7 @@ from .text_to_voice_cli import (
     split_text_into_progress_segments,
     write_srt_file,
 )
+from app.pipeline.subtitle_store import assemble_line_segments
 
 
 KOKORO_LANGUAGE_CODES = {
@@ -513,7 +514,7 @@ def warm_kokoro_server(settings: dict, log: Callable[[str], None] | None = None)
 
 
 class TextToVoiceRunner:
-    def __init__(self, settings: dict, log: Callable[[str], None], stop_check: Callable[[], bool]):
+    def __init__(self, settings: dict, log: Callable[[str], None], stop_check: Callable[[], bool] = lambda: False):
         self.settings = settings
         self.log = log
         self.stop_check = stop_check
@@ -666,6 +667,92 @@ class TextToVoiceRunner:
         self._write_cache_meta(final_path, cache_key)
         self.log(f"Text to Voice {label}: đã lưu audio {final_path.name}{suffix}")
         return str(final_path)
+
+    def _kokoro_audio_for_text(
+        self, text: str, label: str, index: int, total: int, output_path: Path
+    ) -> tuple[Path, float]:
+        requested_language = str(self.settings.get("text_to_voice_language") or "en").lower()
+        language, _warn = normalize_kokoro_language(requested_language)
+        voices = kokoro_voice_choices(self.settings, language)
+        voice = str(self.settings.get("text_to_voice_voice") or "").strip()
+        if voice not in voices:
+            voice = voices[0]
+        self.log(f"Text to Voice {label}: đang tạo đoạn {index}/{total}")
+        result = _kokoro_generate(
+            self.settings,
+            {
+                "text": text,
+                "lang": KOKORO_LANGUAGE_CODES[language],
+                "voice": voice,
+                "speed": float(self.settings.get("text_to_voice_speed") or 1.0),
+                "prefix": "preview" if label == "preview" else "",
+                "delivery": str(self.settings.get("text_to_voice_delivery") or "dramatic"),
+            },
+            timeout_seconds=self._adaptive_timeout_seconds(1),
+        )
+        source_path = Path(str(result.get("path") or ""))
+        if not source_path.exists():
+            raise RuntimeError(f"Kokoro không tạo file: {source_path}")
+        part_path = output_path.with_name(f"{output_path.stem}.part{index:03d}.wav")
+        shutil.copy2(source_path, part_path)
+        return part_path, float(result.get("duration") or 0.0)
+
+    def submit_lines(self, lines: list[dict], label: str, output_path: Path) -> str:
+        if self.root is None or self.python is None:
+            raise RuntimeError("Text to Voice runner chưa start.")
+        output_path = Path(output_path).resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        use_clone = bool(self.settings.get("voice_clone_enabled")) and bool(_clone_reference_path(self.settings))
+        total = len(lines)
+        parts: list[Path] = []
+        durations: list[float] = []
+        try:
+            for i, line in enumerate(lines, start=1):
+                if self.stop_check():
+                    raise RuntimeError("Stopped.")
+                text = str(line.get("text") or "").strip()
+                if use_clone:
+                    part_path, duration = self._clone_audio_for_text(text, label, i, total, output_path)
+                else:
+                    part_path, duration = self._kokoro_audio_for_text(text, label, i, total, output_path)
+                parts.append(part_path)
+                durations.append(duration)
+            if not parts:
+                raise ValueError("Không có dòng phụ đề để tạo voice.")
+            if len(parts) == 1:
+                shutil.copy2(parts[0], output_path)
+                total_duration = durations[0]
+            else:
+                total_duration = combine_wavs(parts, output_path)
+                if total_duration <= 0:
+                    total_duration = _audio_duration_seconds(output_path)
+            segments = assemble_line_segments(lines, durations, 0.25)
+            engine = "magicvoice" if use_clone else "kokoro-server"
+            output_path.with_suffix(".segments.json").write_text(
+                json.dumps(
+                    {
+                        "audio": str(output_path),
+                        "duration": round(float(total_duration), 4),
+                        "sampleRate": 24000,
+                        "lang": str(self.settings.get("text_to_voice_language") or "vi"),
+                        "voice": str(_clone_reference_path(self.settings) or self.settings.get("text_to_voice_voice") or ""),
+                        "speed": float(self.settings.get("text_to_voice_speed") or 1.0),
+                        "delivery": "magicvoice-clone" if use_clone else str(self.settings.get("text_to_voice_delivery") or "dramatic"),
+                        "engine": engine,
+                        "timing_source": "measured",
+                        "segments": segments,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            write_srt_file(output_path.with_suffix(".srt"), segments)
+        finally:
+            for part_path in parts:
+                part_path.unlink(missing_ok=True)
+        self.log(f"Text to Voice {label}: đã lưu audio {output_path.name} ({total} dòng)")
+        return str(output_path)
 
     def _clone_audio_for_text(
         self, text: str, label: str, index: int, total: int, output_path: Path
