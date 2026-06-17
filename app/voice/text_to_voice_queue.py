@@ -797,6 +797,8 @@ class TextToVoiceRunner:
                 ),
                 encoding="utf-8",
             )
+            # output_path ở đây là file tạm (.working.wav) do generate_voice truyền vào;
+            # generate_voice sẽ đổi tên .srt tạm này thành voices/voice.srt.
             write_srt_file(output_path.with_suffix(".srt"), estimated_segments)
         finally:
             for part_path in generated_paths:
