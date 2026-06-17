@@ -20,6 +20,8 @@ from urllib.parse import quote_plus, urlparse
 
 from .text_to_voice_queue import TextToVoiceRunner
 
+from keyword_engine import domain_pack as _dp
+
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".bmp"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -760,11 +762,12 @@ def _is_generic_keyword(value: str, scene_text: str = "") -> bool:
     return False
 
 
-def _local_getty_keywords(scene_text: str) -> list[str]:
+def _local_getty_keywords(scene_text: str, pack=None) -> list[str]:
+    """Build editorial-style local keywords generically from proper nouns in the
+    scene text. No domain literals: extract capitalized phrases, combine the
+    strongest 1-2 with a neutral context word, filtered by _is_generic_keyword."""
     text = str(scene_text or "")
-    lowered = text.lower()
     phrases = _capitalized_phrases(text)
-    has_messi = "messi" in lowered
     result: list[str] = []
 
     def add(value: str) -> None:
@@ -772,27 +775,14 @@ def _local_getty_keywords(scene_text: str) -> list[str]:
         if cleaned and cleaned not in result and not _is_generic_keyword(cleaned, text):
             result.append(cleaned)
 
-    if has_messi:
-        if "rosario" in lowered or "born" in lowered or "young" in lowered:
-            add("Lionel Messi Newell's Old Boys young")
-            add("Lionel Messi Rosario Argentina young")
-        if "child" in lowered or "small" in lowered or "beginning" in lowered:
-            add("Lionel Messi young Newells Old Boys")
-        if "thirteen" in lowered or "academy" in lowered or "spain" in lowered or "barcelona" in lowered:
-            add("Lionel Messi La Masia Barcelona youth")
-        if "dribbl" in lowered or "passing" in lowered or "quick turns" in lowered:
-            add("Lionel Messi Barcelona dribbling")
-        if "defenders" in lowered or "change direction" in lowered:
-            add("Lionel Messi Barcelona dribbles past defender")
-        if "suarez" in lowered:
-            add("Lionel Messi Luis Suarez Barcelona")
-            add("Lionel Messi Luis Suarez celebration")
-        if "antonela" in lowered or "family" in lowered or "sons" in lowered:
-            add("Lionel Messi Antonela Roccuzzo family")
-        if "world cup" in lowered or "2022" in lowered:
-            add("Lionel Messi Argentina World Cup trophy 2022")
-    if not result and phrases:
-        add(" ".join(phrases[:2]))
+    action_hint = _scene_action_hint({"sentence_text": text}, pack)
+    context_word = action_hint or "editorial"
+    if phrases:
+        # Strongest proper-noun phrase + neutral context word.
+        add(" ".join([phrases[0], context_word]))
+        if len(phrases) >= 2:
+            add(" ".join(phrases[:2]))
+            add(" ".join([phrases[0], phrases[1], context_word]))
     return result[:6]
 
 
@@ -834,7 +824,9 @@ def build_asset_manifest(
         ]
     script_path = project / "scripts" / "script_final.txt"
     script = script_path.read_text(encoding="utf-8", errors="replace").strip()
-    assets = _apply_script_visual_context(assets, script)
+    video_context = _load_or_build_video_context(project, script, settings, log=log) if script else _build_local_video_context("")
+    pack = _resolve_pack(script, video_context, settings=settings, project=project, log=log)
+    assets = _apply_script_visual_context(assets, script, video_context, pack)
     manifest_path = project / "assets" / "asset_manifest.json"
     write_json(
         manifest_path,
@@ -1059,28 +1051,20 @@ def _script_context_text(script: str, item: dict | None = None) -> str:
 
 
 def _strip_foreign_context_phrases(query: str, script: str, item: dict) -> str:
+    """DEMOTE (not DELETE) unknown proper nouns.
+
+    Per the domain-pack refactor we stop dropping name-like words that are not in
+    the script/context/subject. Such a name is KEPT (it may be a correct,
+    narrower entity the engine simply did not see in the surrounding text). We
+    still drop stop words and dedupe the query, but proper nouns survive.
+    """
     value = _clean_search_keyword(query)
     if not value:
         return ""
-    context = _script_context_text(script, item).lower()
-    # A name-like word that the AI placed in this item's own main_subject is a
-    # deliberate, more-specific entity (e.g. a stadium/competition spelled
-    # slightly differently than the script). Keep such words even when they are
-    # absent from the script/context so we don't strip a correct, narrower entity.
-    subject_words = set(_ascii_words(str(item.get("main_subject") or "")))
-    keep_action_words = {
-        "action", "match", "goal", "celebration", "touchline", "tackle", "score",
-        "scored", "players", "team", "stadium", "victory", "defeat", "final",
-    }
     kept_words = []
     for word in value.split():
         normalized = re.sub(r"[^A-Za-z0-9-]", "", word).lower()
         if not normalized or normalized in STOP_WORDS:
-            continue
-        ascii_normalized = "".join(_ascii_words(word))
-        in_subject = ascii_normalized in subject_words
-        is_name_like = bool(re.match(r"^[A-Z][A-Za-z'-]+$", word))
-        if is_name_like and normalized not in context and normalized not in keep_action_words and not in_subject:
             continue
         kept_words.append(word)
     cleaned = " ".join(kept_words)
@@ -1169,7 +1153,18 @@ def _build_local_video_context(script: str) -> dict:
     }
 
 
-def _video_context_prompt(script: str) -> str:
+def _forbidden_contexts_text(pack=None) -> str:
+    """Single source of truth for the 'avoid X' list used across prompts.
+    Sourced from the pack's forbidden_contexts; defaults to the generic pack."""
+    if pack is None:
+        pack = _dp.load_generic_pack()
+    items = _dp.forbidden_for(pack)
+    if not items:
+        items = _dp.forbidden_for(_dp.load_generic_pack())
+    return ", ".join(items)
+
+
+def _video_context_prompt(script: str, pack=None) -> str:
     return (
         "You are preparing image-search context for a video production tool.\n"
         "Read the FULL SCRIPT carefully and infer the real topic, domain, entities, and strict visual boundaries.\n"
@@ -1187,7 +1182,7 @@ def _video_context_prompt(script: str) -> str:
         "- If match teams are known, include exactly those teams.\n"
         "- Do not invent people, countries, clubs, places, competitions, or storylines not present in the script.\n"
         "- visual_boundaries must tell downstream keyword generation what is allowed.\n"
-        "- forbidden_contexts must list what image directions should be blocked.\n"
+        f"- forbidden_contexts must list what image directions should be blocked; always include: {_forbidden_contexts_text(pack)}.\n"
         "- Write video_topic, entities, and all output values in English (use international English spellings), even if the script is in another language.\n\n"
         f"FULL SCRIPT:\n{script}"
     )
@@ -1230,6 +1225,102 @@ def _resolve_keyword_provider(settings: dict | None) -> tuple[str, str, str]:
     if provider == "gemini":
         return provider, gemini_key, str(settings.get("gemini_keyword_model") or "gemini-2.5-flash")
     return provider, "", ""
+
+
+def _pack_ai_caller(settings: dict | None):
+    """Return a callable (prompt:str)->str dispatching to the configured AI
+    provider, reusing the existing request helpers. Returns None when no
+    provider/key is configured so the synthetic-pack tier is skipped."""
+    provider, api_key, model = _resolve_keyword_provider(settings)
+    if not provider or not api_key:
+        return None
+
+    def _call(prompt: str) -> str:
+        try:
+            if provider == "kiro":
+                return _call_openai_compatible_json(
+                    provider="kiro",
+                    api_key=api_key,
+                    base_url=_kiro_api_base(settings),
+                    model=model,
+                    system="Return strict JSON only.",
+                    prompt=prompt,
+                    max_tokens=1200,
+                    temperature=0.1,
+                )
+            if provider == "openai":
+                return _call_openai_compatible_json(
+                    provider="openai",
+                    api_key=api_key,
+                    base_url="https://api.openai.com/v1",
+                    model=model,
+                    system="Return strict JSON only.",
+                    prompt=prompt,
+                    max_tokens=1200,
+                    temperature=0.1,
+                )
+            if provider == "claude":
+                return _call_anthropic_compatible_json(
+                    provider="claude",
+                    api_key=api_key,
+                    base_url="https://api.anthropic.com",
+                    model=model,
+                    system="Return strict JSON only.",
+                    prompt=prompt,
+                    max_tokens=1200,
+                    temperature=0.1,
+                )
+            if provider == "gemini":
+                return _gemini_raw_text(api_key, model, prompt)
+        except Exception:
+            return ""
+        return ""
+
+    return _call
+
+
+def _gemini_raw_text(api_key: str, model: str, prompt: str) -> str:
+    """Send a raw prompt to Gemini and return the text (reuses the request
+    pattern from _call_video_context_ai_gemini)."""
+    import requests
+
+    if _AI_PROVIDER_PAUSE_UNTIL.get("gemini", 0.0) and time.time() < _AI_PROVIDER_PAUSE_UNTIL.get("gemini", 0.0):
+        raise RuntimeError("Gemini đang tạm nghỉ vì hết quota.")
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "responseMimeType": "application/json",
+        },
+    }
+    response = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+        json=payload,
+        timeout=90,
+    )
+    if response.status_code >= 400:
+        if response.status_code == 429:
+            _AI_PROVIDER_PAUSE_UNTIL["gemini"] = time.time() + 900
+        raise RuntimeError(f"Gemini API lỗi {response.status_code}: {response.text[-600:]}")
+    data = response.json()
+    candidates = data.get("candidates") or []
+    if not candidates:
+        return ""
+    parts = ((candidates[0].get("content") or {}).get("parts") or [])
+    return "".join(str(part.get("text") or "") for part in parts)
+
+
+def _resolve_pack(script, video_context, settings=None, project=None, log=None):
+    """Single domain-pack resolution point used across the generation flow."""
+    return _dp.resolve_domain_pack(
+        script,
+        video_context,
+        settings=settings,
+        project=project,
+        ai_caller=_pack_ai_caller(settings),
+        log=log,
+    )
 
 
 def _parse_video_context_json(content: str) -> dict:
@@ -1643,9 +1734,11 @@ def _diversify_scene_keywords(items: list[dict]) -> list[dict]:
     return items
 
 
-def _apply_script_visual_context(items: list[dict], script: str, video_context: dict | None = None) -> list[dict]:
+def _apply_script_visual_context(items: list[dict], script: str, video_context: dict | None = None, pack=None) -> list[dict]:
     script = str(script or "")
     video_context = video_context or _build_local_video_context(script)
+    if pack is None:
+        pack = _resolve_pack(script, video_context)
     teams = [str(value).strip() for value in video_context.get("match_teams") or _infer_match_teams(script) if str(value).strip()]
     script_lower = script.lower()
     football_context = _is_football_script(script)
@@ -1706,8 +1799,31 @@ def _apply_script_visual_context(items: list[dict], script: str, video_context: 
                 stable_match_query = _concise_match_query(_dedupe_query_parts(local_teams[0], local_teams[1], "match action"), item)
                 if stable_match_query and stable_match_query not in sanitized:
                     sanitized.append(stable_match_query)
+            # Source routing decided by the pack (route_source), not hardcoded
+            # football branches. The football pack keeps match_moment/tactical on
+            # editorial photography and portrait/celebration on thesportsdb, so
+            # this preserves existing football behavior while generalizing.
+            scene_type, entity_type = _scene_type_and_entity(item, local_teams, pack)
+            event_tag = _extract_year_competition(script)
+            year = next((tok for tok in event_tag.split() if tok.isdigit()), "")
+            route = _dp.route_source(
+                entity_type,
+                scene_type,
+                pack,
+                slots={
+                    "video_year": year,
+                    "competition_year": year,
+                    "year": year,
+                },
+            )
+            # Keep visual_source_type as match_photography so the download path
+            # (_is_match_photography_item) is unchanged for football; route_source
+            # only DECIDES whether sportsdb_queries get populated vs left empty.
             item["visual_source_type"] = "match_photography"
-            item["sportsdb_queries"] = []
+            if route.source == "thesportsdb":
+                item["sportsdb_queries"] = [value for value in sanitized[:4] if value]
+            else:
+                item["sportsdb_queries"] = []
             if not sanitized:
                 subject, action = _scene_match_action(item, local_teams)
                 # Derive the fallback generically from the scene/teams instead of
@@ -1730,7 +1846,7 @@ def _apply_script_visual_context(items: list[dict], script: str, video_context: 
                         parts.insert(1, local_teams[0])
                 sanitized.append(_clean_search_keyword(" ".join(part for part in parts if part)))
         if not sanitized:
-            sanitized.extend(_fallback_scene_keywords(item, script, video_context))
+            sanitized.extend(_fallback_scene_keywords(item, script, video_context, pack))
         if sanitized:
             item["keyword"] = sanitized[0]
             item["ai_search_keyword"] = sanitized[0]
@@ -1850,7 +1966,9 @@ def _scene_prompt(
     sentences: list[dict],
     min_seconds: float,
     target_max_seconds: float,
+    pack=None,
 ) -> str:
+    forbidden = _forbidden_contexts_text(pack)
     return (
         "You are a professional video editor and visual researcher.\n"
         "Read the full script and every timed SRT sentence before deciding scene boundaries.\n"
@@ -1871,13 +1989,13 @@ def _scene_prompt(
         "location_change, time_change, action_change, or continuation. First scene uses opening.\n"
         "- main_subject names the exact visible person/team/place/object.\n"
         "- action_context describes the visible action, event, location, and useful date/competition context.\n"
-        "- This tool needs real useful visual assets, not thumbnails, title cards, posters, graphics, wallpapers, logos, or unrelated generic images.\n"
+        f"- This tool needs real useful visual assets. Avoid: {forbidden}, and any unrelated generic images.\n"
         "- For narration about a specific sports match, visual_source_type should be match_photography and visuals must stay inside that same match.\n"
         "- For non-sports narration, choose the appropriate visual_source_type and never invent sports teams/events.\n"
         "- search_keyword is a short 4-8 word Google Images query.\n"
         "- Every sports match query must include both teams/opponents when known and use a visible match moment: match action, "
         "goal, celebration, tackle, substitution, coach touchline, players after final whistle.\n"
-        "- For football narration, never use national flags, federation logos, team badges, generic emblems, title graphics, or wallpaper as scene visuals.\n"
+        f"- For football narration, never use these as scene visuals: {forbidden}, national flags, federation logos, team badges.\n"
         "- Never introduce named people, countries, teams, places, or events that do not appear in the full script or scene.\n"
         "- Avoid abstract/generic queries such as football player, greatest player, famous team, sports scene.\n"
         "- Return 3-5 specific fallback_keywords.\n"
@@ -2293,6 +2411,7 @@ def optimize_asset_keywords_with_ai(
     script_path = project / "scripts" / "script_final.txt"
     script = script_path.read_text(encoding="utf-8", errors="replace").strip() if script_path.exists() else ""
     video_context = _load_or_build_video_context(project, script, settings, log=log) if script else _build_local_video_context("")
+    pack = _resolve_pack(script, video_context, settings=settings, project=project, log=log)
     if callable(log) and script:
         topic = str(video_context.get("video_topic") or "").strip()
         teams = ", ".join(str(value) for value in video_context.get("match_teams") or [] if str(value).strip())
@@ -2303,7 +2422,7 @@ def optimize_asset_keywords_with_ai(
             log("AI keyword: chưa có API key, dùng keyword local.")
         items = load_manifest(project)
         if script:
-            items = _apply_script_visual_context(items, script, video_context)
+            items = _apply_script_visual_context(items, script, video_context, pack)
             save_manifest(project, items)
         return items
 
@@ -2311,7 +2430,7 @@ def optimize_asset_keywords_with_ai(
     if not items:
         return items
     if script:
-        items = _apply_script_visual_context(items, script, video_context)
+        items = _apply_script_visual_context(items, script, video_context, pack)
     for item in items:
         item.setdefault("keyword_local", item.get("keyword") or "")
     global_context = _global_visual_context(script)
@@ -2366,15 +2485,16 @@ def optimize_asset_keywords_with_ai(
             row = by_id.get(str(item.get("asset_id") or ""))
             if not row:
                 continue
-            _apply_keyword_ai_row(item, row, provider, script, video_context)
+            _apply_keyword_ai_row(item, row, provider, script, video_context, pack)
     if script:
-        items = _apply_script_visual_context(items, script, video_context)
+        items = _apply_script_visual_context(items, script, video_context, pack)
     save_manifest(project, items)
     return items
 
 
-def _keyword_prompt(scenes: list[dict], script: str = "") -> str:
+def _keyword_prompt(scenes: list[dict], script: str = "", pack=None) -> str:
     video_context = _build_local_video_context(script)
+    forbidden = _forbidden_contexts_text(pack)
     prompt = (
         "You create visual asset search plans for a video production tool.\n"
         f"GLOBAL TOPIC LOCK: {_global_visual_context(script)}\n"
@@ -2395,7 +2515,7 @@ def _keyword_prompt(scenes: list[dict], script: str = "") -> str:
         "- For football scripts, every query must stay around the football topic, the named national teams, named players, match preparation, match action, celebration, coaching, or tournament context.\n"
         "- For football scripts, do not use SportsDB logo/badge/flag-style visuals as scene assets; prefer Google match/team/player photography.\n"
         "- If the script is not sports, do not invent sports terms or sports sources.\n"
-        "- Never request thumbnails, posters, title cards, wallpapers, logos, badges, collages, or unrelated generic images unless the scene specifically asks for them.\n"
+        f"- Never request these unless the scene specifically asks for them: {forbidden}, collages, or unrelated generic images.\n"
         "- Bad: football player, soccer, sports, famous, real life action scene, dramatic background.\n"
         "- Good examples depend on context: Lionel Messi Argentina World Cup trophy 2022; NASA Artemis moon rocket launch; Roman Empire marble statue; iPhone factory assembly line.\n"
         "- Do not include abstract filler words like known, considered, important, history, famous, editorial photo, real life, visible context.\n"
@@ -2569,28 +2689,54 @@ def _scene_entities(item: dict) -> list[str]:
     return cleaned[:8]
 
 
-def _scene_action_hint(item: dict) -> str:
+def _scene_action_hint(item: dict, pack=None) -> str:
+    """Resolve a short visual action descriptor from the scene text.
+
+    Domain knowledge lives in the pack's action_lexicon (consumed via
+    _dp.resolve_action); when no pack matches, fall back to a neutral generic
+    descriptor derived from the text, or "" when nothing is obvious."""
     text = " ".join(
         str(item.get(key) or "")
         for key in ("action_context", "visual_intent", "sentence_text")
-    ).lower()
-    if any(term in text for term in ("right wing", "right flank", "cross", "căng ngang", "cang ngang")):
-        return "right wing cross"
-    if any(term in text for term in ("left wing", "left flank")):
-        return "wing attack"
-    if any(term in text for term in ("celebrat", "goal", "scor", "finish", "equaliz", "winner")):
-        return "players celebrating"
-    if any(term in text for term in ("coach", "touchline", "manager", "bench")):
-        return "coach touchline"
-    if any(term in text for term in ("press", "duel", "under pressure", "physical", "wins the ball", "tackle", "tranh chấp", "cuop duoc bong", "cướp được bóng")):
-        return "pressing duel"
-    if any(term in text for term in ("midfield", "short passes", "possession", "control the midfield", "tempo")):
-        return "midfield control"
-    if any(term in text for term in ("defend", "block", "attack", "counter", "dribbl", "pass", "control")):
-        return "match action"
-    if any(term in text for term in ("crowd", "fans", "supporters", "stadium atmosphere")):
-        return "crowd atmosphere"
-    return "match action"
+    ).strip()
+    if pack is not None:
+        hint = _dp.resolve_action(text, pack)
+        if hint:
+            return hint
+    # Generic neutral fallback: derive a 1-2 word action from obvious English
+    # cues in the text; otherwise return empty (no domain assumptions).
+    lowered = text.lower()
+    generic_cues = (
+        ("celebrat", "celebration"),
+        ("speech", "speaking"),
+        ("interview", "interview"),
+        ("crowd", "crowd"),
+        ("walk", "walking"),
+        ("meeting", "meeting"),
+    )
+    for needle, descriptor in generic_cues:
+        if needle in lowered:
+            return descriptor
+    return ""
+
+
+def _scene_type_and_entity(item: dict, teams: list[str], pack=None) -> tuple[str, str]:
+    """Map a scene to a (scene_type, entity_type) pair generically, used for
+    pack-driven source routing. Keep this mapping small and domain-neutral."""
+    action_hint = _scene_action_hint(item, pack).lower()
+    main_subject = str(item.get("main_subject") or "").strip()
+    has_named_subject = bool(main_subject) and not _is_generic_visual_subject(main_subject, teams)
+    two_teams = len(teams) == 2
+    entity_type = "team" if (two_teams and not has_named_subject) else ("player" if has_named_subject else "team")
+    if "celebrat" in action_hint:
+        scene_type = "celebration"
+    elif two_teams:
+        scene_type = "match_moment"
+    elif has_named_subject:
+        scene_type = "portrait"
+    else:
+        scene_type = "general"
+    return scene_type, entity_type
 
 
 def _is_generic_visual_subject(subject: str, teams: list[str] | None = None) -> bool:
@@ -2648,10 +2794,10 @@ def _lock_scene_named_subject(item: dict, script: str, video_context: dict | Non
     return current or (candidates[0] if candidates else "")
 
 
-def _scene_primary_query(item: dict, script: str, video_context: dict | None = None) -> str:
+def _scene_primary_query(item: dict, script: str, video_context: dict | None = None, pack=None) -> str:
     teams = [str(value).strip() for value in item.get("match_teams") or (video_context or {}).get("match_teams") or _infer_match_teams(script) if str(value).strip()]
     subject = _lock_scene_named_subject(item, script, video_context)
-    action_hint = _scene_action_hint(item)
+    action_hint = _scene_action_hint(item, pack)
     if subject and not _is_generic_visual_subject(subject, teams):
         if len(teams) == 2:
             return _concise_match_query(_dedupe_query_parts(subject, teams[0], teams[1], action_hint), item)
@@ -2661,16 +2807,16 @@ def _scene_primary_query(item: dict, script: str, video_context: dict | None = N
     return ""
 
 
-def _fallback_scene_keywords(item: dict, script: str, video_context: dict | None = None) -> list[str]:
+def _fallback_scene_keywords(item: dict, script: str, video_context: dict | None = None, pack=None) -> list[str]:
     video_context = video_context or {}
     match_teams = [str(value).strip() for value in item.get("match_teams") or video_context.get("match_teams") or [] if str(value).strip()]
     match_teams = list(dict.fromkeys(match_teams))[:2]
-    primary_query = _scene_primary_query(item, script, video_context)
+    primary_query = _scene_primary_query(item, script, video_context, pack)
     entities = _scene_entities(item)
     main_subject = str(item.get("main_subject") or "").strip()
     if main_subject and main_subject not in entities:
         entities.insert(0, main_subject)
-    action_hint = _scene_action_hint(item)
+    action_hint = _scene_action_hint(item, pack)
     candidates: list[str] = []
 
     def add_candidate(*parts: str) -> None:
@@ -2684,17 +2830,11 @@ def _fallback_scene_keywords(item: dict, script: str, video_context: dict | None
     if primary_query:
         add_candidate(primary_query)
     if len(match_teams) == 2:
+        # Two subject entities + a (pack-resolved) action descriptor. The action
+        # is generic now — no hardcoded football action strings.
         if main_subject and main_subject.lower() not in {team.lower() for team in match_teams}:
             add_candidate(main_subject, match_teams[0], match_teams[1], action_hint)
         add_candidate(match_teams[0], match_teams[1], action_hint)
-        if action_hint == "players celebrating":
-            add_candidate(match_teams[0], match_teams[1], "players celebrating")
-        elif action_hint == "coach touchline":
-            add_candidate(main_subject or "coach", match_teams[0], match_teams[1], "touchline")
-        elif action_hint == "crowd atmosphere":
-            add_candidate(match_teams[0], match_teams[1], "fans stadium")
-        else:
-            add_candidate(match_teams[0], match_teams[1], action_hint)
     else:
         seed_entities = entities[:2] or list(video_context.get("main_entities") or [])[:2]
         for entity in seed_entities:
@@ -2702,10 +2842,33 @@ def _fallback_scene_keywords(item: dict, script: str, video_context: dict | None
         topic = str(video_context.get("video_topic") or "").strip()
         if topic:
             add_candidate(topic, action_hint)
+    if not candidates and pack is not None:
+        # Last resort: pack-driven safe fallback templates so a new domain still
+        # gets a non-empty, on-topic, slot-filled keyword.
+        event_tag = _extract_year_competition(script)
+        year = next((tok for tok in event_tag.split() if tok.isdigit()), "")
+        competition = event_tag.replace(year, "").strip() if year else event_tag
+        subject = (
+            main_subject
+            or (entities[0] if entities else "")
+            or str(video_context.get("video_topic") or "").strip()
+        )
+        slots = {
+            "subject": subject,
+            "topic": str(video_context.get("video_topic") or "").strip(),
+            "year": year,
+            "competition": competition,
+            "team": match_teams[0] if match_teams else "",
+            "venue": str(item.get("venue") or "").strip(),
+        }
+        for value in _dp.safe_fallback(slots, pack):
+            cleaned = _clean_search_keyword(value)
+            if cleaned and cleaned not in candidates:
+                candidates.append(cleaned)
     return candidates[:6]
 
 
-def _score_scene_query(query: str, item: dict, script: str, video_context: dict | None = None) -> int:
+def _score_scene_query(query: str, item: dict, script: str, video_context: dict | None = None, pack=None) -> int:
     query_words = set(_ascii_words(query))
     if not query_words:
         return -999
@@ -2735,19 +2898,12 @@ def _score_scene_query(query: str, item: dict, script: str, video_context: dict 
         score += 18 * team_hits
         if team_hits == 0:
             score -= 40
-    action_hint = _scene_action_hint(item)
-    if action_hint == "players celebrating" and ({"goal", "celebration", "celebrating", "players"} & query_words):
+    # Generic action bonus: any word of the (pack-resolved) action descriptor
+    # that also appears in the query earns a small bonus.
+    action_hint = _scene_action_hint(item, pack)
+    action_words = set(_ascii_words(action_hint)) - STOP_WORDS
+    if action_words and (action_words & query_words):
         score += 12
-    elif action_hint == "coach touchline" and ({"coach", "touchline", "bench"} & query_words):
-        score += 12
-    elif action_hint == "crowd atmosphere" and ({"fans", "crowd", "stadium"} & query_words):
-        score += 12
-    elif action_hint == "pressing duel" and ({"pressing", "pressure", "duel", "duels"} & query_words):
-        score += 12
-    elif action_hint == "midfield control" and ({"midfield", "control", "possession", "passing"} & query_words):
-        score += 12
-    elif action_hint == "match action" and ({"action", "match", "midfield", "attack", "defense", "defence", "dribbling", "passing"} & query_words):
-        score += 10
     if _is_generic_keyword(query, sentence_text):
         score -= 35
     if len(query_words) < 3:
@@ -2777,16 +2933,18 @@ def _sanitize_ai_query_for_context(value: str, item: dict, script: str, video_co
     return cleaned
 
 
-def _apply_keyword_ai_row(item: dict, row: dict, provider: str, script: str = "", video_context: dict | None = None) -> dict:
+def _apply_keyword_ai_row(item: dict, row: dict, provider: str, script: str = "", video_context: dict | None = None, pack=None) -> dict:
+    if pack is None:
+        pack = _resolve_pack(script, video_context)
     item["visual_intent"] = str(row.get("visual_intent") or item.get("visual_intent") or "").strip()
     item["main_subject"] = str(row.get("main_subject") or item.get("main_subject") or "").strip()
     item["action_context"] = str(row.get("action_context") or item.get("action_context") or "").strip()
     if isinstance(video_context, dict):
         item["video_topic"] = str(video_context.get("video_topic") or item.get("video_topic") or "").strip()
         item["video_domain"] = str(video_context.get("video_domain") or item.get("video_domain") or "").strip()
-    primary_query = _scene_primary_query(item, script, video_context)
-    local_keywords = _local_getty_keywords(str(item.get("sentence_text") or ""))
-    fallback_context_keywords = _fallback_scene_keywords(item, script, video_context)
+    primary_query = _scene_primary_query(item, script, video_context, pack)
+    local_keywords = _local_getty_keywords(str(item.get("sentence_text") or ""), pack)
+    fallback_context_keywords = _fallback_scene_keywords(item, script, video_context, pack)
     search_keyword = _sanitize_ai_query_for_context(str(row.get("search_keyword") or "").strip(), item, script, video_context)
     fallbacks = row.get("fallback_keywords") if isinstance(row.get("fallback_keywords"), list) else []
     fallbacks = [_sanitize_ai_query_for_context(str(value).strip(), item, script, video_context) for value in fallbacks if str(value).strip()]
@@ -2804,7 +2962,7 @@ def _apply_keyword_ai_row(item: dict, row: dict, provider: str, script: str = ""
             merged_fallbacks.append(value)
     ranked_queries = [value for value in [search_keyword, *merged_fallbacks] if value]
     ranked_queries = list(dict.fromkeys(ranked_queries))
-    ranked_queries.sort(key=lambda value: _score_scene_query(value, item, script, video_context), reverse=True)
+    ranked_queries.sort(key=lambda value: _score_scene_query(value, item, script, video_context, pack), reverse=True)
     search_keyword = ranked_queries[0] if ranked_queries else ""
     merged_fallbacks = [value for value in ranked_queries[1:] if value != search_keyword]
     if search_keyword:
@@ -2821,7 +2979,7 @@ def _apply_keyword_ai_row(item: dict, row: dict, provider: str, script: str = ""
     if not item["google_queries"]:
         item["google_queries"] = [value for value in [search_keyword, *merged_fallbacks] if value][:4]
     item["google_queries"] = list(dict.fromkeys(item["google_queries"]))
-    item["google_queries"].sort(key=lambda value: _score_scene_query(value, item, script, video_context), reverse=True)
+    item["google_queries"].sort(key=lambda value: _score_scene_query(value, item, script, video_context, pack), reverse=True)
     item["sportsdb_queries"] = list(dict.fromkeys(item["sportsdb_queries"]))
     item["keyword_source"] = provider
     item["keyword_ai_scene_refreshed"] = True
@@ -2841,6 +2999,7 @@ def refresh_asset_keyword_with_ai(
     script_path = project / "scripts" / "script_final.txt"
     script = script_path.read_text(encoding="utf-8", errors="replace").strip() if script_path.exists() else ""
     video_context = _load_or_build_video_context(project, script, settings, log=log) if script else _build_local_video_context("")
+    pack = _resolve_pack(script, video_context, settings=settings, project=project, log=log)
     payload = [
         {
             "asset_id": item.get("asset_id"),
@@ -2871,8 +3030,8 @@ def refresh_asset_keyword_with_ai(
             rows = _call_keyword_ai_openai(api_key, model, payload, script)
         row = next((value for value in rows if str(value.get("asset_id") or "") == str(item.get("asset_id") or "")), rows[0] if rows else None)
         if row:
-            item = _apply_keyword_ai_row(item, row, provider, script, video_context)
-            item = _apply_script_visual_context([item], script, video_context)[0]
+            item = _apply_keyword_ai_row(item, row, provider, script, video_context, pack)
+            item = _apply_script_visual_context([item], script, video_context, pack)[0]
             if callable(log):
                 log(f"{item.get('asset_id')}: AI tạo keyword mới: {item.get('keyword')}")
     except Exception as exc:

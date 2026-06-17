@@ -1123,13 +1123,15 @@ class TestStripForeignContextPhrases:
         )
         assert "Maracana" in result
 
-    def test_random_foreign_name_is_dropped(self):
-        # A name-like word absent from script, context, and main_subject is dropped.
+    def test_unknown_proper_noun_is_demoted_not_dropped(self):
+        # DEMOTE semantics: a name-like word absent from script, context, and
+        # main_subject is now KEPT (not dropped). We no longer band-aid away
+        # proper nouns the engine simply did not see in the surrounding text.
         item = {"main_subject": "stadium crowd"}
         result = vp._strip_foreign_context_phrases(
             "Zzyzxland stadium crowd", "a football match", item
         )
-        assert "Zzyzxland" not in result
+        assert "Zzyzxland" in result
         assert "stadium" in result
 
 
