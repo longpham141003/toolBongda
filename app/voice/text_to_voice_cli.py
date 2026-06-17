@@ -125,6 +125,36 @@ def split_text_into_progress_segments(text: str, max_chars: int) -> list[str]:
     return _split_text_by_chars(text, max_chars, floor=80, ceil=2000)
 
 
+def _srt_timestamp(seconds: float) -> str:
+    milliseconds = max(0, int(round(float(seconds or 0.0) * 1000)))
+    hours, milliseconds = divmod(milliseconds, 3_600_000)
+    minutes, milliseconds = divmod(milliseconds, 60_000)
+    secs, milliseconds = divmod(milliseconds, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{milliseconds:03d}"
+
+
+def build_srt_from_segments(segments: list[dict]) -> str:
+    blocks: list[str] = []
+    index = 0
+    for segment in segments or []:
+        if not isinstance(segment, dict):
+            continue
+        text = str(segment.get("text") or "").strip()
+        if not text:
+            continue
+        index += 1
+        start = float(segment.get("start") or 0.0)
+        end = float(segment.get("end") or 0.0)
+        if end <= start:
+            end = start + 0.05
+        blocks.append(f"{index}\n{_srt_timestamp(start)} --> {_srt_timestamp(end)}\n{text}")
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def write_srt_file(path: Path, segments: list[dict]) -> None:
+    Path(path).write_text(build_srt_from_segments(segments), encoding="utf-8")
+
+
 def combine_wavs(paths: list[Path], output_path: Path) -> float:
     import numpy as np
     import soundfile as sf
