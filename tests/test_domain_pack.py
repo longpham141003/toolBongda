@@ -138,6 +138,69 @@ class TestBuildSceneQuery:
 
 
 # ===========================================================================
+# Synthetic pack (Phase B)
+# ===========================================================================
+import json
+
+
+_VALID_SYNTH = json.dumps({
+    "entity_types": [{"id": "suspect", "role": "subject"}, {"id": "location", "role": "context"}],
+    "action_lexicon": [{"match": ["điều tra", "investigate"], "visual": "detective investigating crime scene"}],
+    "source_routes": [{"default": None, "source": "google_images"}],
+    "forbidden_contexts": ["mugshot illustration", "ai generated"],
+})
+
+
+class TestSyntheticPack:
+    def test_synthetic_used_when_no_pack_and_ai_available(self):
+        calls = []
+
+        def fake_ai(prompt: str) -> str:
+            calls.append(prompt)
+            return _VALID_SYNTH
+
+        pack = dp.resolve_domain_pack(
+            "kịch bản true crime", {"video_domain": "true-crime"}, ai_caller=fake_ai
+        )
+        assert pack.source == "synthetic"
+        assert dp.resolve_action("cảnh sát điều tra", pack) == "detective investigating crime scene"
+        # generic-derived defaults still present so query building works
+        assert pack.scene_types
+        assert len(calls) == 1
+
+    def test_broken_ai_falls_back_to_generic(self):
+        def bad_ai(prompt: str) -> str:
+            return "this is not json"
+
+        pack = dp.resolve_domain_pack("script", {"video_domain": "mystery"}, ai_caller=bad_ai)
+        assert pack.domain == "generic"
+
+    def test_ai_exception_falls_back_to_generic(self):
+        def boom(prompt: str) -> str:
+            raise RuntimeError("quota")
+
+        pack = dp.resolve_domain_pack("script", {"video_domain": "mystery"}, ai_caller=boom)
+        assert pack.domain == "generic"
+
+    def test_synthetic_cached_by_script_hash(self, tmp_path):
+        calls = []
+
+        def fake_ai(prompt: str) -> str:
+            calls.append(prompt)
+            return _VALID_SYNTH
+
+        project = tmp_path
+        (project / "scripts").mkdir()
+        script = "một kịch bản dài"
+        ctx = {"video_domain": "true-crime"}
+        p1 = dp.resolve_domain_pack(script, ctx, ai_caller=fake_ai, project=project)
+        p2 = dp.resolve_domain_pack(script, ctx, ai_caller=fake_ai, project=project)
+        assert p1.source == "synthetic" and p2.source == "synthetic"
+        assert len(calls) == 1  # second call served from cache
+        assert (project / "scripts" / "domain_pack.ai.json").is_file()
+
+
+# ===========================================================================
 # subject entities (used by score refactor in Phase C)
 # ===========================================================================
 class TestEntityHelpers:

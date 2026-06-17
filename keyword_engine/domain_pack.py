@@ -12,6 +12,8 @@ Phân giải 3 tầng (ưu tiên trên xuống):
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -140,9 +142,14 @@ def resolve_domain_pack(
     packs_dir: str | Path | None = None,
     settings: dict | None = None,
     project: Any = None,
+    ai_caller: Callable[[str], str] | None = None,
     log: Callable[[str], None] | None = None,
 ) -> DomainPack:
-    """Phân giải pack theo 3 tầng (xem docstring module)."""
+    """Phân giải pack theo 3 tầng (xem docstring module).
+
+    ai_caller: hàm nhận prompt -> trả raw text (JSON). Engine truyền lambda dùng
+    provider AI sẵn có. Nếu None, tầng synthetic bị bỏ qua -> rơi về generic.
+    """
     video_context = video_context or {}
 
     # Tier 1: project override.
@@ -164,7 +171,15 @@ def resolve_domain_pack(
 
     # Tier 3: synthetic pack (AI). Implemented in a separate helper so it can be
     # cached/tested independently. Falls back to generic on any failure.
-    pack = _synthetic_pack(script, video_context, settings=settings, project=project, log=log)
+    pack = _synthetic_pack(
+        script,
+        video_context,
+        settings=settings,
+        project=project,
+        ai_caller=ai_caller,
+        packs_dir=packs_dir,
+        log=log,
+    )
     if pack is not None:
         return pack
 
@@ -286,15 +301,131 @@ def _fill_filters(filters: dict, slots: dict | None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Tier 3 synthetic pack — implemented in Phase B. Placeholder returns None so
-# resolve_domain_pack falls back to the generic pack until Phase B wires the AI.
+# Tier 3 synthetic pack — AI sinh pack rút gọn cho domain lạ, cache theo
+# script_hash. Code chỉ tiêu thụ pack; AI sinh ra knowledge.
 # ---------------------------------------------------------------------------
+SYNTHETIC_FIELDS = ("entity_types", "action_lexicon", "source_routes", "forbidden_contexts")
+
+
+def _script_hash(script: str) -> str:
+    return hashlib.sha256(str(script or "").encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _synthetic_cache_path(project: Any) -> Path | None:
+    if not project:
+        return None
+    try:
+        return Path(project) / "scripts" / "domain_pack.ai.json"
+    except Exception:
+        return None
+
+
+def _synthetic_prompt(video_context: dict) -> str:
+    return (
+        "You configure an image-search engine for a video production tool.\n"
+        "Given the VIDEO CONTEXT, output a compact JSON 'domain pack' describing how to\n"
+        "find real footage for this topic. Return JSON ONLY with exactly these keys:\n"
+        "- entity_types: array of {id, role}, role is 'subject' or 'context'. Optional 'cardinality' integer.\n"
+        "- action_lexicon: array of {match: [phrases that may appear in the narration, in its original language], visual: short ENGLISH image descriptor}.\n"
+        "- source_routes: array of routing rules. Use {\"default\": null, \"source\": \"google_images\"} if unsure.\n"
+        "- forbidden_contexts: array of short ENGLISH strings of image types to avoid (logo, wallpaper, thumbnail, ai generated...).\n"
+        "Rules:\n"
+        "- All output values in English (use international English spellings).\n"
+        "- Do not invent entities/events not implied by the context.\n"
+        "- Keep it small and concrete; this is configuration, not prose.\n\n"
+        f"VIDEO CONTEXT:\n{json.dumps(video_context, ensure_ascii=False)}"
+    )
+
+
+def _parse_pack_json(content: str) -> dict:
+    content = str(content or "").strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```(?:json)?\s*", "", content)
+        content = re.sub(r"\s*```$", "", content)
+    data = json.loads(content)
+    if not isinstance(data, dict):
+        raise ValueError("synthetic pack is not a JSON object")
+    return data
+
+
+def _merge_synthetic(data: dict, video_context: dict, packs_dir: str | Path | None) -> DomainPack:
+    """Overlay the 4 AI-provided fields on top of the generic pack so that
+    scene_types / safe_fallback / recency always have sensible defaults."""
+    base = load_generic_pack(packs_dir)
+    merged = {
+        "domain": str(video_context.get("video_domain") or "synthetic").strip() or "synthetic",
+        "language_out": "en",
+        "entity_types": base.entity_types,
+        "scene_types": base.scene_types,
+        "action_lexicon": base.action_lexicon,
+        "source_routes": base.source_routes,
+        "forbidden_contexts": base.forbidden_contexts,
+        "safe_fallback": base.safe_fallback,
+        "recency": base.recency,
+    }
+    for key in SYNTHETIC_FIELDS:
+        value = data.get(key)
+        if isinstance(value, list) and value:
+            merged[key] = value
+    return _pack_from_dict(merged, "synthetic")
+
+
 def _synthetic_pack(
     script: str,
     video_context: dict,
     *,
     settings: dict | None = None,
     project: Any = None,
+    ai_caller: Callable[[str], str] | None = None,
+    packs_dir: str | Path | None = None,
     log: Callable[[str], None] | None = None,
 ) -> DomainPack | None:
-    return None
+    script_hash = _script_hash(script)
+    cache_path = _synthetic_cache_path(project)
+
+    # Reuse cached synthetic pack when the script is unchanged.
+    if cache_path is not None:
+        try:
+            if cache_path.is_file():
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                if isinstance(cached, dict) and cached.get("script_hash") == script_hash and isinstance(cached.get("pack"), dict):
+                    return _pack_from_dict(cached["pack"], "synthetic")
+        except Exception:
+            pass
+
+    if not callable(ai_caller):
+        return None
+
+    try:
+        raw = ai_caller(_synthetic_prompt(video_context))
+        data = _parse_pack_json(raw)
+        if not any(isinstance(data.get(key), list) and data.get(key) for key in SYNTHETIC_FIELDS):
+            raise ValueError("synthetic pack has no usable fields")
+        pack = _merge_synthetic(data, video_context, packs_dir)
+    except Exception as exc:
+        if callable(log):
+            log(f"Domain pack synthetic AI lỗi, dùng generic: {exc}")
+        return None
+
+    if cache_path is not None:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "script_hash": script_hash,
+                "pack": {
+                    "domain": pack.domain,
+                    "language_out": pack.language_out,
+                    "entity_types": pack.entity_types,
+                    "scene_types": pack.scene_types,
+                    "action_lexicon": pack.action_lexicon,
+                    "source_routes": pack.source_routes,
+                    "forbidden_contexts": pack.forbidden_contexts,
+                    "safe_fallback": pack.safe_fallback,
+                    "recency": pack.recency,
+                },
+            }
+            cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    return pack
