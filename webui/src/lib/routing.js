@@ -181,6 +181,7 @@ export function pathToVideoSlug(path, projects) {
 export const STEP_TO_SEGMENT = {
   step1:  'noi-dung',
   step2:  'giong-doc',
+  step2b: 'prompt',
   step3a: 'phan-canh',
   step3b: 'duyet-anh',
   step4:  'xuat',

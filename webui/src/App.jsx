@@ -22,6 +22,7 @@
   Image,
   KeyRound,
   Layers,
+  ListVideo,
   LoaderCircle,
   Lock,
   Mic,
@@ -184,9 +185,11 @@ const visualClientId = (() => {
 function nextScreenForProject(project) {
   const assets = project?.assets || []
   if (project?.has_capcut_export) return "step4"
-  if (assets.length) return assets.some((item) => item.local_path) ? "step3b" : "step3a"
-  if (project?.has_scenes) return "step3a"
-  if (project?.has_voice) return "step2"
+  // Media already downloaded → go straight to the review screen.
+  if (assets.some((item) => item.local_path)) return "step3b"
+  // Prompts generated (manifest) but no media yet, or voice ready and no prompts
+  // yet → the per-sentence prompt screen is the next stage.
+  if (project?.has_scenes || project?.has_voice) return "step2b"
   return project?.script ? "step2" : "step1"
 }
 
@@ -527,14 +530,15 @@ function App() {
           if (job.name === "AI Workflow" && job.result?.script) setScript(job.result.script)
           await loadState(job.name === "AI Workflow")
           if (job.name === "B1 Kokoro Voice") {
-            setToast("Đã tạo voice xong. Hãy bấm Tạo cảnh và tìm ảnh để tool tự chia cảnh và tải media.")
+            setToast("Đã tạo voice xong. Sang bước Prompt để tạo prompt cho từng câu trước khi tìm ảnh.")
           } else if (job.name === "AI Workflow") {
             setToast("Đã tạo kịch bản. Hãy kiểm tra và chỉnh sửa nếu cần.")
           } else {
             setToast(`${job.name} đã hoàn thành`)
           }
-          if (job.name === "B2 Phan tich canh") goStep("step3a")
+          if (job.name === "B2 Phan tich canh") goStep("step2b")
           if (job.name === "B2+B3 Chia canh va tim media") goStep("step3b")
+          if (job.name === "B3 Tim anh") goStep("step3b")
           setBusyAction("")
         } else if (job.status === "cancelled") {
           clearInterval(timer)
@@ -635,6 +639,35 @@ function App() {
       Boolean(project?.has_capcut_export),
     ]
   }, [project, assets, scriptSaved])
+
+  // Per-step status that distinguishes "todo" (never made) from "stale" (made
+  // but invalidated by an upstream edit — needs redo). Drives the StepsBar so a
+  // script change reopens the later steps for regeneration instead of dead-ending.
+  // Values: "done" | "progress" | "stale" | "dirty" | "todo".
+  const stepStates = useMemo(() => {
+    const allDownloaded = assets.length > 0 && assets.every((item) => Boolean(item.local_path))
+    const allApproved = assets.length > 0 && assets.every((item) => item.status === "approved")
+    const voiceExists = Boolean(project?.voice_exists)
+    const scenesExist = Boolean(project?.scenes_exist)
+    const exportExists = Boolean(project?.export_exists)
+    const step1 = !project ? "todo" : scriptSaved ? "done" : (script.trim() ? "dirty" : "todo")
+    const step2 = project?.has_voice ? "done" : voiceExists ? "stale" : "todo"
+    // Prompt stage: "done" once the AI prompts/manifest exist for the current voice.
+    const step2b = project?.has_scenes ? "done" : scenesExist ? "stale" : "todo"
+    const scenesDone = Boolean(project?.has_scenes) && allDownloaded && allApproved
+    const step3a = scenesDone ? "done" : project?.has_scenes ? "progress" : scenesExist ? "stale" : "todo"
+    const step4 = project?.has_capcut_export ? "done" : exportExists ? "stale" : "todo"
+    return { step1, step2, step2b, step3a, step4 }
+  }, [project, assets, script, scriptSaved])
+
+  // True while the Step 1 script box holds unsaved edits.
+  const scriptDirty = Boolean(project) && script.trim().length > 0 && !scriptSaved
+  // Navigation that warns before abandoning unsaved Step 1 edits.
+  const [pendingStep, setPendingStep] = useState(null)
+  const guardedGoStep = useCallback((step) => {
+    if (activeScreen === "step1" && scriptDirty) { setPendingStep(step); return }
+    goStep(step)
+  }, [activeScreen, scriptDirty, goStep])
 
   const userProgress = useMemo(() => {
     return buildUserProgress({
@@ -755,15 +788,32 @@ function App() {
     }
   }
 
+  // Persist the Step 1 script without navigating. Returns the updated project
+  // (or null on failure) so callers decide where to go next.
+  async function persistScript() {
+    const data = await api("/api/projects/script", { method: "POST", body: JSON.stringify({ script }) })
+    setState((current) => ({ ...current, project: data.project }))
+    return data.project
+  }
+
   async function saveScriptStep() {
     if (!script.trim()) return setError("Hãy nhập script trước khi lưu B1.")
     if (!project) return createProject()
     try {
-      const data = await api("/api/projects/script", { method: "POST", body: JSON.stringify({ script }) })
-      setState((current) => ({ ...current, project: data.project }))
-      setToast("Đã lưu nội dung. Bước tiếp theo: tạo giọng đọc.")
-      const slug = pathToVideoSlug(data.project.path, state?.projects || [])
-      if (slug) navigate(videoStepPath(slug, "step2"))
+      const updated = await persistScript()
+      const wasComplete = project?.voice_exists || project?.scenes_exist || project?.export_exists
+      const nowStale = wasComplete && !updated.has_voice
+      setToast(nowStale
+        ? "Đã lưu kịch bản mới. Hãy tạo lại giọng đọc cho khớp nội dung."
+        : "Đã lưu nội dung. Bước tiếp theo: tạo giọng đọc.")
+      // Navigate via the currently-open video's slug (robust) and fall back to a
+      // freshly-resolved slug so the jump to Giọng đọc never silently no-ops.
+      if (currentVideoSlug) {
+        goStep("step2")
+      } else {
+        const slug = pathToVideoSlug(updated.path, state?.projects || [])
+        navigate(slug ? videoStepPath(slug, "step2") : "/")
+      }
     } catch (err) {
       setError(err.message)
     }
@@ -783,7 +833,7 @@ function App() {
     setScript(data.project.script)
     setTitle(data.project.name)
     setProjectsOpen(false)
-    if (notify) setToast("Đã mở project")
+    if (notify) setToast("Đã mở video")
     const cat = data.project?.category
     if (cat) {
       const found = series.find(s => s.title === cat && !s.is_virtual)
@@ -818,7 +868,7 @@ function App() {
     setLightboxIndex(null)
     setActiveSeries(null)
     navigate("/")
-    setToast("Đã dừng tác vụ và thoát project hiện tại")
+    setToast("Đã dừng tác vụ và thoát video hiện tại")
   }
 
   async function startVideoInSeries(seriesItem) {
@@ -924,7 +974,7 @@ function App() {
         setTitle(data.project.name)
       }
       await loadState(true)
-      setToast("Đã đổi tên project")
+      setToast("Đã đổi tên video")
     } catch (err) {
       setError(err.message)
     }
@@ -940,7 +990,7 @@ function App() {
         navigate(activeSeriesSlug ? seriesPath(activeSeriesSlug) : "/")
       }
       await loadState(true)
-      setToast("Đã xóa project")
+      setToast("Đã xóa video")
     } catch (err) {
       setError(err.message)
     }
@@ -1040,6 +1090,18 @@ function App() {
     const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: payload }) })
     setSettings(data.settings)
     if (makeDefault) setToast(`Đã đặt mặc định: ${payload.voice_clone_reference_name}`)
+  }
+
+  async function deleteVoiceClone(profileId) {
+    if (!profileId) return
+    try {
+      const data = await api(`/api/voice-clone/${profileId}`, { method: "DELETE" })
+      const latest = await loadState(true)
+      setSettings(latest.settings || data.settings || {})
+      setToast("Đã xóa giọng clone")
+    } catch (err) {
+      setError(err.message)
+    }
   }
 
   async function runPreflight() {
@@ -1151,7 +1213,7 @@ function App() {
     { code: "4", label: "Xuất CapCut", hint: "Kiểm tra và mở project", icon: Rocket },
   ]
 
-  const currentStepIndex = activeScreen === "step1" ? 0 : activeScreen === "step2" ? 1 : activeScreen === "step3a" || activeScreen === "step3b" ? 2 : activeScreen === "step4" ? 3 : 0
+  const currentStepIndex = activeScreen === "step1" ? 0 : activeScreen === "step2" ? 1 : (activeScreen === "step2b" || activeScreen === "step3a" || activeScreen === "step3b") ? 2 : activeScreen === "step4" ? 3 : 0
 
   if (!state) {
     return (
@@ -1210,14 +1272,26 @@ function App() {
         </div>
       </header>
 
-      {["step1", "step2", "step3a", "step3b", "step4"].includes(activeScreen) && (
+      {["step1", "step2", "step2b", "step3a", "step3b", "step4"].includes(activeScreen) && (
         <StepsBar
           activeScreen={activeScreen}
-          goStep={goStep}
-          completedSteps={completedSteps}
+          goStep={guardedGoStep}
+          stepStates={stepStates}
           project={project}
         />
       )}
+
+      <Dialog open={Boolean(pendingStep)} onOpenChange={(open) => !open && setPendingStep(null)}>
+        <DialogContent className="max-w-md">
+          <DialogTitle>Lưu thay đổi kịch bản?</DialogTitle>
+          <DialogDescription>Bạn đã sửa kịch bản nhưng chưa lưu. Rời đi mà không lưu sẽ mất các thay đổi này.</DialogDescription>
+          <div className="dialog-actions">
+            <Button variant="ghost" onClick={() => setPendingStep(null)}>Ở lại Bước 1</Button>
+            <Button variant="secondary" onClick={() => { const t = pendingStep; setPendingStep(null); setScript(String(project?.script || "")); goStep(t) }}>Bỏ thay đổi</Button>
+            <Button onClick={async () => { const t = pendingStep; setPendingStep(null); try { await persistScript() } catch (e) { setError(e.message); return } goStep(t) }}>Lưu rồi đi</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {activeScreen === "dashboard" ? (
         <DashboardScreen
           series={series}
@@ -1241,6 +1315,7 @@ function App() {
           onOpenVideo={(path) => openProject(path)}
           onNewVideo={() => startVideoInSeries(activeSeries)}
           onDeleteSeries={deleteSeries}
+          onDeleteVideo={deleteProject}
           onUpdateSeries={updateSeriesInfo}
           setError={setError}
           flows={flows}
@@ -1270,8 +1345,10 @@ function App() {
             setFlowsOpen={setFlowsOpen}
             busyAction={busyAction}
             activeJob={activeJob}
+            staleWarning={scriptDirty && Boolean(project?.voice_exists || project?.scenes_exist || project?.export_exists)}
           />}
-          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} isBusy={isBusy} busyAction={busyAction} activeJob={activeJob} goStep={goStep} userProgress={userProgress} />}
+          {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} deleteVoiceClone={deleteVoiceClone} isBusy={isBusy} busyAction={busyAction} activeJob={activeJob} goStep={goStep} userProgress={userProgress} />}
+          {activeScreen === "step2b" && <PromptScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} goStep={goStep} saveKeyword={saveKeyword} userProgress={userProgress} />}
           {activeScreen === "step3a" && <SceneScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} goStep={goStep} />}
           {activeScreen === "step3b" && <MediaReviewScreen assets={assets} filteredAssets={filteredAssets} assetFilter={assetFilter} setAssetFilter={setAssetFilter} project={project} assetJobs={assetJobs} statusBadge={statusBadge} setLightboxIndex={setLightboxIndex} startJob={startJob} approveAsset={approveAsset} approveAllAssets={approveAllAssets} chooseAssetMedia={chooseAssetMedia} bulkRetryAssets={bulkRetryAssets} isBusy={isBusy} goStep={goStep} />}
           {activeScreen === "step4" && <ExportScreen project={project} assets={assets} preflight={preflight} runPreflight={runPreflight} startJob={startJob} title={title} isBusy={isBusy} busyAction={busyAction} goStep={goStep} />}
@@ -1317,21 +1394,25 @@ function App() {
   )
 }
 
-function StepsBar({ activeScreen, goStep, completedSteps, project }) {
+function StepsBar({ activeScreen, goStep, stepStates, project }) {
   const steps = [
     { id: "step1", label: "Nội dung" },
     { id: "step2", label: "Giọng đọc" },
+    { id: "step2b", label: "Prompt" },
     { id: "step3a", label: "Hình ảnh" },
     { id: "step4", label: "Xuất CapCut" },
   ]
-  const doneMap = { step1: completedSteps[0], step2: completedSteps[1], step3a: completedSteps[2], step4: completedSteps[3] }
+  // A step with existing data (done / in-progress / stale) is always reachable.
+  // A "todo" step only unlocks once the previous step is fully done.
+  const hasData = (id) => ["done", "progress", "stale"].includes(stepStates[id])
 
   const isLocked = (id) => {
     const idx = steps.findIndex(s => s.id === id)
     if (idx === 0) return false
-    const prevId = steps[idx - 1].id
+    if (hasData(id)) return false
     const isStep3Active = id === "step3a" && (activeScreen === "step3a" || activeScreen === "step3b")
-    return !doneMap[prevId] && !isStep3Active && activeScreen !== id
+    if (isStep3Active || activeScreen === id) return false
+    return stepStates[steps[idx - 1].id] !== "done"
   }
 
   const goToStep = (id) => {
@@ -1342,21 +1423,25 @@ function StepsBar({ activeScreen, goStep, completedSteps, project }) {
   return (
     <div className="stitch-steps-bar">
       {steps.map((step, idx) => {
-        const done = doneMap[step.id]
+        const state = stepStates[step.id]
+        const done = state === "done"
+        const stale = state === "stale"
         const active = activeScreen === step.id || (step.id === "step3a" && activeScreen === "step3b")
         const locked = isLocked(step.id)
         return (
           <div key={step.id} className="flex items-center">
             {idx > 0 && <span className="step-tab-sep" />}
             <button
-              className={cn("step-tab", active && "active", done && !active && "done", locked && "locked")}
+              className={cn("step-tab", active && "active", done && !active && "done", stale && !active && "stale", locked && "locked")}
               disabled={locked}
+              title={stale ? "Cần làm lại vì kịch bản đã thay đổi" : undefined}
               onClick={() => goToStep(step.id)}
             >
               <span className="step-tab-num">
-                {done && !active ? <Check className="h-3 w-3" /> : idx + 1}
+                {stale && !active ? <RefreshCw className="h-3 w-3" /> : done && !active ? <Check className="h-3 w-3" /> : idx + 1}
               </span>
               {step.label}
+              {stale && !active && <span className="step-tab-redo">Cần làm lại</span>}
             </button>
           </div>
         )
@@ -1440,6 +1525,18 @@ function buildUserProgress({ activeScreen, activeJob, busyAction, logs, project,
     }
   }
 
+  if (activeScreen === "step2b") {
+    return {
+      status: project?.has_scenes ? "done" : "idle",
+      running: false,
+      percent: project?.has_scenes ? 100 : project?.has_voice ? 30 : 0,
+      title: project?.has_scenes ? "Đã có prompt cho từng câu" : "Chờ tạo prompt",
+      messages: project?.has_scenes
+        ? [`Đã tạo prompt cho ${total} câu.`, "Sửa lại nếu cần rồi bấm Tìm ảnh theo prompt."]
+        : ["AI sẽ đọc toàn bộ kịch bản và tạo prompt tìm hình cho từng câu theo SRT."],
+    }
+  }
+
   if (activeScreen === "step3a") {
     return {
       status: project?.has_scenes ? "done" : "idle",
@@ -1502,6 +1599,7 @@ function inferActionFromJob(job) {
 function estimateBasePercent(activeScreen, project, assets, script, completedSteps) {
   if (activeScreen === "step1") return completedSteps[0] ? 100 : script?.trim() ? 65 : 0
   if (activeScreen === "step2") return project?.has_voice ? 100 : completedSteps[0] ? 25 : 0
+  if (activeScreen === "step2b") return project?.has_scenes ? 100 : project?.has_voice ? 30 : 0
   if (activeScreen === "step3a") return project?.has_scenes ? 100 : project?.has_voice ? 35 : 0
   if (activeScreen === "step3b") {
     const total = assets.length
@@ -1534,6 +1632,17 @@ function estimateRunningPercent(action, logs = [], assets = []) {
     if (text.includes("srt") || text.includes("scene")) return 28
     return 15
   }
+  if (action === "analyze") {
+    if (text.includes("keyword") || text.includes("prompt") || text.includes("từ khóa")) return 60
+    if (text.includes("srt") || text.includes("scene") || text.includes("cảnh")) return 30
+    return 18
+  }
+  if (action === "search") {
+    const total = assets.length
+    const downloaded = assets.filter((item) => item.local_path).length
+    if (total) return Math.max(20, Math.min(95, Math.round((downloaded / total) * 90 + 10)))
+    return 25
+  }
   if (action === "export") {
     if (text.includes("capcut")) return 88
     if (text.includes("timeline")) return 62
@@ -1547,6 +1656,8 @@ function runningTitle(action, job) {
   if (action === "workflow") return "Đang tạo kịch bản bằng AI"
   if (action === "voice") return "Đang tạo giọng đọc và timing"
   if (action === "analyze-search") return "Đang phân cảnh và tìm media"
+  if (action === "analyze") return "Đang tạo prompt cho từng câu"
+  if (action === "search") return "Đang tìm ảnh theo prompt"
   if (action === "export") return "Đang xuất project CapCut"
   if (action?.startsWith("retry") || job?.asset_id) return `Đang tìm lại media${job?.asset_id ? ` cho ${job.asset_id}` : ""}`
   return "Đang xử lý"
@@ -1571,6 +1682,14 @@ function runningMessages(action, logs = [], assets = [], latest) {
     const downloaded = assets.filter((item) => item.local_path).length
     messages.push(total ? `Đang chuẩn bị media cho các cảnh: ${downloaded}/${total} cảnh đã có media.` : "Đang đọc lời thoại để chia cảnh và tạo từ khóa tìm ảnh.")
     messages.push("Khi đủ dữ liệu, tool sẽ chuyển sang màn duyệt hình ảnh.")
+  } else if (action === "analyze") {
+    messages.push("AI đang đọc toàn bộ kịch bản và tạo prompt tìm hình cho từng câu.")
+    messages.push("Khi xong, bạn có thể xem và chỉnh prompt từng câu trước khi tìm ảnh.")
+  } else if (action === "search") {
+    const total = assets.length
+    const downloaded = assets.filter((item) => item.local_path).length
+    messages.push(total ? `Đang tải media theo prompt: ${downloaded}/${total} cảnh đã có.` : "Đang tìm ảnh/video theo prompt của từng câu.")
+    messages.push("Khi đủ media, tool sẽ chuyển sang màn duyệt hình ảnh.")
   } else if (action === "export") {
     messages.push("Đang gắn voice và hình ảnh vào timeline CapCut.")
     messages.push("Khi xong, project sẽ mở được trong CapCut.")
@@ -1603,8 +1722,37 @@ function FlowCard({ icon: Icon, title, desc, accent = "violet", dashed, onClick,
   </button>
 }
 
-function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categoryLocked = false, categories = [], settings, flows = [], activeFlowId, setActiveFlowId, setFlowsOpen, busyAction, activeJob }) {
+function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categoryLocked = false, categories = [], settings, flows = [], activeFlowId, setActiveFlowId, setFlowsOpen, busyAction, activeJob, staleWarning = false }) {
   const [contentMode, setContentMode] = useState("existing")
+  // Live, estimated SRT preview generated from the script text as it is typed.
+  // Real timing is recomputed from the TTS audio in Step 2; this only previews
+  // how the script will be segmented into subtitles (MagicVoice-style).
+  const [srt, setSrt] = useState({ segments: [], words: 0, sentences: 0, duration: 0 })
+  const [srtBusy, setSrtBusy] = useState(false)
+  const srtLang = normalizeVoiceLanguage(settings.text_to_voice_language || "vi")
+  const srtSpeed = Number(settings.text_to_voice_speed || 1)
+  useEffect(() => {
+    const text = script.trim()
+    if (!text) { setSrt({ segments: [], words: 0, sentences: 0, duration: 0 }); setSrtBusy(false); return }
+    let cancelled = false
+    setSrtBusy(true)
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/script/srt-preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ script: text, language: srtLang, speed: srtSpeed }),
+        })
+        const data = await res.json()
+        if (!cancelled) setSrt({ segments: data.segments || [], words: data.words || 0, sentences: data.sentences || 0, duration: data.duration || 0 })
+      } catch {
+        /* preview is best-effort; ignore errors */
+      } finally {
+        if (!cancelled) setSrtBusy(false)
+      }
+    }, 400)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [script, srtLang, srtSpeed])
   const activeFlow = flows.find(f => f.id === activeFlowId) || flows[0] || null
   const workflowRunning = isBusy && busyAction === "workflow"
   const workflowPercent = Math.max(0, Math.min(100, Math.round(Number(activeJob?.progress || 0))))
@@ -1614,24 +1762,33 @@ function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputR
     settings: { script_workflow_input: workflowInput },
   }, "workflow")
 
-  return <div className="step-screen">
+  const categoryHidden = categoryLocked && !projectCategory
+  return <div className="step-screen step1-screen">
     <div className="screen-heading"><h1>Bước 1 - Chuẩn bị nội dung</h1><p>Chọn cách bắt đầu phù hợp. Kịch bản cuối luôn có thể chỉnh sửa trước khi tạo giọng đọc.</p></div>
+    {staleWarning && (
+      <div className="stale-banner">
+        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+        <span>Bạn đang sửa kịch bản của video đã có giọng đọc/cảnh. Lưu nội dung mới sẽ cần <b>tạo lại giọng đọc, phân cảnh và xuất CapCut</b> cho khớp.</span>
+      </div>
+    )}
     <div className="panel">
-      <div className="script-project-fields">
+      <div className={cn("script-project-fields", categoryHidden && "single")}>
         <Field label="Tên video"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ví dụ: Brazil vs Panama" /></Field>
-        <Field label="Thư mục / chủ đề lưu video">
-          {categoryLocked ? (
-            <div className="category-locked-field">
-              <Input value={projectCategory} disabled />
-              <Lock className="h-3.5 w-3.5 text-zinc-500 flex-shrink-0" />
-            </div>
-          ) : (
-            <>
-              <Input list="project-category-list" value={projectCategory} onChange={(e) => setProjectCategory(e.target.value)} placeholder="Ví dụ: Bóng đá, Nấu ăn, Khoa học..." />
-              <datalist id="project-category-list">{categories.map((item) => <option key={item} value={item} />)}</datalist>
-            </>
-          )}
-        </Field>
+        {!categoryHidden && (
+          <Field label="Thư mục / chủ đề lưu video">
+            {categoryLocked ? (
+              <div className="category-locked-field">
+                <Input value={projectCategory} disabled />
+                <Lock className="h-3.5 w-3.5 text-zinc-500 flex-shrink-0" />
+              </div>
+            ) : (
+              <>
+                <Input list="project-category-list" value={projectCategory} onChange={(e) => setProjectCategory(e.target.value)} placeholder="Ví dụ: Bóng đá, Nấu ăn, Khoa học..." />
+                <datalist id="project-category-list">{categories.map((item) => <option key={item} value={item} />)}</datalist>
+              </>
+            )}
+          </Field>
+        )}
       </div>
 
       <div className="script-mode-switch">
@@ -1639,13 +1796,34 @@ function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputR
         <button className={cn(contentMode === "idea" && "active")} onClick={()=>setContentMode("idea")}><Sparkles/><span><b>Tạo kịch bản từ ý tưởng</b><small>Nhập tóm tắt, AI chạy theo flow đã cấu hình</small></span></button>
       </div>
 
-      {contentMode === "existing" ? <div className="script-mode-content">
-        <div className="panel-title"><div><h2>Kịch bản dùng để đọc</h2><p>Dán nguyên văn nội dung bạn muốn xuất hiện trong giọng đọc.</p></div><FileText className="text-violet-300" /></div>
-        <Textarea className="script-editor" value={script} onChange={(e) => setScript(e.target.value)} placeholder="Dán kịch bản cuối vào đây..." />
-        <div className="script-editor-actions">
-          <input ref={scriptFileInputRef} type="file" accept=".txt,text/plain" className="hidden" onChange={(e) => uploadTxtFile(e.target.files?.[0])} />
-          <Button variant="secondary" onClick={() => scriptFileInputRef.current?.click()}><Upload className="h-4 w-4" /> Tải file TXT</Button>
-          <span>{script.trim() ? script.trim().split(/\s+/).length : 0} từ</span>
+      {contentMode === "existing" ? <div className="script-mode-content script-2col">
+        <div className="script-col">
+          <div className="panel-title"><div><h2>Kịch bản dùng để đọc</h2><p>Dán nguyên văn nội dung bạn muốn xuất hiện trong giọng đọc.</p></div><FileText className="text-violet-300" /></div>
+          <Textarea className="script-editor" value={script} onChange={(e) => setScript(e.target.value)} placeholder="Dán kịch bản cuối vào đây..." />
+          <div className="script-editor-actions">
+            <input ref={scriptFileInputRef} type="file" accept=".txt,text/plain" className="hidden" onChange={(e) => uploadTxtFile(e.target.files?.[0])} />
+            <Button variant="secondary" onClick={() => scriptFileInputRef.current?.click()}><Upload className="h-4 w-4" /> Tải file TXT</Button>
+            <span>{script.trim() ? script.trim().split(/\s+/).length : 0} từ</span>
+          </div>
+        </div>
+        <div className="srt-col">
+          <div className="panel-title"><div><h2>Phụ đề tự động (SRT)</h2><p>Tách câu theo thời gian ngay khi bạn gõ. Timing là ước lượng, sẽ chính xác sau khi tạo giọng đọc.</p></div>{srtBusy ? <LoaderCircle className="h-4 w-4 animate-spin text-emerald-300" /> : <ListVideo className="text-emerald-300" />}</div>
+          {srt.segments.length > 0 && (
+            <div className="srt-preview-meta"><span>{srt.sentences} câu phụ đề</span><span>~{formatTime(srt.duration)} (ước lượng)</span></div>
+          )}
+          <div className="srt-preview-list">
+            {srt.segments.length === 0
+              ? <EmptyState text={script.trim() ? "Đang tạo phụ đề..." : "Nhập kịch bản bên trái để xem phụ đề SRT tự động."} />
+              : srt.segments.map((seg, i) => (
+                <div className="srt-preview-row" key={i}>
+                  <span className="srt-preview-idx">{i + 1}</span>
+                  <div className="srt-preview-body">
+                    <b className="srt-preview-time">{formatTime(seg.start)} → {formatTime(seg.end)}</b>
+                    <p>{seg.text}</p>
+                  </div>
+                </div>
+              ))}
+          </div>
         </div>
       </div> : <div className="script-mode-content workflow-create">
         <div className="workflow-create-head">
@@ -1672,7 +1850,7 @@ function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputR
         {script.trim() && <div className="workflow-result"><div><b>Kịch bản đã tạo</b><span>Có thể chỉnh trực tiếp trước khi tiếp tục.</span></div><Textarea className="script-editor generated" value={script} onChange={(e)=>setScript(e.target.value)} /></div>}
       </div>}
     </div>
-    <div className="screen-footer"><span>{script.trim() ? "Nội dung đã có. Bấm nút bên phải để lưu và chọn giọng." : "Hãy nhập nội dung hoặc nhờ AI viết kịch bản trước."}</span><Button onClick={saveScriptStep} disabled={!script.trim() || isBusy}>Lưu và chọn giọng đọc <ArrowRight className="h-4 w-4" /></Button></div>
+    <div className="screen-footer"><span>{script.trim() ? "Nội dung đã có. Bấm nút bên phải để lưu và chọn giọng." : "Hãy nhập nội dung hoặc nhờ AI viết kịch bản trước."}</span><Button onClick={saveScriptStep} disabled={!script.trim() || workflowRunning}>Lưu và chọn giọng đọc <ArrowRight className="h-4 w-4" /></Button></div>
   </div>
 }
 
@@ -1702,10 +1880,11 @@ function WorkflowPanel({ workflowInput, setWorkflowInput, workflowSteps, setting
   </div>
 }
 
-function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, saveCloneVoice, selectSavedCloneVoice, isBusy, busyAction, activeJob, goStep, userProgress }) {
+function VoiceScreen({ script, project, settings, setSettings, voiceOptions, refreshVoices, previewVoiceNow, voicePreviewBusy, voicePreviewUrl, createVoiceWithQuickSettings, startJob, applyBeginnerVoicePreset, saveCloneVoice, selectSavedCloneVoice, deleteVoiceClone, isBusy, busyAction, activeJob, goStep, userProgress }) {
   const [cloneName, setCloneName] = useState("")
   const [cloneLanguage, setCloneLanguage] = useState("vi")
   const [pendingCloneFile, setPendingCloneFile] = useState(null)
+  const [cloneToDelete, setCloneToDelete] = useState(null)
   const cloneInputRef = useRef(null)
   const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
   const cloneProfiles = Array.isArray(settings.voice_clone_profiles) ? settings.voice_clone_profiles : []
@@ -1766,8 +1945,10 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
   }
   const progress = Math.max(0, Math.min(100, Math.round(userProgress?.percent || 0)))
   const progressMessages = userProgress?.messages || []
+  const voiceStale = Boolean(project?.voice_exists) && !project?.has_voice
   return <div className="step-screen">
     <div className="screen-heading"><h1>Bước 2 - Chọn giọng đọc cho video</h1><p>Chọn giọng, nghe thử, rồi tạo file đọc để bước sau tự chia cảnh.</p></div>
+    {voiceStale && <div className="stale-banner"><AlertTriangle className="h-4 w-4 flex-shrink-0" /><span>Kịch bản đã thay đổi nên giọng đọc cũ không còn khớp. Hãy bấm <b>Tạo giọng đọc</b> để làm lại trước khi sang bước phân cảnh.</span></div>}
     <div className="recommended-action">
       <div><b>Không biết chọn gì?</b><span>Bấm nút này để tool tự chọn ngôn ngữ, chế độ ổn định và tắt kiểm tra chậm cho script dài.</span></div>
       <Button variant="secondary" onClick={applyBeginnerVoicePreset} disabled={isBusy}><WandSparkles className="h-4 w-4" /> Dùng cấu hình dễ nhất</Button>
@@ -1801,14 +1982,33 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
           <Field label="Ngôn ngữ clone"><Select value={cloneLanguage} onValueChange={changeCloneLanguage} options={cloneLanguageOptions} /></Field>
           {cloneProfileOptions.length > 0 ? <>
             <Field label="Chọn giọng clone">
-              <Select
-                value={selectedCloneId}
-                onValueChange={(id) => chooseCloneProfile(cloneProfiles.find((item) => item.id === id))}
-                options={cloneProfileOptions}
-                placeholder={cloneProfileOptions.length ? "Chọn giọng clone" : "Không có giọng cho ngôn ngữ này"}
-              />
+              <div className="clone-select-row">
+                <Select
+                  value={selectedCloneId}
+                  onValueChange={(id) => chooseCloneProfile(cloneProfiles.find((item) => item.id === id))}
+                  options={cloneProfileOptions}
+                  placeholder={cloneProfileOptions.length ? "Chọn giọng clone" : "Không có giọng cho ngôn ngữ này"}
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  title="Xóa giọng clone đang chọn"
+                  disabled={!selectedClone}
+                  onClick={() => selectedClone && setCloneToDelete(selectedClone)}
+                ><Trash2 className="h-4 w-4 text-red-400" /></Button>
+              </div>
             </Field>
           </> : <div className="clone-empty-hint"><Mic className="h-5 w-5" /><span>Chưa có giọng clone cho ngôn ngữ này. Tạo giọng mới ở bảng bên phải.</span></div>}
+          <Dialog open={Boolean(cloneToDelete)} onOpenChange={(open) => !open && setCloneToDelete(null)}>
+            <DialogContent className="max-w-md">
+              <DialogTitle>Xóa giọng clone?</DialogTitle>
+              <DialogDescription>Giọng "{cloneToDelete?.name || cloneToDelete?.file_name}" và file audio mẫu sẽ bị xóa vĩnh viễn. Thao tác này không thể hoàn tác.</DialogDescription>
+              <div className="dialog-actions">
+                <Button variant="secondary" onClick={() => setCloneToDelete(null)}>Giữ lại</Button>
+                <Button variant="danger" onClick={() => { const id = cloneToDelete?.id; setCloneToDelete(null); deleteVoiceClone(id) }}><Trash2 className="h-4 w-4" /> Xóa giọng</Button>
+              </div>
+            </DialogContent>
+          </Dialog>
           <div className="voice-left-actions">
             <Button variant="secondary" onClick={() => previewVoiceNow()} disabled={!selectedClone || voicePreviewBusy}>{voicePreviewBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Nghe thử</Button>
           </div>
@@ -1842,9 +2042,9 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
         <div className="setting-help">8 tạo nhanh hơn, 16 ưu tiên chất lượng. Tool giới hạn tối đa 16 để tránh lỗi và quá tải bộ nhớ.</div></>}
       </div>
     </div>
-    <div className="screen-footer"><Button variant="secondary" onClick={()=>goStep("step1")}><ArrowLeft className="h-4 w-4" /> Quay lại Bước 1</Button><span>{voiceRunning ? "Đổi giọng hoặc tốc độ rồi bấm Tạo lại. Tool sẽ dừng bản đang chạy." : project?.voice_path ? "Đã có voice. Bạn có thể tạo lại hoặc tiếp tục phân cảnh." : "Chọn giọng xong hãy bấm Tạo giọng đọc."}</span><div className="voice-footer-actions">
+    <div className="screen-footer"><Button variant="secondary" onClick={()=>goStep("step1")}><ArrowLeft className="h-4 w-4" /> Quay lại Bước 1</Button><span>{voiceRunning ? "Đổi giọng hoặc tốc độ rồi bấm Tạo lại. Tool sẽ dừng bản đang chạy." : project?.voice_path ? "Đã có voice. Sang bước Prompt để tạo prompt cho từng câu." : "Chọn giọng xong hãy bấm Tạo giọng đọc."}</span><div className="voice-footer-actions">
       <Button variant={project?.voice_path || voiceRunning ? "secondary" : "default"} onClick={createVoiceWithQuickSettings} disabled={isBusy && !voiceRunning}>{voiceRunning?<RefreshCw className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} {voiceRunning ? "Dừng và tạo lại" : project?.voice_path ? "Tạo lại giọng đọc" : "Tạo giọng đọc"}</Button>
-      {project?.voice_path && <Button onClick={()=>{goStep("step3a");startJob("/api/analyze-search",undefined,"analyze-search")}} disabled={isBusy}>{busyAction==="analyze-search"?<LoaderCircle className="h-4 w-4 animate-spin"/>:<Sparkles className="h-4 w-4"/>} Tạo cảnh và tìm ảnh</Button>}
+      {project?.voice_path && <Button onClick={()=>goStep("step2b")} disabled={isBusy}><ArrowRight className="h-4 w-4"/> Tạo prompt theo câu</Button>}
     </div></div>
   </div>
 }
@@ -1863,16 +2063,100 @@ function looksLikeEnglish(text = "") {
   return asciiRatio > 0.92 && hits >= 4
 }
 
+function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, saveKeyword, userProgress }) {
+  const generating = busyAction === "analyze" && isBusy
+  const searching = busyAction === "search" && isBusy
+  const hasPrompts = Boolean(project?.has_scenes) && assets.length > 0
+  const promptsStale = Boolean(project?.has_voice && project?.scenes_exist && !project?.has_scenes)
+  const [editingId, setEditingId] = useState(null)
+  const [editValue, setEditValue] = useState("")
+  const progress = Math.max(0, Math.min(100, Math.round(userProgress?.percent || 0)))
+  const runGenerate = () => startJob("/api/analyze", undefined, "analyze")
+  const runSearch = () => startJob("/api/search", undefined, "search")
+  const startEdit = (item) => { setEditingId(item.asset_id); setEditValue(item.keyword || item.ai_search_keyword || "") }
+  const commitEdit = async (item) => {
+    const value = editValue.trim()
+    setEditingId(null)
+    if (value && value !== (item.keyword || "")) await saveKeyword(item.asset_id, value)
+  }
+
+  return <div className="step-screen prompt-screen">
+    <div className="screen-heading"><h1>Bước 2.5 - Prompt cho từng câu</h1><p>Mỗi câu thoại (theo SRT của giọng đọc) được AI tạo một prompt/từ khóa tìm hình đồng nhất. Xem và chỉnh trước khi tìm ảnh.</p></div>
+
+    {!project?.has_voice ? (
+      <div className="step-guidance">
+        <div><b>Cần tạo giọng đọc trước.</b><span>Prompt được sinh theo SRT của giọng đọc. Hãy quay lại Bước 2 và tạo giọng đọc.</span></div>
+        <Button variant="secondary" onClick={()=>goStep("step2")}><ArrowLeft className="h-4 w-4" /> Về Bước 2</Button>
+      </div>
+    ) : (
+      <>
+        {promptsStale && !generating && <div className="stale-banner"><AlertTriangle className="h-4 w-4 flex-shrink-0" /><span>Giọng đọc đã thay đổi nên prompt cũ không còn khớp. Hãy bấm <b>Tạo lại prompt</b>.</span></div>}
+
+        <div className={cn("step-guidance", hasPrompts && "ready")}>
+          <div>
+            <b>{generating ? "Đang tạo prompt cho từng câu..." : hasPrompts ? `${assets.length} câu đã có prompt` : "Chưa có prompt."}</b>
+            <span>{generating ? "AI đang đọc toàn bộ kịch bản và tạo prompt nhất quán cho từng câu." : hasPrompts ? "Bấm vào prompt để sửa. Xong thì bấm Tìm ảnh." : "Bấm Tạo prompt để AI sinh prompt cho từng câu theo SRT."}</span>
+          </div>
+          <Button variant={hasPrompts ? "secondary" : "default"} onClick={runGenerate} disabled={isBusy}>{generating ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {hasPrompts ? "Tạo lại prompt" : "Tạo prompt"}</Button>
+        </div>
+
+        {generating && <div className="voice-progress-panel"><div className="voice-progress-head"><b>{userProgress?.title || "Đang tạo prompt"}</b><span>{progress}%</span></div><i><em style={{width:`${progress}%`}} /></i></div>}
+
+        <div className="prompt-list">
+          {assets.length === 0
+            ? <EmptyState text={generating ? "Đang tạo prompt..." : "Chưa có prompt. Bấm Tạo prompt ở trên."} />
+            : assets.map((item, i) => (
+              <div className="prompt-row" key={item.asset_id}>
+                <span className="prompt-row-idx">{i + 1}</span>
+                <div className="prompt-row-time">{formatTime(item.start)} → {formatTime(item.end)}</div>
+                <div className="prompt-row-body">
+                  <p className="prompt-row-sentence">{item.sentence_text}</p>
+                  {editingId === item.asset_id ? (
+                    <Input
+                      autoFocus
+                      value={editValue}
+                      onChange={(e)=>setEditValue(e.target.value)}
+                      onBlur={()=>commitEdit(item)}
+                      onKeyDown={(e)=>{ if (e.key==="Enter") commitEdit(item); if (e.key==="Escape") setEditingId(null) }}
+                      className="prompt-row-input"
+                    />
+                  ) : (
+                    <button className="prompt-row-keyword" onClick={()=>startEdit(item)} title="Bấm để sửa prompt">
+                      <Sparkles className="h-3 w-3 text-emerald-300 flex-shrink-0" />
+                      <span>{item.keyword || item.ai_search_keyword || "— chưa có prompt —"}</span>
+                      <Pencil className="h-3 w-3 text-zinc-500 flex-shrink-0 prompt-row-pencil" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+        </div>
+      </>
+    )}
+
+    <div className="screen-footer">
+      <Button variant="secondary" onClick={()=>goStep("step2")}><ArrowLeft className="h-4 w-4"/> Quay lại Giọng đọc</Button>
+      <span>{searching ? "Đang tìm ảnh theo prompt..." : hasPrompts ? "Prompt sẵn sàng. Bấm Tìm ảnh để tải media theo prompt." : "Tạo prompt trước khi tìm ảnh."}</span>
+      <Button disabled={!hasPrompts || isBusy} onClick={runSearch}>{searching ? <LoaderCircle className="h-4 w-4 animate-spin"/> : <Image className="h-4 w-4"/>} Tìm ảnh theo prompt <ArrowRight className="h-4 w-4"/></Button>
+    </div>
+  </div>
+}
+
 function SceneScreen({ assets, project, startJob, isBusy, busyAction, goStep }) {
   const loading = busyAction === "analyze-search" && isBusy
+  const scenesStale = Boolean(project?.has_voice && project?.scenes_exist && !project?.has_scenes)
+  const runAnalyze = () => startJob("/api/analyze-search", undefined, "analyze-search")
   return <div className="step-screen">
     <div className="screen-heading"><h1>Bước 3A - Chuẩn bị cảnh</h1><p>Tool tự đọc mốc thời gian, gom câu cùng ý và chuẩn bị ảnh/video cho từng cảnh.</p></div>
+    {scenesStale && !loading && <div className="stale-banner"><AlertTriangle className="h-4 w-4 flex-shrink-0" /><span>Giọng đọc đã được tạo lại nên phân cảnh cũ không còn khớp. Hãy bấm <b>Tạo lại phân cảnh</b> để cập nhật cảnh và ảnh theo nội dung mới.</span></div>}
     <div className={cn("step-guidance", project?.has_voice && "ready")}>
       <div>
         <b>{project?.has_voice ? "Tool đang chuẩn bị dữ liệu cho bước duyệt ảnh." : "Cần tạo giọng đọc trước."}</b>
         <span>{loading ? "Đang chia nội dung thành cảnh và tìm media phù hợp. Xong bước này tool sẽ chuyển sang màn duyệt ảnh." : project?.has_voice ? "Nếu đã có dữ liệu, bạn có thể xem lại từng cảnh ở bên dưới hoặc sang bước duyệt ảnh." : "Quay lại Bước 2, bấm tạo giọng đọc. Tool cần voice để biết mỗi câu nằm ở giây nào."}</span>
       </div>
-      {!project?.has_voice && <Button variant="secondary" onClick={()=>goStep("step2")}><ArrowLeft className="h-4 w-4" /> Về Bước 2</Button>}
+      {!project?.has_voice
+        ? <Button variant="secondary" onClick={()=>goStep("step2")}><ArrowLeft className="h-4 w-4" /> Về Bước 2</Button>
+        : <Button variant={scenesStale ? "default" : "secondary"} onClick={runAnalyze} disabled={isBusy}>{loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {assets.length ? "Tạo lại phân cảnh" : "Tạo phân cảnh"}</Button>}
     </div>
     <div className="scene-layout">
       <div className="glass-panel screen-panel"><div className="panel-title"><div><h2>Lời đọc theo thời gian</h2><p>{project?.has_voice ? "Mỗi dòng là một đoạn voice đã được căn mốc" : "Chưa tạo giọng đọc"}</p></div><FileText className="text-violet-300" /></div><div className="srt-preview">{assets.length ? assets.map((a,i)=><div key={a.asset_id}><span>{i+1}</span><b>{formatTime(a.start)} → {formatTime(a.end)}</b><p>{a.sentence_text}</p></div>) : <EmptyState text={loading ? "Đang căn thời gian và gom câu thành cảnh..." : "Chưa có dữ liệu. Hãy hoàn thành Bước 2."} />}</div></div>
@@ -1979,7 +2263,7 @@ function MediaReviewScreen({ assets, filteredAssets, assetFilter, setAssetFilter
       <div>{Array.from({length:pageCount},(_,index)=>index+1).map(number=><button key={number} className={number===currentPage?"active":""} onClick={()=>{setPage(number);headerRef.current?.scrollIntoView({block:"start"})}}>{number}</button>)}</div>
       <Button size="sm" variant="secondary" disabled={currentPage===pageCount} onClick={()=>{setPage(value=>Math.min(pageCount,value+1));headerRef.current?.scrollIntoView({block:"start"})}}>Trang sau <ArrowRight className="h-4 w-4"/></Button>
     </nav>}
-    <div className="screen-footer"><Button variant="secondary" onClick={()=>goStep("step3a")}><ArrowLeft className="h-4 w-4"/> Phân cảnh</Button><span>{project?.approved_count||0}/{assets.length} cảnh đã duyệt</span><Button disabled={!assets.length} onClick={()=>goStep("step4")}>Tiếp tục kiểm tra <ArrowRight className="h-4 w-4"/></Button></div>
+    <div className="screen-footer"><Button variant="secondary" onClick={()=>goStep("step2b")}><ArrowLeft className="h-4 w-4"/> Prompt</Button><span>{project?.approved_count||0}/{assets.length} cảnh đã duyệt</span><Button disabled={!assets.length} onClick={()=>goStep("step4")}>Tiếp tục kiểm tra <ArrowRight className="h-4 w-4"/></Button></div>
   </div>
 }
 
@@ -2265,11 +2549,12 @@ function CreateSeriesDialog({ open, onOpenChange, onCreateSeries, flows = [], se
   )
 }
 
-function ProjectDetailScreen({ activeSeries, allProjects, onBack, onOpenVideo, onNewVideo, onDeleteSeries, onUpdateSeries, setError, flows = [] }) {
+function ProjectDetailScreen({ activeSeries, allProjects, onBack, onOpenVideo, onNewVideo, onDeleteSeries, onDeleteVideo, onUpdateSeries, setError, flows = [] }) {
   const [editTitle, setEditTitle] = useState(activeSeries?.title || "")
   const [editDesc, setEditDesc] = useState(activeSeries?.description || "")
   const [editMode, setEditMode] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [videoToDelete, setVideoToDelete] = useState(null)
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     setEditTitle(activeSeries?.title || "")
@@ -2353,6 +2638,11 @@ function ProjectDetailScreen({ activeSeries, allProjects, onBack, onOpenVideo, o
                 <span className={cn("status-dot", v.has_capcut_export !== false && "done")} title="Xuất CapCut" />
               </div>
               <div className="video-card-date">{formatProjectDate(v.updated_at)}</div>
+              <button
+                className="video-card-delete"
+                title="Xóa video"
+                onClick={(e) => { e.stopPropagation(); setVideoToDelete(v) }}
+              ><Trash2 className="h-4 w-4" /></button>
               <ChevronRight className="h-4 w-4 text-zinc-600 flex-shrink-0" />
             </div>
           ))}
@@ -2366,6 +2656,17 @@ function ProjectDetailScreen({ activeSeries, allProjects, onBack, onOpenVideo, o
           <div className="dialog-actions">
             <Button variant="secondary" onClick={() => setConfirmDelete(false)}>Giữ lại</Button>
             <Button variant="danger" onClick={() => { setConfirmDelete(false); onDeleteSeries(activeSeries.path) }}><Trash2 className="h-4 w-4" /> Xóa Dự án</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(videoToDelete)} onOpenChange={(open) => !open && setVideoToDelete(null)}>
+        <DialogContent className="max-w-md">
+          <DialogTitle>Xóa video này?</DialogTitle>
+          <DialogDescription>Toàn bộ kịch bản, giọng đọc, media và dữ liệu của "{videoToDelete?.name}" sẽ bị xóa vĩnh viễn. Thao tác này không thể hoàn tác.</DialogDescription>
+          <div className="dialog-actions">
+            <Button variant="secondary" onClick={() => setVideoToDelete(null)}>Giữ lại</Button>
+            <Button variant="danger" onClick={() => { const target = videoToDelete; setVideoToDelete(null); onDeleteVideo(target.path, target.name) }}><Trash2 className="h-4 w-4" /> Xóa video</Button>
           </div>
         </DialogContent>
       </Dialog>
