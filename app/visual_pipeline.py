@@ -933,13 +933,28 @@ def _global_visual_context(script: str) -> str:
     teams = _infer_match_teams(script)
     # Use generic named-entity extraction instead of a hardcoded name list.
     names = _extract_named_entities_from_script(script)
-    if _is_football_script(script):
-        subject = " and ".join(teams) if len(teams) == 2 else ", ".join(names[:4]) or "the football match"
+    # Domain is config-driven (packs/*.yaml detect block), not hardcoded to a
+    # single topic. Any detected domain produces a topic-locked global hint; the
+    # domain label is derived, never literal "football".
+    domain = _dp.detect_domain(script)
+    if domain:
+        subject = " and ".join(teams) if len(teams) == 2 else ", ".join(names[:4]) or "the main subject"
         return (
-            f"Football video about {subject}. Use real football match photography and real team/player images "
-            "connected to this topic. Avoid flags, logos, badges, wallpapers, title cards, thumbnails, and generic graphics."
+            f"{domain.capitalize()} video about {subject}. Use real photography of these subjects connected to this "
+            "topic. Avoid flags, logos, badges, wallpapers, title cards, thumbnails, and generic graphics."
         )
     return "Use visuals that match the full script topic. Avoid logos, title cards, thumbnails, wallpapers, and unrelated generic images."
+
+
+def _item_in_detected_domain(item: dict) -> bool:
+    """True when the item belongs to a concrete (non-generic) domain video.
+
+    Replaces the old substring check `"football video" in global_visual_context`
+    with a structured signal so the behavior generalizes to every detected
+    domain instead of being hardcoded to football.
+    """
+    domain = str(item.get("video_domain") or "").strip().lower()
+    return bool(domain) and domain not in ("general", "generic")
 
 
 def _scene_match_action(item: dict, teams: list[str]) -> tuple[str, str]:
@@ -963,7 +978,7 @@ def _scene_match_action(item: dict, teams: list[str]) -> tuple[str, str]:
         subject = next(iter(candidates), "")
     if any(term in lowered for term in ("goal", "scor", "equaliz", "finish", "comeback")):
         return subject, "goal celebration match action"
-    if any(term in lowered for term in ("coach", "deschamps", "ancelotti", "warning", "substitution", "touchline")):
+    if any(term in lowered for term in ("coach", "manager", "warning", "substitution", "touchline", "bench")):
         return subject, "coach touchline match"
     if any(term in lowered for term in ("defend", "tackle", "attack", "penalty area")):
         return subject, "players competing match action"
@@ -1103,39 +1118,33 @@ def _extract_named_entities_from_script(script: str, limit: int = 12) -> list[st
 
 def _build_local_video_context(script: str) -> dict:
     teams = _infer_match_teams(script)
-    is_football = _is_football_script(script)
+    # Domain is config-driven: whatever packs/*.yaml detect (or none -> general).
+    domain = _dp.detect_domain(script) or "general"
     entities = _extract_named_entities_from_script(script)
-    topic = "football match analysis" if is_football else "general narrated video"
+    topic = "general narrated video"
     if len(teams) == 2:
         topic = f"{teams[0]} vs {teams[1]}"
     elif entities:
         topic = ", ".join(entities[:3])
     visual_boundaries = [
         "stay inside the real subject of the script",
+        "use real photography tied to the actual subjects and event of the script",
         "avoid logos, flags, thumbnails, posters, title cards, and unrelated generic images",
     ]
-    forbidden = [
+    # Forbidden contexts come from the resolved domain pack (packs/*.yaml), never
+    # hardcoded per topic. The football pack supplies football-specific avoids;
+    # any other domain supplies its own; unknown -> generic pack defaults. This is
+    # the local AI-failed fallback, so no AI caller is used (file/generic only).
+    pack = _dp.resolve_domain_pack(script, {"video_domain": domain}, ai_caller=None)
+    forbidden = list(_dp.forbidden_for(pack)) or [
         "tourism",
         "architecture unrelated to script",
         "country flags unless explicitly requested",
         "posters, thumbnails, graphics, collages",
     ]
-    if is_football:
-        visual_boundaries.insert(
-            0,
-            "use real football match, player, coach, crowd, stadium, and celebration photography tied to the same teams and event",
-        )
-        forbidden.extend(
-            [
-                "stadium exterior only",
-                "club logo or federation badge",
-                "wallpaper-style football graphics",
-                "random footballers from other teams or countries",
-            ]
-        )
     return {
         "video_topic": topic,
-        "video_domain": "football" if is_football else "general",
+        "video_domain": domain,
         "main_entities": entities[:8],
         "match_teams": teams,
         "secondary_entities": entities[8:12],
@@ -3189,7 +3198,7 @@ def _rank_images_with_gemini(
     primary_model = str(settings.get("gemini_vision_model") or settings.get("gemini_keyword_model") or "gemini-2.5-flash")
     models = [primary_model]
     minimum_score = max(1, min(100, int(settings.get("image_ai_min_score") or 55)))
-    if "football video" in str(item.get("global_visual_context") or "").lower() or _is_match_photography_item(item):
+    if _item_in_detected_domain(item) or _is_match_photography_item(item):
         minimum_score = min(minimum_score, 55)
     teams = [str(value) for value in item.get("match_teams") or [] if str(value).strip()]
     inferred_subject, _inferred_action = _scene_match_action(item, teams)
@@ -3920,7 +3929,7 @@ def crawl_image_candidates(
                 and bool(str((settings or {}).get("gemini_api_key") or "").strip())
                 and (
                     match_photography
-                    or "football video" in str(item.get("global_visual_context") or "").lower()
+                    or _item_in_detected_domain(item)
                 )
             )
             try:

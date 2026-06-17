@@ -1,0 +1,11 @@
+{
+  "_comment": "Gợi ý phiên âm tên/cụm từ nước ngoài cho giọng đọc tiếng Việt. Đây là DỮ LIỆU (không phải code) — sửa/thêm tuỳ chủ đề của bạn. Có thể đặt một file 'foreign_pronunciations.json' ở thư mục gốc dự án để bổ sung/ghi đè mà không đụng file này. Key bắt đầu bằng '_' bị bỏ qua.",
+  "World Cup": "Uân Cúp",
+  "Los Angeles": "Lót An-giơ-lét",
+  "Paraguay": "Pa-ra-goay",
+  "Mauricio Pochettino": "Mau-ri-xi-ô Pô-chét-ti-nô",
+  "Folarin Balogun": "Fô-la-rin Ba-lô-gun",
+  "Weston McKennie": "Oét-tơn Mắc-Ken-ni",
+  "Gio Reyna": "Giô Rây-na",
+  "Christian Pulisic": "Crít-chi-an Pu-li-sích"
+}

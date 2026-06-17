@@ -55,16 +55,33 @@ def _to_tensor(result):
     return item
 
 
-FOREIGN_NAME_PRONUNCIATIONS = {
-    "World Cup": "Uân Cúp",
-    "Los Angeles": "Lót An-giơ-lét",
-    "Paraguay": "Pa-ra-goay",
-    "Mauricio Pochettino": "Mau-ri-xi-ô Pô-chét-ti-nô",
-    "Folarin Balogun": "Fô-la-rin Ba-lô-gun",
-    "Weston McKennie": "Oét-tơn Mắc-Ken-ni",
-    "Gio Reyna": "Giô Rây-na",
-    "Christian Pulisic": "Crít-chi-an Pu-li-sích",
-}
+def _load_foreign_pronunciations() -> dict:
+    """Pronunciation hints are DATA, not code: loaded from foreign_pronunciations.json
+    (sibling file, user-editable) plus an optional override at the repo root, so no
+    topic-specific names live in this module. A missing/empty file is fine — the hint
+    pass simply becomes a no-op. Keys starting with '_' (e.g. comments) are ignored.
+    """
+    result: dict = {}
+    candidates = [
+        Path(__file__).resolve().parent / "foreign_pronunciations.json",
+        Path(__file__).resolve().parents[1] / "foreign_pronunciations.json",
+    ]
+    for path in candidates:
+        try:
+            if not path.is_file():
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for key, value in data.items():
+                    key, value = str(key).strip(), str(value).strip()
+                    if key and value and not key.startswith("_"):
+                        result[key] = value
+        except Exception:
+            continue
+    return result
+
+
+FOREIGN_NAME_PRONUNCIATIONS = _load_foreign_pronunciations()
 
 
 def _prepare_spoken_text(text: str) -> str:
