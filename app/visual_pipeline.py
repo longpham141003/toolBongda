@@ -710,7 +710,6 @@ def _capitalized_phrases(text: str) -> list[str]:
 
 def _clean_search_keyword(value: str) -> str:
     value = re.sub(r"[\"'`]+", "", str(value or ""))
-    value = re.sub(r"\b(Argentina|Brazil|France|Iceland|England|Spain|Germany|Portugal)s\b", r"\1", value, flags=re.I)
     value = re.sub(r"\b(free|stock|photo|image|picture|real life|high quality|hd|4k)\b", " ", value, flags=re.I)
     value = re.sub(r"\s+", " ", value).strip(" ,;:-")
     return value[:90]
@@ -925,22 +924,15 @@ def _extract_year_competition(script: str) -> str:
 
 
 def _is_football_script(script: str) -> bool:
-    lowered = str(script or "").lower()
-    terms = (
-        "argentina", "brazil", "messi", "football", "soccer", "world cup",
-        "friendly", "match", "goal", "penalty", "midfield", "fullback",
-        "scaloni", "vinicius", "iceland", "national team",
-    )
-    return sum(term in lowered for term in terms) >= 3
+    # Domain detection is config-driven: the football vocabulary/entity list now
+    # lives in packs/football.yaml (detect block), not hardcoded here.
+    return _dp.detect_domain(script) == "football"
 
 
 def _global_visual_context(script: str) -> str:
     teams = _infer_match_teams(script)
-    lowered = str(script or "").lower()
-    names = []
-    for name in ("Lionel Messi", "Vinicius Junior", "Lionel Scaloni", "Argentina", "Brazil", "Iceland"):
-        if name.lower() in lowered:
-            names.append(name)
+    # Use generic named-entity extraction instead of a hardcoded name list.
+    names = _extract_named_entities_from_script(script)
     if _is_football_script(script):
         subject = " and ".join(teams) if len(teams) == 2 else ", ".join(names[:4]) or "the football match"
         return (
@@ -2524,10 +2516,10 @@ def _keyword_prompt(scenes: list[dict], script: str = "", pack=None) -> str:
         "- If the script is not sports, do not invent sports terms or sports sources.\n"
         f"- Never request these unless the scene specifically asks for them: {forbidden}, collages, or unrelated generic images.\n"
         "- Bad: football player, soccer, sports, famous, real life action scene, dramatic background.\n"
-        "- Good examples depend on context: Lionel Messi Argentina World Cup trophy 2022; NASA Artemis moon rocket launch; Roman Empire marble statue; iPhone factory assembly line.\n"
+        "- Good examples depend on context (subject + event/place/time): a named athlete lifting a trophy at a specific tournament and year; NASA Artemis moon rocket launch; Roman Empire marble statue; iPhone factory assembly line.\n"
         "- Do not include abstract filler words like known, considered, important, history, famous, editorial photo, real life, visible context.\n"
         "- Prefer a search phrase a real person would type into Google Images.\n"
-        "- Never output malformed phrases like 'They Argentina Iceland' or duplicated words like 'Argentina Argentina Iceland'.\n"
+        "- Never output malformed phrases that start with a pronoun (e.g. 'They TeamA TeamB') or contain duplicated words (e.g. 'TeamA TeamA TeamB').\n"
         "- Each scene must stay in its own lane. Do not use a player, team, or place from another scene unless that exact entity is also correct for the current scene.\n"
         "- If a real public figure/team/event is mentioned, keep the name.\n"
         "- sportsdb_queries: only for sports entities; otherwise return an empty list.\n"

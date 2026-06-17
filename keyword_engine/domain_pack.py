@@ -132,6 +132,48 @@ def load_generic_pack(packs_dir: str | Path | None = None) -> DomainPack:
 
 
 # ---------------------------------------------------------------------------
+# Domain detection (config-driven; replaces hardcoded term lists in the engine)
+# ---------------------------------------------------------------------------
+def detect_domain(script: str, packs_dir: str | Path | None = None) -> str | None:
+    """Scan every packs/*.yaml 'detect' block and return the best-matching
+    domain for the script (>= min_hits keyword hits), or None. Detection
+    knowledge lives in the YAML packs, not in code."""
+    text = str(script or "").lower()
+    if not text.strip():
+        return None
+    try:
+        import yaml
+    except Exception:
+        return None
+    directory = _packs_dir(packs_dir)
+    best_domain: str | None = None
+    best_score = 0
+    try:
+        pack_files = sorted(directory.glob("*.yaml"))
+    except Exception:
+        return None
+    for path in pack_files:
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        detect = data.get("detect")
+        if not isinstance(detect, dict):
+            continue
+        keywords = [str(k).lower().strip() for k in (detect.get("keywords") or []) if str(k).strip()]
+        if not keywords:
+            continue
+        min_hits = int(detect.get("min_hits") or 1)
+        hits = sum(1 for kw in keywords if kw in text)
+        if hits >= min_hits and hits > best_score:
+            best_score = hits
+            best_domain = str(data.get("domain") or path.stem).strip() or None
+    return best_domain
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 def resolve_domain_pack(

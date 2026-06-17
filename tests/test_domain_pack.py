@@ -138,6 +138,25 @@ class TestBuildSceneQuery:
 
 
 # ===========================================================================
+# detect_domain (config-driven domain detection)
+# ===========================================================================
+class TestDetectDomain:
+    def test_football_detected_from_vocabulary(self):
+        script = "It was a tense football match; the striker scored a late goal at the World Cup."
+        assert dp.detect_domain(script) == "football"
+
+    def test_football_detected_from_entities(self):
+        script = "Argentina and Brazil clashed, and Messi was unstoppable."
+        assert dp.detect_domain(script) == "football"
+
+    def test_below_min_hits_returns_none(self):
+        assert dp.detect_domain("A calm walk in the park on a sunny day.") is None
+
+    def test_empty_returns_none(self):
+        assert dp.detect_domain("") is None
+
+
+# ===========================================================================
 # Synthetic pack (Phase B)
 # ===========================================================================
 import json

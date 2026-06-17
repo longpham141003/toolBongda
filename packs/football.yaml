@@ -7,6 +7,30 @@
 domain: football
 language_out: en          # mọi keyword xuất ra tiếng Anh dù script tiếng Việt
 
+# ----- Nhận diện domain từ script (thay term-list hardcode trong .py) -----
+# Engine đếm số keyword khớp; >= min_hits thì coi script thuộc domain này.
+# Đây là CONFIG: tên đội/cầu thủ cụ thể nằm ở đây, không nằm trong .py.
+detect:
+  min_hits: 3
+  keywords:
+    - football
+    - soccer
+    - world cup
+    - friendly
+    - match
+    - goal
+    - penalty
+    - midfield
+    - fullback
+    - national team
+    - champions league
+    - argentina
+    - brazil
+    - messi
+    - scaloni
+    - vinicius
+    - iceland
+
 # ----- Các loại thực thể có tên mà domain này quan tâm -----
 entity_types:
   - id: team
