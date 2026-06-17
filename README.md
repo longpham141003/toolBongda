@@ -21,7 +21,7 @@ Lan dau mo tool, cua so khoi dong se tu kiem tra va cai cac thanh phan con thieu
 
 Nguoi dung chi can cho den khi trinh duyet tu mo giao dien `Visual CapCut Studio`.
 
-Huong dan chi tiet cho may moi pull repo: xem `HUONG_DAN_CHAY_MAY_MOI.md`.
+Huong dan chi tiet cho may moi pull repo: xem `docs/HUONG_DAN_CHAY_MAY_MOI.md`.
 
 Tool se mo giao dien web tai:
 
