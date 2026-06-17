@@ -3613,3 +3613,11 @@ textarea {
 .srt-edit-actions button { background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); border-radius:6px; color:#cbd5e1; padding:4px; cursor:pointer; }
 .srt-edit-actions button:hover { color:#fff; background:rgba(255,255,255,.12); }
 .srt-edit-footer { padding:8px 0 0 12px; }
+
+/* Prompt screen — character analysis + per-line real-life prompts */
+.prompt-analysis { margin-bottom:18px; }
+.prompt-story { color:#cbd5e1; font-size:13px; line-height:20px; margin:8px 0; }
+.character-list { display:flex; flex-direction:column; gap:10px; margin:10px 0; }
+.character-row { display:grid; grid-template-columns:140px 160px 1fr auto; gap:8px; align-items:start; }
+.character-row .asset-prompt, .character-row textarea { min-height:44px; }
+.asset-prompt { width:100%; min-height:56px; font-size:13px; }

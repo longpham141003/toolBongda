@@ -345,6 +345,7 @@ function App() {
   const [assetFilter, setAssetFilter] = useState("all")
   const [preflight, setPreflight] = useState(null)
   const [preflightBusy, setPreflightBusy] = useState(false)
+  const [promptAnalysis, setPromptAnalysis] = useState(null)
 
   const navigate = useNavigate()
   const location = useLocation()
@@ -516,6 +517,11 @@ function App() {
     setToast("Không tìm thấy dự án")
   }, [stateLoaded, route, series, activeSeries?.path, navigate])
 
+  // Load prompt analysis whenever the user enters the prompt screen.
+  useEffect(() => {
+    if (activeScreen === "step2b" && project?.path) loadPromptAnalysis().catch(() => {})
+  }, [activeScreen, project?.path, loadPromptAnalysis])
+
   useEffect(() => {
     if (!activeJob || !["queued", "running"].includes(activeJob.status)) return
     const timer = setInterval(async () => {
@@ -541,6 +547,8 @@ function App() {
           if (job.name === "B2 Phan tich canh") goStep("step2b")
           if (job.name === "B2+B3 Chia canh va tim media") goStep("step3b")
           if (job.name === "B3 Tim anh") goStep("step3b")
+          if (job.name === "B2 Phan tich nhan vat") loadPromptAnalysis().catch(() => {})
+          if (job.name === "B2 Tao prompt") loadState(true).catch(() => {})
           setBusyAction("")
         } else if (job.status === "cancelled") {
           clearInterval(timer)
@@ -853,6 +861,7 @@ function App() {
       if (found) setActiveSeries(found)
       else setActiveSeries({ path: "", title: cat, is_virtual: false, description: "", settings_overrides: {}, video_count: 0, latest_updated_at: 0, videos: [] })
     }
+    loadPromptAnalysis().catch(() => {})
     return data.project
   }
   // Keep the ref pointing at the latest closure so restoration effects can call
@@ -1037,6 +1046,24 @@ function App() {
     } catch (err) {
       setError(err.message)
     }
+  }
+
+  const loadPromptAnalysis = useCallback(async () => {
+    try {
+      const data = await api("/api/prompt-analysis")
+      setPromptAnalysis(data.analysis && Object.keys(data.analysis).length ? data.analysis : null)
+    } catch { /* ignore */ }
+  }, [])
+
+  async function savePromptAnalysis(next) {
+    const data = await api("/api/prompt-analysis", { method: "POST", body: JSON.stringify({ analysis: next }) })
+    setPromptAnalysis(data.analysis)
+    return data.analysis
+  }
+
+  async function saveAssetPrompt(assetId, prompt) {
+    const data = await api(`/api/assets/${assetId}/prompt`, { method: "POST", body: JSON.stringify({ prompt }) })
+    setState((current) => ({ ...current, project: data.project }))
   }
 
   async function uploadAssetMedia(assetId, file) {
@@ -1365,7 +1392,7 @@ function App() {
             hasSubtitle={Boolean(project?.has_subtitle)}
           />}
           {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} deleteVoiceClone={deleteVoiceClone} isBusy={isBusy} busyAction={busyAction} activeJob={activeJob} goStep={goStep} userProgress={userProgress} />}
-          {activeScreen === "step2b" && <PromptScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} goStep={goStep} saveKeyword={saveKeyword} userProgress={userProgress} />}
+          {activeScreen === "step2b" && <PromptScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} goStep={goStep} saveKeyword={saveKeyword} userProgress={userProgress} promptAnalysis={promptAnalysis} savePromptAnalysis={savePromptAnalysis} saveAssetPrompt={saveAssetPrompt} loadPromptAnalysis={loadPromptAnalysis} />}
           {activeScreen === "step3a" && <SceneScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} goStep={goStep} />}
           {activeScreen === "step3b" && <MediaReviewScreen assets={assets} filteredAssets={filteredAssets} assetFilter={assetFilter} setAssetFilter={setAssetFilter} project={project} assetJobs={assetJobs} statusBadge={statusBadge} setLightboxIndex={setLightboxIndex} startJob={startJob} approveAsset={approveAsset} approveAllAssets={approveAllAssets} chooseAssetMedia={chooseAssetMedia} bulkRetryAssets={bulkRetryAssets} isBusy={isBusy} goStep={goStep} />}
           {activeScreen === "step4" && <ExportScreen project={project} assets={assets} preflight={preflight} runPreflight={runPreflight} startJob={startJob} title={title} isBusy={isBusy} busyAction={busyAction} goStep={goStep} />}
@@ -2126,13 +2153,16 @@ function looksLikeEnglish(text = "") {
   return asciiRatio > 0.92 && hits >= 4
 }
 
-function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, saveKeyword, userProgress }) {
+function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, saveKeyword, userProgress, promptAnalysis, savePromptAnalysis, saveAssetPrompt, loadPromptAnalysis }) {
   const generating = busyAction === "analyze" && isBusy
   const searching = busyAction === "search" && isBusy
+  const analyzingStory = busyAction === "analyze-story" && isBusy
+  const generatingRealPrompts = busyAction === "generate-prompts" && isBusy
   const hasPrompts = Boolean(project?.has_scenes) && assets.length > 0
   const promptsStale = Boolean(project?.has_voice && project?.scenes_exist && !project?.has_scenes)
   const [editingId, setEditingId] = useState(null)
   const [editValue, setEditValue] = useState("")
+  const [editingPrompts, setEditingPrompts] = useState({})
   const progress = Math.max(0, Math.min(100, Math.round(userProgress?.percent || 0)))
   const runGenerate = () => startJob("/api/analyze", undefined, "analyze")
   const runSearch = () => startJob("/api/search", undefined, "search")
@@ -2142,6 +2172,17 @@ function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, s
     setEditingId(null)
     if (value && value !== (item.keyword || "")) await saveKeyword(item.asset_id, value)
   }
+
+  // Character editor helpers
+  const chars = promptAnalysis?.characters || []
+  const persist = (nextChars) => savePromptAnalysis({ ...(promptAnalysis || {}), characters: nextChars })
+  const updateCharacter = (i, patch) => persist(chars.map((c, idx) => idx === i ? { ...c, ...patch } : c))
+  const removeCharacter = (i) => persist(chars.filter((_, idx) => idx !== i))
+  const addCharacter = () => persist([...chars, { name: "", role: "", description: "" }])
+
+  // Per-line prompt local state helpers
+  const onPromptChange = (assetId, value) => setEditingPrompts(prev => ({ ...prev, [assetId]: value }))
+  const getPromptValue = (asset) => editingPrompts[asset.asset_id] !== undefined ? editingPrompts[asset.asset_id] : (asset.prompt || "")
 
   return <div className="step-screen prompt-screen">
     <div className="screen-heading"><h1>Bước 2.5 - Prompt cho từng câu</h1><p>Mỗi câu thoại (theo SRT của giọng đọc) được AI tạo một prompt/từ khóa tìm hình đồng nhất. Xem và chỉnh trước khi tìm ảnh.</p></div>
@@ -2155,6 +2196,37 @@ function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, s
       <>
         {promptsStale && !generating && <div className="stale-banner"><AlertTriangle className="h-4 w-4 flex-shrink-0" /><span>Giọng đọc đã thay đổi nên prompt cũ không còn khớp. Hãy bấm <b>Tạo lại prompt</b>.</span></div>}
 
+        {/* Character analysis section */}
+        <div className="prompt-analysis">
+          <div className="panel-title"><div><h2>Phân tích &amp; nhân vật</h2><p>AI dựng bối cảnh và nhân vật từ phụ đề. Sửa cho khớp rồi tạo prompt đời thật.</p></div></div>
+          <Button variant="secondary" disabled={isBusy} onClick={() => startJob("/api/analyze-story", undefined, "analyze-story")}>
+            {analyzingStory ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />} {analyzingStory ? "Đang phân tích..." : "Phân tích nhân vật"}
+          </Button>
+          {promptAnalysis && (
+            <>
+              {promptAnalysis.storyContext && <p className="prompt-story">{promptAnalysis.storyContext}</p>}
+              <div className="character-list">
+                {chars.map((ch, i) => (
+                  <div className="character-row" key={i}>
+                    <Input value={ch.name || ""} placeholder="Tên"
+                      onChange={(e) => updateCharacter(i, { name: e.target.value })} />
+                    <Input value={ch.role || ""} placeholder="Vai trò"
+                      onChange={(e) => updateCharacter(i, { role: e.target.value })} />
+                    <Textarea value={ch.description || ""} placeholder="Mô tả ngoại hình đời thật"
+                      onChange={(e) => updateCharacter(i, { description: e.target.value })} />
+                    <button title="Xoá" onClick={() => removeCharacter(i)}><Trash2 className="h-4 w-4" /></button>
+                  </div>
+                ))}
+                <Button variant="ghost" onClick={addCharacter}><Plus className="h-4 w-4" /> Thêm nhân vật</Button>
+              </div>
+              <Button disabled={isBusy} onClick={() => startJob("/api/generate-prompts", undefined, "generate-prompts")}>
+                {generatingRealPrompts ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {generatingRealPrompts ? "Đang tạo prompt..." : "Tạo prompt cho từng câu"}
+              </Button>
+            </>
+          )}
+        </div>
+
+        {/* Existing analyze/generate scene-keyword flow */}
         <div className={cn("step-guidance", hasPrompts && "ready")}>
           <div>
             <b>{generating ? "Đang tạo prompt cho từng câu..." : hasPrompts ? `${assets.length} câu đã có prompt` : "Chưa có prompt."}</b>
@@ -2163,7 +2235,7 @@ function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, s
           <Button variant={hasPrompts ? "secondary" : "default"} onClick={runGenerate} disabled={isBusy}>{generating ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {hasPrompts ? "Tạo lại prompt" : "Tạo prompt"}</Button>
         </div>
 
-        {generating && <div className="voice-progress-panel"><div className="voice-progress-head"><b>{userProgress?.title || "Đang tạo prompt"}</b><span>{progress}%</span></div><i><em style={{width:`${progress}%`}} /></i></div>}
+        {(generating || generatingRealPrompts || analyzingStory) && <div className="voice-progress-panel"><div className="voice-progress-head"><b>{userProgress?.title || "Đang xử lý"}</b><span>{progress}%</span></div><i><em style={{width:`${progress}%`}} /></i></div>}
 
         <div className="prompt-list">
           {assets.length === 0
@@ -2184,12 +2256,19 @@ function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, s
                       className="prompt-row-input"
                     />
                   ) : (
-                    <button className="prompt-row-keyword" onClick={()=>startEdit(item)} title="Bấm để sửa prompt">
+                    <button className="prompt-row-keyword" onClick={()=>startEdit(item)} title="Bấm để sửa keyword">
                       <Sparkles className="h-3 w-3 text-emerald-300 flex-shrink-0" />
-                      <span>{item.keyword || item.ai_search_keyword || "— chưa có prompt —"}</span>
+                      <span>{item.keyword || item.ai_search_keyword || "— chưa có keyword —"}</span>
                       <Pencil className="h-3 w-3 text-zinc-500 flex-shrink-0 prompt-row-pencil" />
                     </button>
                   )}
+                  <Textarea
+                    className="asset-prompt"
+                    value={getPromptValue(item)}
+                    placeholder="Prompt ảnh đời thật cho câu này..."
+                    onChange={(e) => onPromptChange(item.asset_id, e.target.value)}
+                    onBlur={(e) => saveAssetPrompt && saveAssetPrompt(item.asset_id, e.target.value)}
+                  />
                 </div>
               </div>
             ))}
