@@ -220,6 +220,7 @@ def generate_voice(project: Path, settings: dict, log: Callable[[str], None], st
         replacements = [
             (temporary_path, output_path),
             (temporary_path.with_suffix(".segments.json"), output_path.with_suffix(".segments.json")),
+            (temporary_path.with_suffix(".srt"), output_path.with_suffix(".srt")),
             (temporary_path.with_suffix(".ttv.meta.json"), output_path.with_suffix(".ttv.meta.json")),
         ]
         for source, target in replacements:
@@ -234,6 +235,7 @@ def generate_voice(project: Path, settings: dict, log: Callable[[str], None], st
         runner.close()
         temporary_path.unlink(missing_ok=True)
         temporary_path.with_suffix(".segments.json").unlink(missing_ok=True)
+        temporary_path.with_suffix(".srt").unlink(missing_ok=True)
         temporary_path.with_suffix(".ttv.meta.json").unlink(missing_ok=True)
     return output_path
 

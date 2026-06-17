@@ -19,6 +19,8 @@ from .text_to_voice_cli import (
     sanitize_text_for_tts,
     shift_segment_timing,
     split_text_for_text_to_voice,
+    split_text_into_progress_segments,
+    write_srt_file,
 )
 
 
@@ -562,8 +564,9 @@ class TextToVoiceRunner:
         language, language_warning = normalize_kokoro_language(requested_language)
         if language_warning:
             self.log(f"Text to Voice {label}: {language_warning}")
-        max_chars = max(1000, min(int(self.settings.get("text_to_voice_max_chars") or 10000), 12000))
-        chunks = split_text_for_text_to_voice(text, max_chars)
+        # Băm mịn theo cụm câu để tiến độ "đoạn i/N" có ý nghĩa và timing theo câu.
+        progress_chars = max(80, min(int(self.settings.get("text_to_voice_progress_chars") or 350), 2000))
+        chunks = split_text_into_progress_segments(text, progress_chars)
         chunk_estimate = len(chunks)
 
         cache_key = self._cache_key(text_path)
@@ -651,6 +654,7 @@ class TextToVoiceRunner:
                 ),
                 encoding="utf-8",
             )
+            write_srt_file(output_path.with_suffix(".srt"), combined_segments)
         finally:
             for part_path in generated_paths:
                 part_path.unlink(missing_ok=True)
@@ -793,6 +797,7 @@ class TextToVoiceRunner:
                 ),
                 encoding="utf-8",
             )
+            write_srt_file(output_path.with_suffix(".srt"), estimated_segments)
         finally:
             for part_path in generated_paths:
                 part_path.unlink(missing_ok=True)
