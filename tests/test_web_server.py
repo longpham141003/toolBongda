@@ -69,11 +69,16 @@ def reset_runtime():
     ws.runtime.jobs = {}
     ws.runtime.pending_jobs_by_client = {}
     ws.runtime.current_projects = {}
+    # current_project getter falls back to default_project (loaded from disk on
+    # the host); clear it so "no project" tests are hermetic regardless of any
+    # real project that exists on the machine running the suite.
+    ws.runtime.default_project = None
     yield
     ws.runtime.active_job_ids = {}
     ws.runtime.jobs = {}
     ws.runtime.pending_jobs_by_client = {}
     ws.runtime.current_projects = {}
+    ws.runtime.default_project = None
 
 
 @pytest.fixture()

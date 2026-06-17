@@ -122,9 +122,14 @@ class TestLoadSettingsWithValidFile:
             settings_json_content={"projects_dir": "RelativeProjects"},
             write_file=True,
         )
+        # A relative projects_dir is resolved against the standard data location
+        # (default_projects_dir().parent), not the app install dir. Patch it to a
+        # temp base so the test is hermetic and does not touch the real user dir.
+        base = tmp_path / "DataRoot"
+        monkeypatch.setattr(cfg, "default_projects_dir", lambda: base / "Projects")
         result = cfg.load_settings()
         assert Path(result["projects_dir"]).is_absolute()
-        assert result["projects_dir"] == str(tmp_path / "RelativeProjects")
+        assert result["projects_dir"] == str(base / "RelativeProjects")
 
     def test_extra_unknown_keys_preserved(self, monkeypatch, tmp_path):
         cfg = _patch_config(
