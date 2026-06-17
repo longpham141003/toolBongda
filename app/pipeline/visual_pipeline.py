@@ -1291,10 +1291,12 @@ def _resolve_keyword_provider(settings: dict | None) -> tuple[str, str, str]:
     return provider, "", ""
 
 
-def _pack_ai_caller(settings: dict | None):
+def _pack_ai_caller(settings: dict | None, max_tokens: int = 1200):
     """Return a callable (prompt:str)->str dispatching to the configured AI
     provider, reusing the existing request helpers. Returns None when no
-    provider/key is configured so the synthetic-pack tier is skipped."""
+    provider/key is configured so the synthetic-pack tier is skipped.
+    max_tokens is forwarded to the openai/kiro/claude branches; gemini has
+    no cap so it is ignored there."""
     provider, api_key, model = _resolve_keyword_provider(settings)
     if not provider or not api_key:
         return None
@@ -1309,7 +1311,7 @@ def _pack_ai_caller(settings: dict | None):
                     model=model,
                     system="Return strict JSON only.",
                     prompt=prompt,
-                    max_tokens=1200,
+                    max_tokens=max_tokens,
                     temperature=0.1,
                 )
             if provider == "openai":
@@ -1320,7 +1322,7 @@ def _pack_ai_caller(settings: dict | None):
                     model=model,
                     system="Return strict JSON only.",
                     prompt=prompt,
-                    max_tokens=1200,
+                    max_tokens=max_tokens,
                     temperature=0.1,
                 )
             if provider == "claude":
@@ -1331,7 +1333,7 @@ def _pack_ai_caller(settings: dict | None):
                     model=model,
                     system="Return strict JSON only.",
                     prompt=prompt,
-                    max_tokens=1200,
+                    max_tokens=max_tokens,
                     temperature=0.1,
                 )
             if provider == "gemini":

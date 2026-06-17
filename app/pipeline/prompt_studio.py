@@ -14,10 +14,10 @@ from typing import Any
 from app.pipeline.subtitle_store import load_subtitle
 
 
-def _ai_call(settings: dict, prompt: str) -> str:
+def _ai_call(settings: dict, prompt: str, max_tokens: int = 8000) -> str:
     """Single AI call returning raw text. Imported lazily to avoid import cycle."""
     from app.pipeline.visual_pipeline import _pack_ai_caller
-    caller = _pack_ai_caller(settings)
+    caller = _pack_ai_caller(settings, max_tokens=max_tokens)
     if caller is None:
         raise RuntimeError("Chưa cấu hình AI (thiếu API key) để tạo prompt.")
     return caller(prompt)
@@ -234,6 +234,11 @@ def generate_line_prompts(project: Path, settings: dict, log=None, batch_size: i
     manifest = _load_manifest(project)
     if not manifest:
         raise RuntimeError("Chưa có phân cảnh. Hãy phân tích cảnh trước khi tạo prompt.")
+    if len(lines) != len(manifest):
+        raise RuntimeError(
+            "Phụ đề đã thay đổi sau khi tạo giọng đọc. Hãy tạo lại giọng đọc (Bước 2) "
+            "để phân cảnh khớp phụ đề trước khi tạo prompt."
+        )
     analysis = load_prompt_analysis(project)
     if not analysis:
         raise RuntimeError("Chưa phân tích. Hãy chạy phân tích nhân vật trước.")
@@ -264,6 +269,11 @@ def generate_line_prompts(project: Path, settings: dict, log=None, batch_size: i
         prompts.extend(coerce_prompt_array(raw, len(batch)))
 
     prompts = [enforce_realistic_prompt(p) if p.strip() else "" for p in prompts[:n]]
+    if not any(p.strip() for p in prompts):
+        raise RuntimeError(
+            "AI không tạo được prompt nào (có thể do hết quota hoặc lỗi API). "
+            "Hãy kiểm tra API key trong Cài đặt rồi thử lại."
+        )
     # Map prompts onto manifest assets in order (1 asset per line).
     for i, item in enumerate(manifest):
         item["prompt"] = prompts[i] if i < len(prompts) else ""

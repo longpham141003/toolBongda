@@ -2189,7 +2189,7 @@ function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, s
       </div>
     ) : (
       <>
-        {promptsStale && !generating && <div className="stale-banner"><AlertTriangle className="h-4 w-4 flex-shrink-0" /><span>Giọng đọc đã thay đổi nên prompt cũ không còn khớp. Hãy bấm <b>Tạo lại prompt</b>.</span></div>}
+        {promptsStale && !generating && <div className="stale-banner"><AlertTriangle className="h-4 w-4 flex-shrink-0" /><span>Giọng đọc đã thay đổi nên phân cảnh cũ không còn khớp. Hãy bấm <b>Phân cảnh lại</b>.</span></div>}
 
         {/* Character analysis section */}
         <div className="prompt-analysis">
@@ -2214,9 +2214,10 @@ function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, s
                 ))}
                 <Button variant="ghost" onClick={addCharacter}><Plus className="h-4 w-4" /> Thêm nhân vật</Button>
               </div>
-              <Button disabled={isBusy} onClick={() => startJob("/api/generate-prompts", undefined, "generate-prompts")}>
+              <Button disabled={isBusy || !project?.has_scenes} title={!project?.has_scenes ? "Hãy phân cảnh trước (Bước 3A) trước khi tạo prompt từng câu" : undefined} onClick={() => startJob("/api/generate-prompts", undefined, "generate-prompts")}>
                 {generatingRealPrompts ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {generatingRealPrompts ? "Đang tạo prompt..." : "Tạo prompt cho từng câu"}
               </Button>
+              {!project?.has_scenes && <p className="hint-text">Hãy phân cảnh trước (Bước 3A) để tạo prompt theo từng cảnh.</p>}
             </>
           )}
         </div>
@@ -2224,10 +2225,10 @@ function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, s
         {/* Existing analyze/generate scene-keyword flow */}
         <div className={cn("step-guidance", hasPrompts && "ready")}>
           <div>
-            <b>{generating ? "Đang tạo prompt cho từng câu..." : hasPrompts ? `${assets.length} câu đã có prompt` : "Chưa có prompt."}</b>
-            <span>{generating ? "AI đang đọc toàn bộ kịch bản và tạo prompt nhất quán cho từng câu." : hasPrompts ? "Bấm vào prompt để sửa. Xong thì bấm Tìm ảnh." : "Bấm Tạo prompt để AI sinh prompt cho từng câu theo SRT."}</span>
+            <b>{generating ? "Đang phân cảnh..." : hasPrompts ? `${assets.length} câu đã có prompt` : "Chưa có phân cảnh."}</b>
+            <span>{generating ? "AI đang đọc toàn bộ kịch bản và tạo keyword nhất quán cho từng cảnh." : hasPrompts ? "Bấm vào prompt để sửa. Xong thì bấm Tìm ảnh." : "Bấm Phân cảnh để AI chia cảnh và tạo keyword tìm kiếm."}</span>
           </div>
-          <Button variant={hasPrompts ? "secondary" : "default"} onClick={runGenerate} disabled={isBusy}>{generating ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {hasPrompts ? "Tạo lại prompt" : "Tạo prompt"}</Button>
+          <Button variant={hasPrompts ? "secondary" : "default"} onClick={runGenerate} disabled={isBusy}>{generating ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {hasPrompts ? "Phân cảnh lại" : "Phân cảnh"}</Button>
         </div>
 
         {(generating || generatingRealPrompts || analyzingStory) && <div className="voice-progress-panel"><div className="voice-progress-head"><b>{userProgress?.title || "Đang xử lý"}</b><span>{progress}%</span></div><i><em style={{width:`${progress}%`}} /></i></div>}
