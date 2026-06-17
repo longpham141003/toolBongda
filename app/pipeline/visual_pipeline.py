@@ -857,9 +857,22 @@ def build_asset_manifest(
             log(f"Timing voice {timing_invalid_reason}, đã tự căn lại theo thời lượng WAV để tiếp tục phân cảnh.")
     if not segments:
         raise RuntimeError("Timing không có câu thoại.")
-    sentences = merge_segments_into_sentences(segments)
+    if is_measured:
+        # SP3: one scene per subtitle line — do not merge lines into sentences.
+        sentences = [
+            {
+                "sentence_index": seg["sentence_index"],
+                "text": seg["text"],
+                "start": seg["start"],
+                "end": seg["end"],
+                "segment_indexes": [seg["sentence_index"]],
+            }
+            for seg in segments
+        ]
+    else:
+        sentences = merge_segments_into_sentences(segments)
     # One scene per SRT sentence (no separate scene-grouping AI round).
-    split_mode = "srt_sentence_scenes"
+    split_mode = "srt_line_scenes" if is_measured else "srt_sentence_scenes"
     assets = [
         _manifest_item(index, [sentence], "opening" if index == 1 else "sentence")
         for index, sentence in enumerate(sentences, start=1)
@@ -2378,6 +2391,7 @@ def _manifest_item(index: int, sentences: list[dict], break_reason: str) -> dict
         "end": round(end, 4),
         "duration": round(max(0.05, end - start), 4),
         "keyword": keyword_for_text(text),
+        "prompt": "",
         "search_attempt": 0,
         "status": "pending",
         "source_url": "",
