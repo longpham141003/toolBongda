@@ -126,7 +126,14 @@ Sau khi tạo xong, ghi:
 - Sau khi tạo voice, `subtitle.json`/`subtitle.srt` được cập nhật bằng timing thật.
 - Cả Kokoro và Magic Voice clone đều chạy per-line; log/tiến độ "đoạn i/N" với N>1.
 - Thiếu `subtitle.json` → `/api/voice` báo lỗi yêu cầu lưu phụ đề ở B1.
-- `build_asset_manifest` tạo cảnh khớp 1-1 với dòng phụ đề.
+- `build_asset_manifest` đọc được segments measured (1 segment/dòng) mà KHÔNG bị
+  Whisper hay heuristic repair ghi đè timing thật.
+- **Khớp 1-1 cảnh ↔ dòng phụ đề (deferred sang SP3):** SP2 tạo 1 segment voice/dòng,
+  nhưng `merge_segments_into_sentences` trong `build_asset_manifest` vẫn gộp các
+  segment không kết thúc bằng `.!?` thành một cảnh. Với phụ đề tách theo câu của SP1
+  (kết thúc bằng `.!?`) thì 1-1 đạt; với dòng người dùng chỉnh tay không có dấu kết
+  câu thì chưa. Đảm bảo 1-1 tuyệt đối thuộc SP3 (nơi thiết kế chính là 1 dòng = 1
+  prompt = 1 cảnh) — SP2 không sửa logic gộp cảnh để tránh đụng phần SP3 sẽ làm lại.
 - `assemble_line_segments` có unit test (timing cộng dồn đúng, pause đúng, không pause
   sau dòng cuối); ghi đè subtitle.json có test (giữ text/edited, đổi start/end).
 - Không hồi quy đường voice-preview.
