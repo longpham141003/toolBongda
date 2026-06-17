@@ -99,18 +99,43 @@ def _pack_from_dict(data: dict | None, source: str) -> DomainPack:
     )
 
 
-def _load_pack_file(path: Path, source: str) -> DomainPack | None:
+# Parse each YAML pack at most once per (path, mtime); pack files are static for
+# a run, so this removes repeated disk reads + YAML parsing on the hot path
+# (detect_domain / resolve_domain_pack are called many times per manifest).
+_YAML_CACHE: dict[str, tuple[float, dict | None]] = {}
+# Memoize detect_domain results per (script hash, packs dir) within a run.
+_DETECT_CACHE: dict[tuple[str, str], str | None] = {}
+
+
+def _read_yaml_cached(path: Path) -> dict | None:
+    try:
+        if not path.is_file():
+            return None
+        mtime = path.stat().st_mtime
+    except Exception:
+        return None
+    key = str(path)
+    cached = _YAML_CACHE.get(key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
     try:
         import yaml
     except Exception:
         return None
     try:
-        if not path.is_file():
-            return None
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        return _pack_from_dict(data, source)
+        data = data if isinstance(data, dict) else None
     except Exception:
+        data = None
+    _YAML_CACHE[key] = (mtime, data)
+    return data
+
+
+def _load_pack_file(path: Path, source: str) -> DomainPack | None:
+    data = _read_yaml_cached(path)
+    if data is None:
         return None
+    return _pack_from_dict(data, source)
 
 
 def load_generic_pack(packs_dir: str | Path | None = None) -> DomainPack:
@@ -141,11 +166,10 @@ def detect_domain(script: str, packs_dir: str | Path | None = None) -> str | Non
     text = str(script or "").lower()
     if not text.strip():
         return None
-    try:
-        import yaml
-    except Exception:
-        return None
     directory = _packs_dir(packs_dir)
+    cache_key = (hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest(), str(directory))
+    if cache_key in _DETECT_CACHE:
+        return _DETECT_CACHE[cache_key]
     best_domain: str | None = None
     best_score = 0
     try:
@@ -153,10 +177,7 @@ def detect_domain(script: str, packs_dir: str | Path | None = None) -> str | Non
     except Exception:
         return None
     for path in pack_files:
-        try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+        data = _read_yaml_cached(path)
         if not isinstance(data, dict):
             continue
         detect = data.get("detect")
@@ -170,6 +191,7 @@ def detect_domain(script: str, packs_dir: str | Path | None = None) -> str | Non
         if hits >= min_hits and hits > best_score:
             best_score = hits
             best_domain = str(data.get("domain") or path.stem).strip() or None
+    _DETECT_CACHE[cache_key] = best_domain
     return best_domain
 
 
