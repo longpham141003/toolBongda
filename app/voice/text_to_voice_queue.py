@@ -710,7 +710,7 @@ class TextToVoiceRunner:
             for i, line in enumerate(lines, start=1):
                 if self.stop_check():
                     raise RuntimeError("Stopped.")
-                text = str(line.get("text") or "").strip()
+                text = sanitize_text_for_tts(str(line.get("text") or "").strip())
                 if use_clone:
                     part_path, duration = self._clone_audio_for_text(text, label, i, total, output_path)
                 else:

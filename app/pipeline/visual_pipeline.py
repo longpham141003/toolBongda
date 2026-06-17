@@ -837,7 +837,10 @@ def build_asset_manifest(
     # heavy Whisper alignment. Each SRT sentence becomes one scene; its keyword
     # is generated per sentence and grounded in the project context downstream.
     timing = load_timing(project)
-    if bool(settings.get("whisper_timing_enabled", False)):
+    # SP2: voice generated per subtitle line carries real measured timing; never
+    # let Whisper re-alignment or the repair heuristic overwrite it.
+    is_measured = str(timing.get("timing_source") or "").lower() == "measured"
+    if not is_measured and bool(settings.get("whisper_timing_enabled", False)):
         try:
             timing = refine_timing_with_whisper(project, settings, log=log)
         except Exception as exc:
@@ -847,7 +850,7 @@ def build_asset_manifest(
     audio_path = project / "voices" / "voice.wav"
     audio_duration = probe_duration(audio_path) if audio_path.exists() else 0.0
     timing_is_invalid, timing_invalid_reason = _timing_needs_repair(segments, audio_duration)
-    if timing_is_invalid:
+    if timing_is_invalid and not is_measured:
         timing = estimate_timing_from_script(project, timing)
         segments = normalize_voice_segments(timing)
         if segments and callable(log):
