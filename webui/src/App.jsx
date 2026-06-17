@@ -2162,7 +2162,6 @@ function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, s
   const promptsStale = Boolean(project?.has_voice && project?.scenes_exist && !project?.has_scenes)
   const [editingId, setEditingId] = useState(null)
   const [editValue, setEditValue] = useState("")
-  const [editingPrompts, setEditingPrompts] = useState({})
   const progress = Math.max(0, Math.min(100, Math.round(userProgress?.percent || 0)))
   const runGenerate = () => startJob("/api/analyze", undefined, "analyze")
   const runSearch = () => startJob("/api/search", undefined, "search")
@@ -2179,10 +2178,6 @@ function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, s
   const updateCharacter = (i, patch) => persist(chars.map((c, idx) => idx === i ? { ...c, ...patch } : c))
   const removeCharacter = (i) => persist(chars.filter((_, idx) => idx !== i))
   const addCharacter = () => persist([...chars, { name: "", role: "", description: "" }])
-
-  // Per-line prompt local state helpers
-  const onPromptChange = (assetId, value) => setEditingPrompts(prev => ({ ...prev, [assetId]: value }))
-  const getPromptValue = (asset) => editingPrompts[asset.asset_id] !== undefined ? editingPrompts[asset.asset_id] : (asset.prompt || "")
 
   return <div className="step-screen prompt-screen">
     <div className="screen-heading"><h1>Bước 2.5 - Prompt cho từng câu</h1><p>Mỗi câu thoại (theo SRT của giọng đọc) được AI tạo một prompt/từ khóa tìm hình đồng nhất. Xem và chỉnh trước khi tìm ảnh.</p></div>
@@ -2263,10 +2258,10 @@ function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, s
                     </button>
                   )}
                   <Textarea
+                    key={`${item.asset_id}:${item.prompt || ""}`}
                     className="asset-prompt"
-                    value={getPromptValue(item)}
+                    defaultValue={item.prompt || ""}
                     placeholder="Prompt ảnh đời thật cho câu này..."
-                    onChange={(e) => onPromptChange(item.asset_id, e.target.value)}
                     onBlur={(e) => saveAssetPrompt && saveAssetPrompt(item.asset_id, e.target.value)}
                   />
                 </div>
