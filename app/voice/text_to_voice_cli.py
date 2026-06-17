@@ -64,12 +64,12 @@ def prepare_espeak_runtime() -> None:
     os.environ["PHONEMIZER_ESPEAK_LIBRARY"] = str(lib_dst)
 
 
-def split_text_for_text_to_voice(text: str, max_chars: int) -> list[str]:
+def _split_text_by_chars(text: str, max_chars: int, *, floor: int, ceil: int) -> list[str]:
     source = str(text or "").strip()
     if not source:
         return []
 
-    max_chars = max(1000, min(int(max_chars or 10000), 12000))
+    max_chars = max(floor, min(int(max_chars or ceil), ceil))
     if len(source) <= max_chars:
         return [source]
 
@@ -111,6 +111,42 @@ def split_text_for_text_to_voice(text: str, max_chars: int) -> list[str]:
         current_len += add
 
     flush()
+    return chunks
+
+
+def split_text_for_text_to_voice(text: str, max_chars: int) -> list[str]:
+    # Giữ nguyên hành vi cũ: đoạn lớn (>=1000 ký tự) cho chất lượng tổng hợp tốt.
+    return _split_text_by_chars(text, max_chars, floor=1000, ceil=12000)
+
+
+def split_text_into_progress_segments(text: str, max_chars: int) -> list[str]:
+    # Băm mịn theo từng cụm câu để hiển thị tiến độ "đoạn i/N" và timing theo câu.
+    # Mỗi câu trở thành một đoạn riêng; câu quá dài được băm theo từ.
+    source = str(text or "").strip()
+    if not source:
+        return []
+    max_chars = max(80, min(int(max_chars or 2000), 2000))
+    pieces = [item.strip() for item in re.split(r"(?<=[.!?])\s+|\n\s*\n", source) if item.strip()]
+    chunks: list[str] = []
+    for piece in pieces:
+        if len(piece) > max_chars:
+            # Câu quá dài: chia theo từ để giữ giới hạn max_chars.
+            words = piece.split()
+            block: list[str] = []
+            block_len = 0
+            for word in words:
+                add = len(word) + (1 if block else 0)
+                if block and block_len + add > max_chars:
+                    chunks.append(" ".join(block))
+                    block = [word]
+                    block_len = len(word)
+                else:
+                    block.append(word)
+                    block_len += add
+            if block:
+                chunks.append(" ".join(block))
+        else:
+            chunks.append(piece)
     return chunks
 
 
