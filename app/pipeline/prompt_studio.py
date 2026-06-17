@@ -59,13 +59,33 @@ def coerce_prompt_array(content: str, expected_n: int) -> list[str]:
     return result[:expected_n]
 
 
+def _limit_named_characters(text: str, limit: int = 3) -> str:
+    """Keep at most `limit` distinct named characters (Name (...) blocks); replace
+    the extras (4th+ distinct name) with a generic background phrase. Repeated names
+    are the same character and are kept."""
+    seen: list[str] = []
+    pattern = re.compile(r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)\s*\([^)]*\)")
+
+    def repl(m):
+        name = m.group(1).strip()
+        key = name.lower()
+        if key in seen:
+            return m.group(0)            # same character → keep
+        if len(seen) < limit:
+            seen.append(key)
+            return m.group(0)            # within limit → keep
+        return "another person nearby"   # over limit → drop name + parenthetical
+
+    return pattern.sub(repl, text)
+
+
 def enforce_realistic_prompt(text: str, named_count_limit: int = 3) -> str:
-    # named_count_limit is reserved for future enforcement; not applied yet.
     value = str(text or "").strip()
     # Drop a leading "N." / "N)" / "N -" scene number.
     value = re.sub(r"^\s*\d+\s*[\.\):\-]\s*", "", value)
     for pattern, replacement in _POLICY_REPLACEMENTS:
         value = pattern.sub(replacement, value)
+    value = _limit_named_characters(value, named_count_limit)
     value = value.strip()
     # Ensure exactly one realistic tag at the end.
     if value.endswith(REALISTIC_TAG):
