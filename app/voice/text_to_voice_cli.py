@@ -120,34 +120,9 @@ def split_text_for_text_to_voice(text: str, max_chars: int) -> list[str]:
 
 
 def split_text_into_progress_segments(text: str, max_chars: int) -> list[str]:
-    # Băm mịn theo từng cụm câu để hiển thị tiến độ "đoạn i/N" và timing theo câu.
-    # Mỗi câu trở thành một đoạn riêng; câu quá dài được băm theo từ.
-    source = str(text or "").strip()
-    if not source:
-        return []
-    max_chars = max(80, min(int(max_chars or 2000), 2000))
-    pieces = [item.strip() for item in re.split(r"(?<=[.!?])\s+|\n\s*\n", source) if item.strip()]
-    chunks: list[str] = []
-    for piece in pieces:
-        if len(piece) > max_chars:
-            # Câu quá dài: chia theo từ để giữ giới hạn max_chars.
-            words = piece.split()
-            block: list[str] = []
-            block_len = 0
-            for word in words:
-                add = len(word) + (1 if block else 0)
-                if block and block_len + add > max_chars:
-                    chunks.append(" ".join(block))
-                    block = [word]
-                    block_len = len(word)
-                else:
-                    block.append(word)
-                    block_len += add
-            if block:
-                chunks.append(" ".join(block))
-        else:
-            chunks.append(piece)
-    return chunks
+    # Băm mịn theo cụm câu để hiển thị tiến độ "đoạn i/N" và timing theo câu.
+    # Gom các câu liên tiếp tới ngưỡng max_chars; câu quá dài được băm theo từ.
+    return _split_text_by_chars(text, max_chars, floor=80, ceil=2000)
 
 
 def combine_wavs(paths: list[Path], output_path: Path) -> float:

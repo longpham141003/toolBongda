@@ -29,10 +29,16 @@ class TestProgressSegments:
         joined = " ".join(chunks).split()
         assert joined == text.split()
 
-    def test_floor_allows_small_chunks(self):
-        text = "One. Two. Three. Four. Five. Six. Seven. Eight."
+    def test_clusters_into_multiple_chunks(self):
+        # 4 câu ~26 ký tự mỗi câu; max_chars=80 => gom 2 câu/đoạn => >=2 đoạn.
+        text = (
+            "Alpha bravo charlie delta. Echo foxtrot golf hotel. "
+            "India juliet kilo lima. Mike november oscar papa."
+        )
         chunks = split_text_into_progress_segments(text, 80)
         assert len(chunks) >= 2
+        # ghép lại không mất từ
+        assert " ".join(chunks).split() == text.split()
 
     def test_oversized_single_sentence_splits_by_words(self):
         sentence = "word " * 200  # 1 câu ~1000 ký tự, không dấu kết thúc
