@@ -3,6 +3,10 @@
 Stubs TextToVoiceRunner so we never touch the real Kokoro server; we only
 verify that the .srt artifact produced next to the temp WAV is renamed to
 voices/voice.srt (and the temp files are cleaned up).
+
+Updated for SP2 Task 4: generate_voice now reads subtitle.json (via
+load_subtitle) instead of script_final.txt, so the project needs a saved
+subtitle and the fake runner implements submit_lines instead of submit_file.
 """
 from __future__ import annotations
 
@@ -23,6 +27,8 @@ with mock.patch.dict(
     sys.modules["app.voice.text_to_voice_queue"].TextToVoiceRunner = mock.MagicMock()  # type: ignore[attr-defined]
     from app.pipeline import visual_pipeline as vp
 
+from app.pipeline.subtitle_store import save_subtitle
+
 
 class _FakeRunner:
     """Writes the same sibling artifacts the real Kokoro path produces."""
@@ -33,12 +39,14 @@ class _FakeRunner:
     def start(self):
         return None
 
-    def submit_file(self, script_path, label, output_path):
+    def submit_lines(self, lines, label, output_path):
+        import json
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"RIFFfakewav")
+        segments = [{"index": 1, "start": 0.0, "end": 1.0, "text": "Câu một.", "edited": False, "timing_source": "measured"}]
         output_path.with_suffix(".segments.json").write_text(
-            '{"segments": [{"text": "Câu một.", "start": 0.0, "end": 1.0}]}',
+            json.dumps({"engine": "kokoro-server", "segments": segments}, ensure_ascii=False),
             encoding="utf-8",
         )
         output_path.with_suffix(".srt").write_text(
@@ -55,6 +63,8 @@ def test_generate_voice_persists_srt_and_cleans_temp(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     (project / "scripts").mkdir(parents=True)
     (project / "scripts" / "script_final.txt").write_text("Câu một.", encoding="utf-8")
+    # SP2 Task 4: generate_voice now requires subtitle.json to be present.
+    save_subtitle(project, [{"start": 0.0, "end": 1.0, "text": "Câu một.", "edited": False}])
 
     result = vp.generate_voice(project, {}, log=lambda _msg: None)
 

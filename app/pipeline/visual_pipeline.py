@@ -19,6 +19,7 @@ from typing import Callable
 from urllib.parse import quote_plus, urlparse
 
 from ..voice.text_to_voice_queue import TextToVoiceRunner
+from .subtitle_store import load_subtitle, save_subtitle
 
 from keyword_engine import domain_pack as _dp
 
@@ -208,13 +209,15 @@ def _replace_file_windows(source: Path, target: Path, retries: int = 60, delay: 
 
 
 def generate_voice(project: Path, settings: dict, log: Callable[[str], None], stop_check=lambda: False) -> Path:
-    script_path = project / "scripts" / "script_final.txt"
+    lines = load_subtitle(project)
+    if not lines:
+        raise RuntimeError("Chưa có phụ đề. Hãy tạo & lưu phụ đề ở Bước 1 trước khi tạo giọng đọc.")
     output_path = project / "voices" / "voice.wav"
     temporary_path = output_path.with_name(f"voice.{uuid.uuid4().hex}.working.wav")
     runner = TextToVoiceRunner(settings, log=log, stop_check=stop_check)
     runner.start()
     try:
-        runner.submit_file(script_path, "visual_pipeline", temporary_path)
+        runner.submit_lines(lines, "visual_pipeline", temporary_path)
         if stop_check():
             raise RuntimeError("Stopped.")
         replacements = [
@@ -227,9 +230,13 @@ def generate_voice(project: Path, settings: dict, log: Callable[[str], None], st
             if source.exists():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 _replace_file_windows(source, target)
+        # Ghi đè timing ước tính trong subtitle.json bằng timing thật vừa đo.
+        measured = read_json(output_path.with_suffix(".segments.json"), {})
+        measured_segments = measured.get("segments") if isinstance(measured, dict) else None
+        if isinstance(measured_segments, list) and measured_segments:
+            save_subtitle(project, measured_segments)
         # A new voice means the old scene/timing-to-asset mapping is no longer
-        # trustworthy. Force the next analyze-search run to rebuild scenes from
-        # the new voice instead of showing/reusing stale media.
+        # trustworthy. Force the next analyze-search run to rebuild scenes.
         (project / "assets" / "asset_manifest.json").unlink(missing_ok=True)
     finally:
         runner.close()
