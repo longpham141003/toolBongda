@@ -94,3 +94,71 @@ def test_enforce_realistic_prompt_still_strips_number_sanitizes_appends_tag():
     assert "nude" not in out.lower()
     assert "gun" not in out.lower()
     assert out.endswith(ps.REALISTIC_TAG)
+
+
+# ---------------------------------------------------------------------------
+# Tests for _sanitize_policy_words (M6: smarter policy-word sanitizer)
+# ---------------------------------------------------------------------------
+
+def test_sanitize_blood_test_unchanged():
+    """'blood test' is a benign collocation — must NOT be replaced."""
+    result = ps._sanitize_policy_words("She needs a blood test today")
+    assert "blood test" in result
+    assert "dramatic" not in result
+
+
+def test_sanitize_blood_pressure_unchanged():
+    """'blood pressure' is a benign collocation — must NOT be replaced."""
+    result = ps._sanitize_policy_words("checking her blood pressure")
+    assert "blood pressure" in result
+    assert "dramatic" not in result
+
+
+def test_sanitize_standalone_blood_replaced():
+    """Standalone 'blood' (not followed by a benign word) must be replaced."""
+    result = ps._sanitize_policy_words("the floor covered in blood")
+    assert "blood" not in result.lower()
+    assert "dramatic scene" in result
+
+
+def test_sanitize_gun_replaced():
+    """'gun' → 'a handheld object'."""
+    result = ps._sanitize_policy_words("a man holding a gun")
+    assert "gun" not in result.lower()
+    assert "handheld object" in result
+
+
+def test_sanitize_nude_replaced():
+    """'nude' → 'casually dressed'."""
+    result = ps._sanitize_policy_words("a nude figure")
+    assert "nude" not in result.lower()
+    assert "casually dressed" in result
+
+
+def test_sanitize_naked_replaced():
+    """'naked' → 'casually dressed'."""
+    result = ps._sanitize_policy_words("a naked person")
+    assert "naked" not in result.lower()
+    assert "casually dressed" in result
+
+
+def test_sanitize_gore_left_as_is():
+    """'gore' is dropped from replacements — must remain unchanged."""
+    result = ps._sanitize_policy_words("gore everywhere")
+    assert "gore" in result.lower()
+
+
+def test_enforce_realistic_prompt_integration():
+    """Integration: strips leading number, sanitizes gun, enforces ≤3 names, ends with REALISTIC_TAG."""
+    text = "2. Alpha (tall man) walks, Beta (short woman) talks, Gamma (old man) sits, Delta (young boy) holds a gun."
+    out = ps.enforce_realistic_prompt(text, named_count_limit=3)
+    # Leading number stripped
+    assert not out.startswith("2.")
+    # gun sanitized
+    assert "gun" not in out.lower()
+    assert "handheld object" in out
+    # 4th named character dropped
+    assert "Delta (" not in out
+    assert "another person nearby" in out
+    # ends with REALISTIC_TAG
+    assert out.endswith(ps.REALISTIC_TAG)

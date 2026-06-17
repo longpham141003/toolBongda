@@ -24,17 +24,35 @@ def _ai_call(settings: dict, prompt: str, max_tokens: int = 8000) -> str:
 
 REALISTIC_TAG = "Natural lighting, candid real-life photograph, true-to-life, no text, no captions, no watermark."
 
-# Crude policy-word softening (ported from Auto Prompt's sanitize step).
-_POLICY_REPLACEMENTS = [
-    (re.compile(r"\bnude\b", re.I), "casually dressed"),
-    (re.compile(r"\bnaked\b", re.I), "casually dressed"),
-    (re.compile(r"\bgun\b", re.I), "object in hand"),
-    (re.compile(r"\bguns\b", re.I), "objects in hand"),
-    (re.compile(r"\bgore\b", re.I), "intense"),
-    (re.compile(r"\bblood\b", re.I), "intense"),
-    (re.compile(r"\bsuicide\b", re.I), "crisis moment"),
-    (re.compile(r"\bcorpse\b", re.I), "still figure"),
+# Policy-word softening with word boundaries and a negative-lookahead guard for
+# benign blood collocations ("blood test", "blood pressure", etc.).
+_BLOOD_BENIGN = (
+    r"test|pressure|donation|sample|bank|type|sugar|stream|"
+    r"cell|cells|vessel|vessels|count|donor|transfusion|flow"
+)
+_POLICY_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\bnude\b", re.I),    "casually dressed"),
+    (re.compile(r"\bnaked\b", re.I),   "casually dressed"),
+    (re.compile(r"\bcorpse\b", re.I),  "a still figure"),
+    (re.compile(r"\bsuicide\b", re.I), "a distressing moment"),
+    (re.compile(r"\bguns\b", re.I),    "handheld objects"),
+    (re.compile(r"\bgun\b", re.I),     "a handheld object"),
+    # blood: only replace when NOT immediately followed (after one space) by a
+    # benign medical/anatomical colocation word.
+    (re.compile(rf"\bblood\b(?!\s+(?:{_BLOOD_BENIGN})\b)", re.I), "a dramatic scene"),
 ]
+
+
+def _sanitize_policy_words(text: str) -> str:
+    """Apply context-aware policy-word replacements with word-boundary matching.
+
+    Key behaviour:
+    - Benign 'blood' collocations (blood test, blood pressure, …) are preserved.
+    - 'gore' is intentionally omitted — no replacement.
+    """
+    for pattern, replacement in _POLICY_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def parse_json_block(content: str) -> Any:
@@ -87,8 +105,7 @@ def enforce_realistic_prompt(text: str, named_count_limit: int = 3) -> str:
     value = str(text or "").strip()
     # Drop a leading "N." / "N)" / "N -" scene number.
     value = re.sub(r"^\s*\d+\s*[\.\):\-]\s*", "", value)
-    for pattern, replacement in _POLICY_REPLACEMENTS:
-        value = pattern.sub(replacement, value)
+    value = _sanitize_policy_words(value)
     value = _limit_named_characters(value, named_count_limit)
     value = value.strip()
     # Ensure exactly one realistic tag at the end.
