@@ -39,6 +39,8 @@ def test_apply_prompt_keywords_writes_fields(tmp_path, monkeypatch):
     assert out[0]["keyword"] == "kw:A woman at a desk"
     assert out[0]["ai_search_keyword"] == "kw:A woman at a desk"
     assert out[0]["google_queries"] == ["q:A woman at a desk"]
+    assert out[0]["keyword_ai_scene_refreshed"] is True
     # asset 2 has empty prompt → falls back to sentence_text
     assert out[1]["keyword"] == "kw:A dog runs."
+    assert out[1]["keyword_ai_scene_refreshed"] is True
     assert saved["items"][0]["keyword"] == "kw:A woman at a desk"
