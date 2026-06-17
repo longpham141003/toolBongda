@@ -38,6 +38,43 @@ def normalize_subtitle_segments(raw: list[dict]) -> list[dict]:
     return result
 
 
+def assemble_line_segments(
+    lines: list[dict], durations: list[float], pause: float = 0.25
+) -> list[dict]:
+    """Build one segment per subtitle line from measured per-line audio durations.
+
+    `durations[i]` is the real audio length (seconds) of line i; `pause` is the
+    silence inserted between consecutive lines (combine_wavs uses 0.25s). No pause
+    after the last line. Carries text/edited through so the result is also valid
+    subtitle rows for save_subtitle.
+    """
+    segments: list[dict] = []
+    cursor = 0.0
+    total = len(lines)
+    for i, line in enumerate(lines):
+        if not isinstance(line, dict):
+            continue
+        dur = max(0.0, float(durations[i] if i < len(durations) else 0.0))
+        start = cursor
+        end = start + dur
+        if end <= start:
+            end = start + 0.05
+        segments.append(
+            {
+                "index": i + 1,
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "text": str(line.get("text") or "").strip(),
+                "edited": bool(line.get("edited")),
+                "timing_source": "measured",
+            }
+        )
+        cursor = end
+        if i < total - 1:
+            cursor += max(0.0, float(pause))
+    return segments
+
+
 def subtitle_paths(project: Path) -> tuple[Path, Path]:
     base = Path(project) / "scripts"
     return base / "subtitle.json", base / "subtitle.srt"
