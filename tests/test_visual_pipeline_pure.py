@@ -17,8 +17,8 @@ import pytest
 # without needing its real dependencies.
 # ---------------------------------------------------------------------------
 mock_ttvr = MagicMock()
-sys.modules.setdefault("app.text_to_voice_queue", mock_ttvr)
-sys.modules["app.text_to_voice_queue"].TextToVoiceRunner = MagicMock()
+sys.modules.setdefault("app.voice.text_to_voice_queue", mock_ttvr)
+sys.modules["app.voice.text_to_voice_queue"].TextToVoiceRunner = MagicMock()
 
 # Now import the module under test.
 import importlib
@@ -34,10 +34,10 @@ import unittest.mock as mock
 
 with mock.patch.dict(
     sys.modules,
-    {"app.text_to_voice_queue": types.ModuleType("app.text_to_voice_queue")},
+    {"app.voice.text_to_voice_queue": types.ModuleType("app.voice.text_to_voice_queue")},
 ):
-    sys.modules["app.text_to_voice_queue"].TextToVoiceRunner = MagicMock()  # type: ignore[attr-defined]
-    from app import visual_pipeline as vp
+    sys.modules["app.voice.text_to_voice_queue"].TextToVoiceRunner = MagicMock()  # type: ignore[attr-defined]
+    from app.pipeline import visual_pipeline as vp
 
 
 # ===========================================================================

@@ -33,10 +33,10 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import QUrl
 
-from .config import load_settings, save_settings
-from .script_workflow import default_workflow_steps, normalize_workflow_steps, run_script_workflow
-from .text_to_voice_queue import DELIVERY_STYLES, LANGUAGES, kokoro_voice_choices
-from .visual_pipeline import (
+from ..config import load_settings, save_settings
+from ..pipeline.script_workflow import default_workflow_steps, normalize_workflow_steps, run_script_workflow
+from ..voice.text_to_voice_queue import DELIVERY_STYLES, LANGUAGES, kokoro_voice_choices
+from ..pipeline.visual_pipeline import (
     build_asset_manifest,
     create_visual_project,
     export_capcut_project,

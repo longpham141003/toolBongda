@@ -20,8 +20,8 @@ import pytest
 
 # ---------------------------------------------------------------------------
 # Module-level setup: permanently inject mocks into sys.modules BEFORE
-# importing app.web_server, so the module stays in sys.modules and
-# patch("app.web_server.*") works correctly during tests.
+# importing app.web.web_server, so the module stays in sys.modules and
+# patch("app.web.web_server.*") works correctly during tests.
 # ---------------------------------------------------------------------------
 
 _visual_pipeline_mock = MagicMock()
@@ -45,12 +45,12 @@ _script_workflow_mock.run_script_workflow.return_value = "Generated script"
 
 _text_to_voice_queue_mock.chatterbox_voice_choices.return_value = []
 
-# Permanently inject into sys.modules so app.web_server stays registered
-sys.modules.setdefault("app.visual_pipeline", _visual_pipeline_mock)
-sys.modules.setdefault("app.script_workflow", _script_workflow_mock)
-sys.modules.setdefault("app.text_to_voice_queue", _text_to_voice_queue_mock)
+# Permanently inject into sys.modules so app.web.web_server stays registered
+sys.modules.setdefault("app.pipeline.visual_pipeline", _visual_pipeline_mock)
+sys.modules.setdefault("app.pipeline.script_workflow", _script_workflow_mock)
+sys.modules.setdefault("app.voice.text_to_voice_queue", _text_to_voice_queue_mock)
 
-import app.web_server as ws  # noqa: E402 – must be after patching
+import app.web.web_server as ws  # noqa: E402 – must be after patching
 from fastapi.testclient import TestClient  # noqa: E402
 
 # Use the HTTPException from the web_server module's own namespace to ensure
@@ -406,29 +406,29 @@ class TestHealthEndpoint:
 
 class TestStateEndpoint:
     def test_state_returns_200(self, client):
-        with patch("app.web_server._public_settings", return_value={"projects_dir": "/tmp/no-exist", "script_workflow_steps": []}):
+        with patch("app.web.web_server._public_settings", return_value={"projects_dir": "/tmp/no-exist", "script_workflow_steps": []}):
             r = client.get("/api/state")
         assert r.status_code == 200
 
     def test_state_contains_required_keys(self, client):
-        with patch("app.web_server._public_settings", return_value={"projects_dir": "/tmp/no-exist", "script_workflow_steps": []}):
+        with patch("app.web.web_server._public_settings", return_value={"projects_dir": "/tmp/no-exist", "script_workflow_steps": []}):
             r = client.get("/api/state")
         data = r.json()
         for key in ("settings", "project", "projects", "active_job", "queued_jobs", "jobs"):
             assert key in data
 
     def test_state_project_is_null_when_no_project(self, client):
-        with patch("app.web_server._public_settings", return_value={"projects_dir": "/tmp/no-exist", "script_workflow_steps": []}):
+        with patch("app.web.web_server._public_settings", return_value={"projects_dir": "/tmp/no-exist", "script_workflow_steps": []}):
             r = client.get("/api/state")
         assert r.json()["project"] is None
 
     def test_state_jobs_list_is_empty_when_idle(self, client):
-        with patch("app.web_server._public_settings", return_value={"projects_dir": "/tmp/no-exist", "script_workflow_steps": []}):
+        with patch("app.web.web_server._public_settings", return_value={"projects_dir": "/tmp/no-exist", "script_workflow_steps": []}):
             r = client.get("/api/state")
         assert r.json()["jobs"] == []
 
     def test_state_projects_is_list(self, client):
-        with patch("app.web_server._public_settings", return_value={"projects_dir": "/tmp/no-exist", "script_workflow_steps": []}):
+        with patch("app.web.web_server._public_settings", return_value={"projects_dir": "/tmp/no-exist", "script_workflow_steps": []}):
             r = client.get("/api/state")
         assert isinstance(r.json()["projects"], list)
 
@@ -436,15 +436,15 @@ class TestStateEndpoint:
 class TestSettingsEndpoint:
     def test_post_settings_returns_200(self, client):
         fake_settings = {"projects_dir": "/tmp", "script_workflow_steps": []}
-        with patch("app.web_server.load_settings", return_value=dict(fake_settings)), \
-             patch("app.web_server.save_settings"):
+        with patch("app.web.web_server.load_settings", return_value=dict(fake_settings)), \
+             patch("app.web.web_server.save_settings"):
             r = client.post("/api/settings", json={"settings": {"text_to_voice_language": "vi"}})
         assert r.status_code == 200
 
     def test_post_settings_ignores_unknown_fields(self, client):
         fake_settings = {"projects_dir": "/tmp", "script_workflow_steps": []}
-        with patch("app.web_server.load_settings", return_value=dict(fake_settings)), \
-             patch("app.web_server.save_settings") as mock_save:
+        with patch("app.web.web_server.load_settings", return_value=dict(fake_settings)), \
+             patch("app.web.web_server.save_settings") as mock_save:
             r = client.post("/api/settings", json={"settings": {"totally_unknown_key": "value"}})
         assert r.status_code == 200
         # Unknown key should NOT be in saved settings
@@ -454,15 +454,15 @@ class TestSettingsEndpoint:
 
     def test_post_settings_returns_settings_key(self, client):
         fake_settings = {"projects_dir": "/tmp", "script_workflow_steps": []}
-        with patch("app.web_server.load_settings", return_value=dict(fake_settings)), \
-             patch("app.web_server.save_settings"):
+        with patch("app.web.web_server.load_settings", return_value=dict(fake_settings)), \
+             patch("app.web.web_server.save_settings"):
             r = client.post("/api/settings", json={"settings": {}})
         assert "settings" in r.json()
 
     def test_post_settings_updates_allowed_field(self, client):
         fake_settings = {"projects_dir": "/tmp", "text_to_voice_language": "en", "script_workflow_steps": []}
-        with patch("app.web_server.load_settings", return_value=dict(fake_settings)), \
-             patch("app.web_server.save_settings") as mock_save:
+        with patch("app.web.web_server.load_settings", return_value=dict(fake_settings)), \
+             patch("app.web.web_server.save_settings") as mock_save:
             client.post("/api/settings", json={"settings": {"text_to_voice_language": "vi"}})
         if mock_save.called:
             saved = mock_save.call_args[0][0]
@@ -470,8 +470,8 @@ class TestSettingsEndpoint:
 
     def _save_and_get(self, client, payload):
         fake_settings = {"projects_dir": "/tmp", "script_workflow_steps": []}
-        with patch("app.web_server.load_settings", return_value=dict(fake_settings)), \
-             patch("app.web_server.save_settings") as mock_save:
+        with patch("app.web.web_server.load_settings", return_value=dict(fake_settings)), \
+             patch("app.web.web_server.save_settings") as mock_save:
             client.post("/api/settings", json={"settings": payload})
         assert mock_save.called
         return mock_save.call_args[0][0]
@@ -504,9 +504,9 @@ class TestProjectsCreateEndpoint:
         (project_path / "scripts" / "script_final.txt").write_text("hello\n")
 
         state_file = tmp_path / ".state"
-        with patch("app.web_server.load_settings", return_value={"projects_dir": str(tmp_path), "script_workflow_steps": []}), \
-             patch("app.web_server.create_visual_project", return_value=project_path), \
-             patch("app.web_server.load_manifest", return_value=[]), \
+        with patch("app.web.web_server.load_settings", return_value={"projects_dir": str(tmp_path), "script_workflow_steps": []}), \
+             patch("app.web.web_server.create_visual_project", return_value=project_path), \
+             patch("app.web.web_server.load_manifest", return_value=[]), \
              patch.object(ws, "STATE_PATH", state_file):
             r = client.post("/api/projects", json={"title": "My Project", "script": "hello world"})
 
@@ -520,9 +520,9 @@ class TestProjectsCreateEndpoint:
         (project_path / "scripts" / "script_final.txt").write_text("hello\n")
 
         state_file = tmp_path / ".state"
-        with patch("app.web_server.load_settings", return_value={"projects_dir": str(tmp_path), "script_workflow_steps": []}), \
-             patch("app.web_server.create_visual_project", return_value=project_path) as mock_create, \
-             patch("app.web_server.load_manifest", return_value=[]), \
+        with patch("app.web.web_server.load_settings", return_value={"projects_dir": str(tmp_path), "script_workflow_steps": []}), \
+             patch("app.web.web_server.create_visual_project", return_value=project_path) as mock_create, \
+             patch("app.web.web_server.load_manifest", return_value=[]), \
              patch.object(ws, "STATE_PATH", state_file):
             client.post("/api/projects", json={"title": "Title", "script": "Script text"})
 
@@ -535,9 +535,9 @@ class TestProjectsCreateEndpoint:
         (project_path / "scripts" / "script_final.txt").write_text("hello\n")
 
         state_file = tmp_path / ".state"
-        with patch("app.web_server.load_settings", return_value={"projects_dir": str(tmp_path), "script_workflow_steps": []}), \
-             patch("app.web_server.create_visual_project", return_value=project_path), \
-             patch("app.web_server.load_manifest", return_value=[]), \
+        with patch("app.web.web_server.load_settings", return_value={"projects_dir": str(tmp_path), "script_workflow_steps": []}), \
+             patch("app.web.web_server.create_visual_project", return_value=project_path), \
+             patch("app.web.web_server.load_manifest", return_value=[]), \
              patch.object(ws, "STATE_PATH", state_file):
             client.post("/api/projects", json={"title": "T", "script": "Script"})
 
@@ -547,7 +547,7 @@ class TestProjectsCreateEndpoint:
 class TestProjectsOpenEndpoint:
     def test_open_project_valid_path_returns_200(self, client, project_dir, tmp_path):
         state_file = tmp_path / ".state"
-        with patch("app.web_server.load_manifest", return_value=[]), \
+        with patch("app.web.web_server.load_manifest", return_value=[]), \
              patch.object(ws, "STATE_PATH", state_file):
             r = client.post("/api/projects/open", json={"path": str(project_dir)})
         assert r.status_code == 200
@@ -560,7 +560,7 @@ class TestProjectsOpenEndpoint:
 
     def test_open_project_sets_runtime_project(self, client, project_dir, tmp_path):
         state_file = tmp_path / ".state"
-        with patch("app.web_server.load_manifest", return_value=[]), \
+        with patch("app.web.web_server.load_manifest", return_value=[]), \
              patch.object(ws, "STATE_PATH", state_file):
             client.post("/api/projects/open", json={"path": str(project_dir)})
         assert ws.runtime.current_project == project_dir.resolve()
@@ -573,13 +573,13 @@ class TestProjectsScriptEndpoint:
 
     def test_save_script_returns_400_when_empty_script(self, client, project_dir):
         ws.runtime.current_project = project_dir
-        with patch("app.web_server.load_manifest", return_value=[]):
+        with patch("app.web.web_server.load_manifest", return_value=[]):
             r = client.post("/api/projects/script", json={"script": "   "})
         assert r.status_code == 400
 
     def test_save_script_writes_file(self, client, project_dir):
         ws.runtime.current_project = project_dir
-        with patch("app.web_server.load_manifest", return_value=[]):
+        with patch("app.web.web_server.load_manifest", return_value=[]):
             r = client.post("/api/projects/script", json={"script": "New script content"})
         assert r.status_code == 200
         saved = (project_dir / "scripts" / "script_final.txt").read_text(encoding="utf-8")
@@ -587,14 +587,14 @@ class TestProjectsScriptEndpoint:
 
     def test_save_script_returns_project_key(self, client, project_dir):
         ws.runtime.current_project = project_dir
-        with patch("app.web_server.load_manifest", return_value=[]):
+        with patch("app.web.web_server.load_manifest", return_value=[]):
             r = client.post("/api/projects/script", json={"script": "content"})
         assert "project" in r.json()
 
     def test_save_script_does_not_write_when_unchanged(self, client, project_dir):
         ws.runtime.current_project = project_dir
         existing = (project_dir / "scripts" / "script_final.txt").read_text(encoding="utf-8").strip()
-        with patch("app.web_server.load_manifest", return_value=[]):
+        with patch("app.web.web_server.load_manifest", return_value=[]):
             r = client.post("/api/projects/script", json={"script": existing})
         assert r.status_code == 200
 
@@ -635,9 +635,9 @@ class TestApproveAssetEndpoint:
     def test_approve_asset_toggles_to_approved(self, client, project_dir):
         ws.runtime.current_project = project_dir
         manifest = [{"asset_id": "a1", "status": "downloaded", "local_path": str(project_dir / "file.jpg")}]
-        with patch("app.web_server.load_manifest", return_value=manifest), \
-             patch("app.web_server.save_manifest") as mock_save, \
-             patch("app.web_server._project_payload", return_value={"path": str(project_dir)}):
+        with patch("app.web.web_server.load_manifest", return_value=manifest), \
+             patch("app.web.web_server.save_manifest") as mock_save, \
+             patch("app.web.web_server._project_payload", return_value={"path": str(project_dir)}):
             r = client.post("/api/assets/a1/approve")
         assert r.status_code == 200
         assert mock_save.called
@@ -648,9 +648,9 @@ class TestApproveAssetEndpoint:
     def test_approve_asset_toggles_back_to_downloaded(self, client, project_dir):
         ws.runtime.current_project = project_dir
         manifest = [{"asset_id": "a1", "status": "approved", "local_path": str(project_dir / "file.jpg")}]
-        with patch("app.web_server.load_manifest", return_value=manifest), \
-             patch("app.web_server.save_manifest") as mock_save, \
-             patch("app.web_server._project_payload", return_value={"path": str(project_dir)}):
+        with patch("app.web.web_server.load_manifest", return_value=manifest), \
+             patch("app.web.web_server.save_manifest") as mock_save, \
+             patch("app.web.web_server._project_payload", return_value={"path": str(project_dir)}):
             r = client.post("/api/assets/a1/approve")
         assert r.status_code == 200
         saved_items = mock_save.call_args[0][1]
@@ -663,16 +663,16 @@ class TestApproveAssetEndpoint:
 
     def test_approve_asset_returns_404_for_unknown_asset(self, client, project_dir):
         ws.runtime.current_project = project_dir
-        with patch("app.web_server.load_manifest", return_value=[]):
+        with patch("app.web.web_server.load_manifest", return_value=[]):
             r = client.post("/api/assets/unknown-asset/approve")
         assert r.status_code == 404
 
     def test_approve_asset_returns_project_in_response(self, client, project_dir):
         ws.runtime.current_project = project_dir
         manifest = [{"asset_id": "a2", "status": "downloaded", "local_path": "/f"}]
-        with patch("app.web_server.load_manifest", return_value=manifest), \
-             patch("app.web_server.save_manifest"), \
-             patch("app.web_server._project_payload", return_value={"path": str(project_dir)}):
+        with patch("app.web.web_server.load_manifest", return_value=manifest), \
+             patch("app.web.web_server.save_manifest"), \
+             patch("app.web.web_server._project_payload", return_value={"path": str(project_dir)}):
             r = client.post("/api/assets/a2/approve")
         assert "project" in r.json()
 
@@ -681,9 +681,9 @@ class TestKeywordEndpoint:
     def test_update_keyword_sets_keyword(self, client, project_dir):
         ws.runtime.current_project = project_dir
         manifest = [{"asset_id": "a2", "status": "downloaded", "keyword": "old keyword"}]
-        with patch("app.web_server.load_manifest", return_value=manifest), \
-             patch("app.web_server.save_manifest") as mock_save, \
-             patch("app.web_server._project_payload", return_value={"path": str(project_dir)}):
+        with patch("app.web.web_server.load_manifest", return_value=manifest), \
+             patch("app.web.web_server.save_manifest") as mock_save, \
+             patch("app.web.web_server._project_payload", return_value={"path": str(project_dir)}):
             r = client.post("/api/assets/a2/keyword", json={"keyword": "new keyword"})
         assert r.status_code == 200
         saved = mock_save.call_args[0][1]
@@ -694,9 +694,9 @@ class TestKeywordEndpoint:
     def test_update_keyword_strips_whitespace(self, client, project_dir):
         ws.runtime.current_project = project_dir
         manifest = [{"asset_id": "a3", "status": "downloaded", "keyword": ""}]
-        with patch("app.web_server.load_manifest", return_value=manifest), \
-             patch("app.web_server.save_manifest") as mock_save, \
-             patch("app.web_server._project_payload", return_value={"path": str(project_dir)}):
+        with patch("app.web.web_server.load_manifest", return_value=manifest), \
+             patch("app.web.web_server.save_manifest") as mock_save, \
+             patch("app.web.web_server._project_payload", return_value={"path": str(project_dir)}):
             r = client.post("/api/assets/a3/keyword", json={"keyword": "  padded  "})
         saved = mock_save.call_args[0][1]
         item = next(i for i in saved if i["asset_id"] == "a3")
@@ -708,16 +708,16 @@ class TestKeywordEndpoint:
 
     def test_update_keyword_returns_404_for_unknown_asset(self, client, project_dir):
         ws.runtime.current_project = project_dir
-        with patch("app.web_server.load_manifest", return_value=[]):
+        with patch("app.web.web_server.load_manifest", return_value=[]):
             r = client.post("/api/assets/unknown/keyword", json={"keyword": "kw"})
         assert r.status_code == 404
 
     def test_update_keyword_syncs_ai_search_keyword(self, client, project_dir):
         ws.runtime.current_project = project_dir
         manifest = [{"asset_id": "a4", "status": "downloaded", "keyword": "old"}]
-        with patch("app.web_server.load_manifest", return_value=manifest), \
-             patch("app.web_server.save_manifest") as mock_save, \
-             patch("app.web_server._project_payload", return_value={"path": str(project_dir)}):
+        with patch("app.web.web_server.load_manifest", return_value=manifest), \
+             patch("app.web.web_server.save_manifest") as mock_save, \
+             patch("app.web.web_server._project_payload", return_value={"path": str(project_dir)}):
             client.post("/api/assets/a4/keyword", json={"keyword": "updated"})
         saved = mock_save.call_args[0][1]
         item = next(i for i in saved if i["asset_id"] == "a4")
@@ -732,9 +732,9 @@ class TestApproveAllEndpoint:
             {"asset_id": "x2", "status": "downloaded", "local_path": "/fake/file2.jpg"},
             {"asset_id": "x3", "status": "pending",    "local_path": ""},
         ]
-        with patch("app.web_server.load_manifest", return_value=manifest), \
-             patch("app.web_server.save_manifest") as mock_save, \
-             patch("app.web_server._project_payload", return_value={"path": str(project_dir)}):
+        with patch("app.web.web_server.load_manifest", return_value=manifest), \
+             patch("app.web.web_server.save_manifest") as mock_save, \
+             patch("app.web.web_server._project_payload", return_value={"path": str(project_dir)}):
             r = client.post("/api/assets/approve-all")
         assert r.status_code == 200
         assert mock_save.called
@@ -750,9 +750,9 @@ class TestApproveAllEndpoint:
         manifest = [
             {"asset_id": "y1", "status": "approved", "local_path": "/fake/file.jpg"},
         ]
-        with patch("app.web_server.load_manifest", return_value=manifest), \
-             patch("app.web_server.save_manifest") as mock_save, \
-             patch("app.web_server._project_payload", return_value={"path": str(project_dir)}):
+        with patch("app.web.web_server.load_manifest", return_value=manifest), \
+             patch("app.web.web_server.save_manifest") as mock_save, \
+             patch("app.web.web_server._project_payload", return_value={"path": str(project_dir)}):
             r = client.post("/api/assets/approve-all")
         assert r.status_code == 200
         saved = mock_save.call_args[0][1]
@@ -767,9 +767,9 @@ class TestApproveAllEndpoint:
         manifest = [
             {"asset_id": "z1", "status": "pending", "local_path": ""},
         ]
-        with patch("app.web_server.load_manifest", return_value=manifest), \
-             patch("app.web_server.save_manifest") as mock_save, \
-             patch("app.web_server._project_payload", return_value={"path": str(project_dir)}):
+        with patch("app.web.web_server.load_manifest", return_value=manifest), \
+             patch("app.web.web_server.save_manifest") as mock_save, \
+             patch("app.web.web_server._project_payload", return_value={"path": str(project_dir)}):
             client.post("/api/assets/approve-all")
         saved = mock_save.call_args[0][1]
         assert saved[0]["status"] == "pending"  # not changed since no local_path
@@ -782,7 +782,7 @@ class TestMediaEndpoint:
         outside_file = tmp_path / "secret.txt"
         outside_file.write_text("secret")
 
-        with patch("app.web_server.load_settings", return_value={"projects_dir": str(projects_dir)}):
+        with patch("app.web.web_server.load_settings", return_value={"projects_dir": str(projects_dir)}):
             r = client.get(f"/api/media?path={outside_file}")
         assert r.status_code == 403
 
@@ -791,7 +791,7 @@ class TestMediaEndpoint:
         projects_dir.mkdir()
         missing = projects_dir / "nonexistent.mp4"
 
-        with patch("app.web_server.load_settings", return_value={"projects_dir": str(projects_dir)}):
+        with patch("app.web.web_server.load_settings", return_value={"projects_dir": str(projects_dir)}):
             r = client.get(f"/api/media?path={missing}")
         assert r.status_code == 404
 
@@ -801,7 +801,7 @@ class TestMediaEndpoint:
         media_file = projects_dir / "image.png"
         media_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
-        with patch("app.web_server.load_settings", return_value={"projects_dir": str(projects_dir)}):
+        with patch("app.web.web_server.load_settings", return_value={"projects_dir": str(projects_dir)}):
             r = client.get(f"/api/media?path={media_file}")
         assert r.status_code == 200
 
@@ -811,7 +811,7 @@ class TestMediaEndpoint:
         media_file = projects_dir / "video.mp4"
         media_file.write_bytes(b"\x00" * 50)
 
-        with patch("app.web_server.load_settings", return_value={"projects_dir": str(projects_dir)}):
+        with patch("app.web.web_server.load_settings", return_value={"projects_dir": str(projects_dir)}):
             r = client.get(f"/api/media?path={media_file}")
         assert r.headers.get("cache-control", "").startswith("no-store")
 
@@ -867,7 +867,7 @@ class TestSPAFallback:
     def test_api_state_not_shadowed_by_spa(self, client):
         """API routes defined before the static mount must not be affected."""
         self._skip_if_no_dist()
-        with patch("app.web_server._public_settings", return_value={
+        with patch("app.web.web_server._public_settings", return_value={
             "projects_dir": "/tmp/no-exist",
             "script_workflow_steps": [],
         }):

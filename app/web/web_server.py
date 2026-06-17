@@ -21,16 +21,16 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
 
-from .config import APP_DIR, load_settings, save_settings
-from .script_workflow import default_workflow_steps, normalize_workflow_steps, repair_mojibake, run_script_workflow
-from .text_to_voice_queue import (
+from ..config import APP_DIR, load_settings, save_settings
+from ..pipeline.script_workflow import default_workflow_steps, normalize_workflow_steps, repair_mojibake, run_script_workflow
+from ..voice.text_to_voice_queue import (
     TextToVoiceRunner,
     kokoro_custom_voice_dir,
     kokoro_voice_choices,
     normalize_kokoro_language,
     warm_kokoro_server,
 )
-from .visual_pipeline import (
+from ..pipeline.visual_pipeline import (
     _concise_match_query,
     IMAGE_SUFFIXES,
     VIDEO_SUFFIXES,

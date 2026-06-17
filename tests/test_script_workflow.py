@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from app.script_workflow import (
+from app.pipeline.script_workflow import (
     default_workflow_steps,
     normalize_workflow_steps,
     run_script_workflow,
@@ -206,7 +206,7 @@ class TestRunScriptWorkflowProviderValidation:
         mock_response.json.return_value = {
             "choices": [{"message": {"content": "result text"}}]
         }
-        with patch("app.script_workflow._call_openai", return_value="result text") as mock_openai:
+        with patch("app.pipeline.script_workflow._call_openai", return_value="result text") as mock_openai:
             result = run_script_workflow("topic", self._steps, settings)
         mock_openai.assert_called_once()
         assert result == "result text"
@@ -218,7 +218,7 @@ class TestRunScriptWorkflowProviderValidation:
             "gemini_api_key": "AIza-key",
             "gemini_keyword_model": "gemini-2.5-flash",
         }
-        with patch("app.script_workflow._call_gemini", return_value="gemini result") as mock_gemini:
+        with patch("app.pipeline.script_workflow._call_gemini", return_value="gemini result") as mock_gemini:
             result = run_script_workflow("topic", self._steps, settings)
         mock_gemini.assert_called_once()
         assert result == "gemini result"
@@ -229,7 +229,7 @@ class TestRunScriptWorkflowProviderValidation:
             "openai_api_key": "",
             "gemini_api_key": "my-gemini-key",
         }
-        with patch("app.script_workflow._call_gemini", return_value="ok") as mock_gemini:
+        with patch("app.pipeline.script_workflow._call_gemini", return_value="ok") as mock_gemini:
             result = run_script_workflow("topic", self._steps, settings)
         mock_gemini.assert_called_once()
 
@@ -250,24 +250,24 @@ class TestRunScriptWorkflowExecution:
     }
 
     def test_returns_final_step_output(self):
-        with patch("app.script_workflow._call_openai", side_effect=["step1 out", "step2 out"]):
+        with patch("app.pipeline.script_workflow._call_openai", side_effect=["step1 out", "step2 out"]):
             result = run_script_workflow("my topic", self._steps, self._settings)
         assert result == "step2 out"
 
     def test_log_called_for_each_step(self):
         log_messages = []
-        with patch("app.script_workflow._call_openai", side_effect=["out1", "out2"]):
+        with patch("app.pipeline.script_workflow._call_openai", side_effect=["out1", "out2"]):
             run_script_workflow("topic", self._steps, self._settings, log=log_messages.append)
         # 2 step logs + 1 completion log
         assert len(log_messages) == 3
 
     def test_log_none_does_not_raise(self):
-        with patch("app.script_workflow._call_openai", side_effect=["out1", "out2"]):
+        with patch("app.pipeline.script_workflow._call_openai", side_effect=["out1", "out2"]):
             result = run_script_workflow("topic", self._steps, self._settings, log=None)
         assert result == "out2"
 
     def test_raises_if_step_returns_empty(self):
-        with patch("app.script_workflow._call_openai", return_value="   "):
+        with patch("app.pipeline.script_workflow._call_openai", return_value="   "):
             with pytest.raises(RuntimeError, match="không trả về"):
                 run_script_workflow("topic", self._steps, self._settings)
 
@@ -280,18 +280,18 @@ class TestRunScriptWorkflowExecution:
         def fake_call(api_key, model, prompt):
             call_count.append(1)
             return "output"
-        with patch("app.script_workflow._call_openai", side_effect=fake_call):
+        with patch("app.pipeline.script_workflow._call_openai", side_effect=fake_call):
             run_script_workflow("topic", steps_mixed, self._settings)
         assert len(call_count) == 1
 
     def test_single_step_workflow(self):
         single = [{"prompt": "only step", "enabled": True, "name": "Only"}]
-        with patch("app.script_workflow._call_openai", return_value="single output"):
+        with patch("app.pipeline.script_workflow._call_openai", return_value="single output"):
             result = run_script_workflow("topic", single, self._settings)
         assert result == "single output"
 
     def test_output_is_stripped(self):
-        with patch("app.script_workflow._call_openai", return_value="  spaced  "):
+        with patch("app.pipeline.script_workflow._call_openai", return_value="  spaced  "):
             # Two steps so the last one's result is stripped at the end
             single = [{"prompt": "p", "enabled": True, "name": "N"}]
             result = run_script_workflow("topic", single, self._settings)
@@ -304,7 +304,7 @@ class TestRunScriptWorkflowExecution:
             "gemini_keyword_model": "gemini-2.5-flash",
         }
         single = [{"prompt": "p", "enabled": True, "name": "N"}]
-        with patch("app.script_workflow._call_gemini", return_value="gemini output") as mock:
+        with patch("app.pipeline.script_workflow._call_gemini", return_value="gemini output") as mock:
             result = run_script_workflow("topic", single, settings)
         mock.assert_called_once()
         assert result == "gemini output"

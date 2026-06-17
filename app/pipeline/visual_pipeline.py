@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import quote_plus, urlparse
 
-from .text_to_voice_queue import TextToVoiceRunner
+from ..voice.text_to_voice_queue import TextToVoiceRunner
 
 from keyword_engine import domain_pack as _dp
 
@@ -272,7 +272,7 @@ def refine_timing_with_whisper(
         if callable(log):
             log(f"Whisper timing: Python đã cấu hình không còn tồn tại, tự dùng {sys.executable}.")
         python_path = Path(sys.executable)
-    worker = Path(__file__).with_name("whisper_timing_cli.py")
+    worker = Path(__file__).parent.parent / "voice" / "whisper_timing_cli.py"
     whisper_json = project / "voices" / "voice.whisper.json"
     whisper_srt = project / "voices" / "voice.whisper.srt"
     cmd = [
@@ -3687,7 +3687,7 @@ def _fetch_google_images(
     settings: dict | None = None,
     tbs: str = "",
 ) -> int:
-    worker_path = Path(__file__).with_name("google_images_worker.py")
+    worker_path = Path(__file__).parent.parent / "images" / "google_images_worker.py"
     downloaded = 0
     target_count = max(1, min(12, int(count)))
     configured_profile = str((settings or {}).get("google_images_profile") or "").strip()

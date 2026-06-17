@@ -233,7 +233,7 @@ Start-Sleep -Seconds 1
 
 $ApiLog = Join-Path $LogDir "api.log"
 $ApiErrLog = Join-Path $LogDir "api.err.log"
-$process = Start-Process -FilePath $BackendVenvPython -ArgumentList @("-m", "app.web_server") -WorkingDirectory $Root -WindowStyle Minimized -PassThru -RedirectStandardOutput $ApiLog -RedirectStandardError $ApiErrLog
+$process = Start-Process -FilePath $BackendVenvPython -ArgumentList @("-m", "app.web.web_server") -WorkingDirectory $Root -WindowStyle Minimized -PassThru -RedirectStandardOutput $ApiLog -RedirectStandardError $ApiErrLog
 
 Write-Step "Doi tool san sang..."
 $ready = $false

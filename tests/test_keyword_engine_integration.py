@@ -23,10 +23,10 @@ if str(repo_root) not in sys.path:
 # MagicMock module so any attribute other test modules import from it (e.g.
 # kokoro_custom_voice_dir, used by app.web_server) still resolves regardless of
 # pytest collection order.
-sys.modules.setdefault("app.text_to_voice_queue", MagicMock())
-sys.modules["app.text_to_voice_queue"].TextToVoiceRunner = MagicMock()  # type: ignore[attr-defined]
+sys.modules.setdefault("app.voice.text_to_voice_queue", MagicMock())
+sys.modules["app.voice.text_to_voice_queue"].TextToVoiceRunner = MagicMock()  # type: ignore[attr-defined]
 
-from app import visual_pipeline as vp  # noqa: E402
+from app.pipeline import visual_pipeline as vp  # noqa: E402
 from keyword_engine import domain_pack as dp  # noqa: E402
 
 
