@@ -320,6 +320,7 @@ function ParticleCanvas() {
 function App() {
   const [state, setState] = useState(null)
   const [script, setScript] = useState("")
+  const [subtitleSegments, setSubtitleSegments] = useState([])
   const [title, setTitle] = useState("")
   const [settings, setSettings] = useState({})
   const [voiceOptions, setVoiceOptions] = useState([{ value: "af_heart", label: "af_heart" }])
@@ -398,6 +399,7 @@ function App() {
     if (!preserveScript) {
       setScript(data.project?.script || "")
       setTitle(data.project?.name || "")
+      setSubtitleSegments(data.project?.subtitle_segments || [])
     }
     setActiveJob(data.active_job || null)
     if (data.active_job) setLogs(data.active_job.logs || [])
@@ -796,11 +798,20 @@ function App() {
     return data.project
   }
 
+  // Ghi phụ đề canonical (subtitle.json + subtitle.srt). Trả project đã cập nhật.
+  async function persistSubtitle(segments) {
+    const data = await api("/api/projects/subtitle", { method: "POST", body: JSON.stringify({ segments }) })
+    setState((current) => ({ ...current, project: data.project }))
+    setSubtitleSegments(data.project.subtitle_segments || [])
+    return data.project
+  }
+
   async function saveScriptStep() {
     if (!script.trim()) return setError("Hãy nhập script trước khi lưu B1.")
     if (!project) return createProject()
     try {
       const updated = await persistScript()
+      if (subtitleSegments.length) await persistSubtitle(subtitleSegments)
       const wasComplete = project?.voice_exists || project?.scenes_exist || project?.export_exists
       const nowStale = wasComplete && !updated.has_voice
       setToast(nowStale
@@ -831,6 +842,7 @@ function App() {
     setActiveJob(null)
     setLogs([])
     setScript(data.project.script)
+    setSubtitleSegments(data.project.subtitle_segments || [])
     setTitle(data.project.name)
     setProjectsOpen(false)
     if (notify) setToast("Đã mở video")
@@ -1346,6 +1358,9 @@ function App() {
             busyAction={busyAction}
             activeJob={activeJob}
             staleWarning={scriptDirty && Boolean(project?.voice_exists || project?.scenes_exist || project?.export_exists)}
+            subtitleSegments={subtitleSegments}
+            setSubtitleSegments={setSubtitleSegments}
+            persistSubtitle={persistSubtitle}
           />}
           {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} deleteVoiceClone={deleteVoiceClone} isBusy={isBusy} busyAction={busyAction} activeJob={activeJob} goStep={goStep} userProgress={userProgress} />}
           {activeScreen === "step2b" && <PromptScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} goStep={goStep} saveKeyword={saveKeyword} userProgress={userProgress} />}
