@@ -62,7 +62,11 @@ def coerce_prompt_array(content: str, expected_n: int) -> list[str]:
 def _limit_named_characters(text: str, limit: int = 3) -> str:
     """Keep at most `limit` distinct named characters (Name (...) blocks); replace
     the extras (4th+ distinct name) with a generic background phrase. Repeated names
-    are the same character and are kept."""
+    are the same character and are kept.
+
+    NOTE: heuristic by the `Name (...)` shape — place names like "London (UK)" also
+    match and count against the limit. Acceptable in the prompt context, where
+    appearance descriptions in parentheses follow character names."""
     seen: list[str] = []
     pattern = re.compile(r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)\s*\([^)]*\)")
 
