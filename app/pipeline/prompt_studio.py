@@ -60,6 +60,7 @@ def coerce_prompt_array(content: str, expected_n: int) -> list[str]:
 
 
 def enforce_realistic_prompt(text: str, named_count_limit: int = 3) -> str:
+    # named_count_limit is reserved for future enforcement; not applied yet.
     value = str(text or "").strip()
     # Drop a leading "N." / "N)" / "N -" scene number.
     value = re.sub(r"^\s*\d+\s*[\.\):\-]\s*", "", value)
@@ -135,6 +136,16 @@ SYS_ANALYZE = (
 )
 
 
+def _load_manifest(project: Path) -> list[dict]:
+    from app.pipeline.visual_pipeline import load_manifest
+    return load_manifest(project)
+
+
+def _save_manifest(project: Path, items: list[dict]) -> None:
+    from app.pipeline.visual_pipeline import save_manifest
+    save_manifest(project, items)
+
+
 def analyze_story(project: Path, settings: dict, log=None) -> dict:
     lines = load_subtitle(project)
     if not lines:
@@ -155,3 +166,108 @@ def analyze_story(project: Path, settings: dict, log=None) -> dict:
     if callable(log):
         log(f"Đã nhận {len(data.get('characters') or [])} nhân vật từ AI.")
     return save_prompt_analysis(project, data)
+
+
+SYS_PROMPT_REALISTIC = (
+    "You generate REAL-LIFE photo prompts for stock-image search. Each prompt is a "
+    "believable real-world photograph of the moment in the line.\n"
+    "GOLDEN RULE: ALL character physical appearance goes ONLY inside parentheses right "
+    "after the name, copied EXACTLY from the locked description — never shorten, "
+    "rephrase, or invent appearance outside the parentheses.\n"
+    "RULES:\n"
+    "[R1] 1 line = 1 prompt. Never merge or split.\n"
+    "[R2] CHARACTER LOCK: copy each character's description verbatim inside ().\n"
+    "[R3] Place characters at their given positions in the real space.\n"
+    "[R4] MAX 3 named characters per prompt; everyone else is an unnamed background person.\n"
+    "[R5] Dialogue becomes body language + facial expression only — never write the spoken words.\n"
+    "[R6] One clear action/moment per prompt.\n"
+    "[R7] No shot labels (no 'close-up', 'wide shot', 'POV'), no cinematic/film grading, "
+    "no artistic style — these are ordinary real photographs.\n"
+    "[R8] For consecutive prompts in the same location, vary the natural viewpoint.\n"
+    f"[R9] End EVERY prompt with EXACTLY: {REALISTIC_TAG}\n"
+    "OUTPUT: ONLY a raw JSON array of strings (one per line, in order). No scene numbers, "
+    "no markdown, no commentary."
+)
+
+
+def _character_block(characters: list[dict]) -> str:
+    blocks = []
+    for ch in characters or []:
+        name = str(ch.get("name") or "").strip()
+        role = str(ch.get("role") or "").strip()
+        desc = str(ch.get("description") or "").strip()
+        if name and desc:
+            blocks.append(f"{name} ({role}):\n{desc}")
+    return "\n\n".join(blocks) if blocks else "(no named characters)"
+
+
+def _scene_for_line(scene_map: list[dict], line_index: int) -> dict:
+    for scene in scene_map or []:
+        try:
+            if int(scene.get("startLine") or 0) <= line_index <= int(scene.get("endLine") or 0):
+                return scene
+        except (TypeError, ValueError):
+            continue
+    return {}
+
+
+def _line_context(line_index: int, text: str, scene: dict) -> str:
+    parts = [f"--- LINE {line_index} ---"]
+    if scene.get("location"):
+        parts.append(f"Location: {scene.get('location')} | {scene.get('timeOfDay') or ''}")
+    if scene.get("sceneSummary"):
+        parts.append(f"Scene: {scene.get('sceneSummary')}")
+    if scene.get("spatialLayout"):
+        parts.append(f"Space: {scene.get('spatialLayout')}")
+    if scene.get("charactersPresent"):
+        parts.append(f"Characters present: {', '.join(scene.get('charactersPresent') or [])}")
+    if scene.get("crowdNotes"):
+        parts.append(f"Background: {scene.get('crowdNotes')}")
+    parts.append(f"Subtitle text: {text}")
+    return "\n".join(parts)
+
+
+def generate_line_prompts(project: Path, settings: dict, log=None, batch_size: int = 8) -> list[dict]:
+    lines = load_subtitle(project)
+    if not lines:
+        raise RuntimeError("Chưa có phụ đề.")
+    manifest = _load_manifest(project)
+    if not manifest:
+        raise RuntimeError("Chưa có phân cảnh. Hãy phân tích cảnh trước khi tạo prompt.")
+    analysis = load_prompt_analysis(project)
+    if not analysis:
+        raise RuntimeError("Chưa phân tích. Hãy chạy phân tích nhân vật trước.")
+    characters = analysis.get("characters") or []
+    scene_map = analysis.get("sceneMap") or []
+    story = str(analysis.get("storyContext") or "")
+    setting = str(analysis.get("mainSetting") or "")
+    char_block = _character_block(characters)
+
+    n = len(lines)
+    size = max(1, int(batch_size or 8))
+    prompts: list[str] = []
+    for start in range(0, n, size):
+        batch = lines[start:start + size]
+        if callable(log):
+            log(f"Tạo prompt đoạn {start // size + 1}/{(n + size - 1) // size} ({len(batch)} dòng)")
+        ctx_blocks = []
+        for offset, line in enumerate(batch):
+            li = int(line.get("index") or (start + offset + 1))
+            ctx_blocks.append(_line_context(li, str(line.get("text") or ""), _scene_for_line(scene_map, li)))
+        user_msg = (
+            f"{SYS_PROMPT_REALISTIC}\n\n"
+            f"=== STORY ===\n{story}\nMain setting: {setting}\n\n"
+            f"=== LOCKED CHARACTER DESCRIPTIONS (copy EXACTLY inside parentheses) ===\n{char_block}\n\n"
+            f"=== GENERATE {len(batch)} PROMPTS, ONE PER LINE, IN ORDER ===\n" + "\n\n".join(ctx_blocks)
+        )
+        raw = _ai_call(settings, user_msg)
+        prompts.extend(coerce_prompt_array(raw, len(batch)))
+
+    prompts = [enforce_realistic_prompt(p) if p.strip() else "" for p in prompts[:n]]
+    # Map prompts onto manifest assets in order (1 asset per line).
+    for i, item in enumerate(manifest):
+        item["prompt"] = prompts[i] if i < len(prompts) else ""
+    _save_manifest(project, manifest)
+    if callable(log):
+        log(f"Đã tạo prompt cho {sum(1 for it in manifest if it.get('prompt'))}/{len(manifest)} cảnh.")
+    return manifest
