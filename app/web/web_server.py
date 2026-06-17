@@ -33,6 +33,7 @@ from ..voice.text_to_voice_queue import (
     warm_kokoro_server,
 )
 from ..voice.text_to_voice_cli import build_srt_from_segments
+from ..pipeline.subtitle_store import load_subtitle, save_subtitle
 from ..pipeline.visual_pipeline import (
     _concise_match_query,
     IMAGE_SUFFIXES,
@@ -123,6 +124,10 @@ class SrtPreviewRequest(BaseModel):
     script: str
     language: str | None = None
     speed: float | None = None
+
+
+class SubtitleRequest(BaseModel):
+    segments: list[dict] = []
 
 
 class WorkflowRequest(BaseModel):
@@ -463,6 +468,8 @@ def _project_payload(project: Path | None) -> dict[str, Any] | None:
     display_name = str(meta.get("title") or "").strip() or project.name
     parent_category = "" if project.parent.name == "Projects" else project.parent.name
     category = str(meta.get("category") or parent_category).strip()
+    subtitle_json = project / "scripts" / "subtitle.json"
+    subtitle_segments = load_subtitle(project)
     return {
         "path": str(project),
         "name": display_name,
@@ -482,6 +489,8 @@ def _project_payload(project: Path | None) -> dict[str, Any] | None:
         "voice_exists": voice_path.exists() and timing_path.exists(),
         "scenes_exist": manifest_path.exists(),
         "export_exists": bool(capcut_files),
+        "has_subtitle": subtitle_json.exists() and bool(subtitle_segments),
+        "subtitle_segments": subtitle_segments,
         "assets": manifest,
     }
 
@@ -1413,6 +1422,13 @@ def srt_preview(request: SrtPreviewRequest) -> dict[str, Any]:
         "sentences": len(sentences),
         "estimated": True,
     }
+
+
+@app.post("/api/projects/subtitle")
+def save_project_subtitle(request: SubtitleRequest) -> dict[str, Any]:
+    project = runtime.require_project()
+    save_subtitle(project, request.segments)
+    return {"project": _project_payload(project)}
 
 
 @app.post("/api/workflow")
