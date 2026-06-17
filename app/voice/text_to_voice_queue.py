@@ -520,6 +520,7 @@ class TextToVoiceRunner:
         self.root: Path | None = None
         self.python: Path | None = None
         self._last_sampling_log = ""
+        self._magicvoice_cmd: list[str] | None = None
 
     def start(self) -> None:
         if bool(self.settings.get("voice_clone_enabled")) and _clone_reference_path(self.settings):
@@ -666,106 +667,103 @@ class TextToVoiceRunner:
         self.log(f"Text to Voice {label}: đã lưu audio {final_path.name}{suffix}")
         return str(final_path)
 
+    def _clone_audio_for_text(
+        self, text: str, label: str, index: int, total: int, output_path: Path
+    ) -> tuple[Path, float]:
+        if self._magicvoice_cmd is None:
+            _root, self._magicvoice_cmd = bootstrap_magicvoice(self.settings, log=self.log)
+        python_cmd = self._magicvoice_cmd
+        reference_path = _clone_reference_path(self.settings)
+        timeout_seconds = max(900, int(self.settings.get("voice_clone_timeout") or 3600))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path = output_path.with_name(f"{output_path.stem}.magicvoice{index:03d}.wav")
+        text_part_path = output_path.with_name(f"{output_path.stem}.magicvoice{index:03d}.txt")
+        stdout_path = output_path.with_name(f"{output_path.stem}.magicvoice{index:03d}.stdout.log")
+        stderr_path = output_path.with_name(f"{output_path.stem}.magicvoice{index:03d}.stderr.log")
+        text_part_path.write_text(text, encoding="utf-8")
+        self.log(f"Text to Voice {label}: đang tạo đoạn {index}/{total}")
+        command = [
+            *python_cmd,
+            str(Path(__file__).resolve().parent / "magicvoice_clone_cli.py"),
+            "--text-file", str(text_part_path),
+            "--ref", str(reference_path),
+            "--out", str(part_path),
+            "--steps", str(max(8, min(16, int(self.settings.get("magicvoice_steps") or 16)))),
+            "--speed", str(float(self.settings.get("text_to_voice_speed") or 1.0)),
+            "--device", str(self.settings.get("magicvoice_device") or "auto"),
+            "--dtype", str(self.settings.get("magicvoice_dtype") or "auto"),
+            "--sentence-pause", str(float(self.settings.get("magicvoice_sentence_pause") or 0.28)),
+            "--clause-pause", str(float(self.settings.get("magicvoice_clause_pause") or 0.12)),
+            "--paragraph-pause", str(float(self.settings.get("magicvoice_paragraph_pause") or 0.43)),
+            "--clarity-speed", str(float(self.settings.get("magicvoice_clarity_speed") or 0.96)),
+            "--language", str(self.settings.get("text_to_voice_language") or "vi"),
+            "--batch-size", "1",
+        ]
+        with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout, stderr_path.open("w", encoding="utf-8", errors="replace") as stderr:
+            process = subprocess.Popen(
+                command,
+                cwd=str(Path(__file__).resolve().parents[1]),
+                stdout=stdout,
+                stderr=stderr,
+                text=True,
+                **_win_hidden_kwargs(),
+            )
+            deadline = time.time() + timeout_seconds
+            while process.poll() is None:
+                if self.stop_check():
+                    _terminate_process_tree(process, timeout=5)
+                    part_path.unlink(missing_ok=True)
+                    raise RuntimeError("Stopped.")
+                if time.time() >= deadline:
+                    _terminate_process_tree(process, timeout=5)
+                    raise TimeoutError(f"MagicVoice quá thời gian ở đoạn {index}/{total}.")
+                time.sleep(0.25)
+            returncode = int(process.returncode or 0)
+        part_duration = _audio_duration_seconds(part_path) if part_path.exists() else 0.0
+        if part_duration <= 0:
+            detail_lines: list[str] = []
+            for path in (stderr_path, stdout_path):
+                if not path.exists():
+                    continue
+                for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    lowered = line.lower()
+                    if (
+                        "loading weights:" in lowered
+                        or "fetching " in lowered
+                        or line.startswith("[transformers]")
+                        or "%|" in line
+                        or "could not load symbol" in lowered
+                        or "runtimewarning" in lowered
+                        or "filterwarnings" in lowered
+                    ):
+                        continue
+                    detail_lines.append(line)
+            detail = " ".join(detail_lines[-8:]) or f"MagicVoice không tạo được file WAV hợp lệ (mã thoát {returncode})."
+            raise RuntimeError(f"MagicVoice clone thất bại ở đoạn {index}/{total}. {detail}")
+        if returncode != 0:
+            self.log(
+                f"Text to Voice {label}: đoạn {index}/{total} đã có audio hợp lệ; "
+                "bỏ qua cảnh báo phụ của MagicVoice."
+            )
+        text_part_path.unlink(missing_ok=True)
+        return part_path, part_duration
+
     def _submit_file_magicvoice(self, text: str, label: str, output_path: Path, cache_key: dict, reference_path: Path) -> str:
-        root, python_cmd = bootstrap_magicvoice(self.settings, log=self.log)
         max_chars = max(280, min(int(self.settings.get("voice_clone_max_chars") or 480), 900))
         chunks = split_text_for_text_to_voice(text, max_chars)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         generated_paths: list[Path] = []
-        timeout_seconds = max(900, int(self.settings.get("voice_clone_timeout") or 3600))
         try:
             for index, chunk in enumerate(chunks, start=1):
                 if self.stop_check():
                     raise RuntimeError("Stopped.")
-                part_path = output_path.with_name(f"{output_path.stem}.magicvoice{index:03d}.wav")
-                text_part_path = output_path.with_name(f"{output_path.stem}.magicvoice{index:03d}.txt")
-                stdout_path = output_path.with_name(f"{output_path.stem}.magicvoice{index:03d}.stdout.log")
-                stderr_path = output_path.with_name(f"{output_path.stem}.magicvoice{index:03d}.stderr.log")
-                text_part_path.write_text(chunk, encoding="utf-8")
-                self.log(f"Text to Voice {label}: MagicVoice đang clone đoạn {index}/{len(chunks)}")
-                command = [
-                    *python_cmd,
-                    str(Path(__file__).resolve().parent / "magicvoice_clone_cli.py"),
-                    "--text-file",
-                    str(text_part_path),
-                    "--ref",
-                    str(reference_path),
-                    "--out",
-                    str(part_path),
-                    "--steps",
-                    str(max(8, min(16, int(self.settings.get("magicvoice_steps") or 16)))),
-                    "--speed",
-                    str(float(self.settings.get("text_to_voice_speed") or 1.0)),
-                    "--device",
-                    str(self.settings.get("magicvoice_device") or "auto"),
-                    "--dtype",
-                    str(self.settings.get("magicvoice_dtype") or "auto"),
-                    "--sentence-pause",
-                    str(float(self.settings.get("magicvoice_sentence_pause") or 0.28)),
-                    "--clause-pause",
-                    str(float(self.settings.get("magicvoice_clause_pause") or 0.12)),
-                    "--paragraph-pause",
-                    str(float(self.settings.get("magicvoice_paragraph_pause") or 0.43)),
-                    "--clarity-speed",
-                    str(float(self.settings.get("magicvoice_clarity_speed") or 0.96)),
-                    "--language",
-                    str(self.settings.get("text_to_voice_language") or "vi"),
-                    "--batch-size",
-                    "1",
-                ]
-                with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout, stderr_path.open("w", encoding="utf-8", errors="replace") as stderr:
-                    process = subprocess.Popen(
-                        command,
-                        cwd=str(Path(__file__).resolve().parents[1]),
-                        stdout=stdout,
-                        stderr=stderr,
-                        text=True,
-                        **_win_hidden_kwargs(),
-                    )
-                    deadline = time.time() + timeout_seconds
-                    while process.poll() is None:
-                        if self.stop_check():
-                            _terminate_process_tree(process, timeout=5)
-                            part_path.unlink(missing_ok=True)
-                            raise RuntimeError("Stopped.")
-                        if time.time() >= deadline:
-                            _terminate_process_tree(process, timeout=5)
-                            raise TimeoutError(f"MagicVoice quá thời gian ở đoạn {index}/{len(chunks)}.")
-                        time.sleep(0.25)
-                    returncode = int(process.returncode or 0)
-                part_duration = _audio_duration_seconds(part_path) if part_path.exists() else 0.0
-                if part_duration <= 0:
-                    detail_lines: list[str] = []
-                    for path in (stderr_path, stdout_path):
-                        if not path.exists():
-                            continue
-                        for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                            line = raw_line.strip()
-                            if not line:
-                                continue
-                            lowered = line.lower()
-                            if (
-                                "loading weights:" in lowered
-                                or "fetching " in lowered
-                                or line.startswith("[transformers]")
-                                or "%|" in line
-                                or "could not load symbol" in lowered
-                                or "runtimewarning" in lowered
-                                or "filterwarnings" in lowered
-                            ):
-                                continue
-                            detail_lines.append(line)
-                    detail = " ".join(detail_lines[-8:])
-                    if not detail:
-                        detail = f"MagicVoice không tạo được file WAV hợp lệ (mã thoát {returncode})."
-                    raise RuntimeError(f"MagicVoice clone thất bại ở đoạn {index}/{len(chunks)}. {detail}")
-                if returncode != 0:
-                    self.log(
-                        f"Text to Voice {label}: đoạn {index}/{len(chunks)} đã có audio hợp lệ; "
-                        "bỏ qua cảnh báo phụ của MagicVoice."
-                    )
+                part_path, _part_duration = self._clone_audio_for_text(
+                    chunk, label, index, len(chunks), output_path
+                )
                 generated_paths.append(part_path)
-                text_part_path.unlink(missing_ok=True)
 
             if len(generated_paths) == 1:
                 shutil.copy2(generated_paths[0], output_path)
