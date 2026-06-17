@@ -227,6 +227,63 @@ def _line_context(line_index: int, text: str, scene: dict) -> str:
     return "\n".join(parts)
 
 
+def _keyword_for_text(text: str) -> str:
+    """Lazy adapter to the heuristic extractor in visual_pipeline (avoids cycle)."""
+    from app.pipeline.visual_pipeline import keyword_for_text
+    return keyword_for_text(text)
+
+
+SYS_KEYWORD = (
+    "You turn a real-life photo description into a SHORT image-search query for "
+    "stock photos. Return ONLY raw JSON (no markdown): "
+    '{"search_keyword": "4-8 plain real-world words people would type into Google '
+    'Images", "google_queries": ["2-3 short query variants"]}. '
+    "Drop invented character names and any text-on-image instructions; keep concrete, "
+    "searchable real-world nouns (people type, setting, action, clothing). English only."
+)
+
+
+def keyword_from_prompt(prompt: str, settings: dict, fallback_text: str = "") -> dict:
+    text = str(prompt or "").strip()
+    result: dict | None = None
+    if text:
+        try:
+            raw = _ai_call(settings, f"{SYS_KEYWORD}\n\nDescription:\n{text}", max_tokens=400)
+            data = parse_json_block(raw)
+            if isinstance(data, dict):
+                kw = str(data.get("search_keyword") or "").strip()
+                queries = [str(q or "").strip() for q in (data.get("google_queries") or []) if str(q or "").strip()]
+                if kw:
+                    result = {"search_keyword": kw, "google_queries": queries or [kw]}
+        except Exception:
+            result = None
+    if result is None:
+        kw = _keyword_for_text(text or str(fallback_text or "")).strip()
+        result = {"search_keyword": kw, "google_queries": [kw] if kw else []}
+    if not result["google_queries"] and result["search_keyword"]:
+        result["google_queries"] = [result["search_keyword"]]
+    return result
+
+
+def apply_prompt_keywords(project: Path, settings: dict, log=None) -> list[dict]:
+    manifest = _load_manifest(project)
+    if not manifest:
+        raise RuntimeError("Chưa có phân cảnh. Hãy phân cảnh trước khi tạo keyword.")
+    for index, item in enumerate(manifest, start=1):
+        text = str(item.get("prompt") or "").strip()
+        fallback = str(item.get("sentence_text") or "")
+        kw = keyword_from_prompt(text, settings, fallback_text=fallback)
+        item["keyword"] = kw["search_keyword"]
+        item["ai_search_keyword"] = kw["search_keyword"]
+        item["google_queries"] = kw["google_queries"]
+        if callable(log):
+            log(f"Keyword {index}/{len(manifest)}: {kw['search_keyword']}")
+    _save_manifest(project, manifest)
+    if callable(log):
+        log(f"Đã tạo keyword cho {len(manifest)} cảnh.")
+    return manifest
+
+
 def generate_line_prompts(project: Path, settings: dict, log=None, batch_size: int = 8) -> list[dict]:
     lines = load_subtitle(project)
     if not lines:
