@@ -781,6 +781,7 @@ function App() {
       setState((current) => ({ ...current, project: data.project }))
       setTitle(data.project.name)
       setToast("Đã lưu nội dung. Bước tiếp theo: tạo giọng đọc.")
+      if (subtitleSegments.length) await persistSubtitle(subtitleSegments)
       const latest = await loadState()
       // The new project now exists in state.projects — navigate to its step2 URL.
       const slug = pathToVideoSlug(data.project.path, latest?.projects || [])
@@ -1361,6 +1362,7 @@ function App() {
             subtitleSegments={subtitleSegments}
             setSubtitleSegments={setSubtitleSegments}
             persistSubtitle={persistSubtitle}
+            hasSubtitle={Boolean(project?.has_subtitle)}
           />}
           {activeScreen === "step2" && <VoiceScreen script={script} project={project} settings={settings} setSettings={setSettings} voiceOptions={voiceOptions} refreshVoices={refreshVoices} previewVoiceNow={previewVoiceNow} voicePreviewBusy={voicePreviewBusy} voicePreviewUrl={voicePreviewUrl} createVoiceWithQuickSettings={createVoiceWithQuickSettings} startJob={startJob} applyBeginnerVoicePreset={applyBeginnerVoicePreset} saveCloneVoice={uploadVoiceCloneReference} selectSavedCloneVoice={selectSavedCloneVoice} deleteVoiceClone={deleteVoiceClone} isBusy={isBusy} busyAction={busyAction} activeJob={activeJob} goStep={goStep} userProgress={userProgress} />}
           {activeScreen === "step2b" && <PromptScreen assets={assets} project={project} startJob={startJob} isBusy={isBusy} busyAction={busyAction} goStep={goStep} saveKeyword={saveKeyword} userProgress={userProgress} />}
@@ -1737,7 +1739,7 @@ function FlowCard({ icon: Icon, title, desc, accent = "violet", dashed, onClick,
   </button>
 }
 
-function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categoryLocked = false, categories = [], settings, flows = [], activeFlowId, setActiveFlowId, setFlowsOpen, busyAction, activeJob, staleWarning = false, subtitleSegments = [], setSubtitleSegments, persistSubtitle }) {
+function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categoryLocked = false, categories = [], settings, flows = [], activeFlowId, setActiveFlowId, setFlowsOpen, busyAction, activeJob, staleWarning = false, subtitleSegments = [], setSubtitleSegments, persistSubtitle, hasSubtitle = false }) {
   const [contentMode, setContentMode] = useState("existing")
   // Live, estimated SRT preview generated from the script text as it is typed.
   // Real timing is recomputed from the TTS audio in Step 2; this only previews
@@ -1771,7 +1773,7 @@ function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputR
   // Khi chưa có phụ đề canonical, preview tự động trở thành bản nháp canonical
   // để người dùng chỉnh; sau khi đã chỉnh/lưu thì canonical là nguồn chính.
   useEffect(() => {
-    if (!subtitleSegments.length && srt.segments.length) {
+    if (!hasSubtitle && !subtitleSegments.some((s) => s.edited) && srt.segments.length) {
       setSubtitleSegments?.(srt.segments.map((s, i) => ({
         index: i + 1, start: s.start, end: s.end, text: s.text, edited: false,
       })))

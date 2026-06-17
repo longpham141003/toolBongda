@@ -454,7 +454,10 @@ def _project_payload(project: Path | None) -> dict[str, Any] | None:
                 timing_segments = [item for item in timing_data.get("segments") or [] if isinstance(item, dict) and str(item.get("text") or "").strip()]
         except Exception:
             timing_segments = []
-    has_voice = voice_path.exists() and voice_mtime >= script_mtime and bool(timing_segments)
+    subtitle_json = project / "scripts" / "subtitle.json"
+    subtitle_mtime = subtitle_json.stat().st_mtime if subtitle_json.exists() else 0
+    upstream_mtime = max(script_mtime, subtitle_mtime)
+    has_voice = voice_path.exists() and voice_mtime >= upstream_mtime and bool(timing_segments)
     has_scenes = bool(manifest) and manifest_mtime >= voice_mtime and has_voice
     capcut_dir = project / "capcut"
     capcut_files = [path for path in capcut_dir.rglob("*") if path.is_file()] if capcut_dir.exists() else []
@@ -468,7 +471,6 @@ def _project_payload(project: Path | None) -> dict[str, Any] | None:
     display_name = str(meta.get("title") or "").strip() or project.name
     parent_category = "" if project.parent.name == "Projects" else project.parent.name
     category = str(meta.get("category") or parent_category).strip()
-    subtitle_json = project / "scripts" / "subtitle.json"
     subtitle_segments = load_subtitle(project)
     return {
         "path": str(project),
