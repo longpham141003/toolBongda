@@ -702,17 +702,18 @@ class TestSplitSentencesIntoScenes:
         scenes = vp.split_sentences_into_scenes(sentences)
         assert len(scenes) == 1
 
-    def test_long_scene_guard_at_10s(self):
-        # Scene accumulates > 10 seconds -> triggers long_scene_guard
+    def test_long_scene_guard_over_25s(self):
+        # Pacing is intentionally softer now (AI grouping is primary; this local
+        # splitter is a fallback). The hard long_scene_guard fires at >= 25s.
+        # A single >=25s sentence makes the next one start a new scene with the
+        # long_scene_guard reason (shorter accumulations break earlier via
+        # target_scene_duration / scene_sentence_limit instead).
         sentences = [
-            self._sent("Very long sentence one.", 0.0, 6.0, 1),
-            self._sent("Very long sentence two.", 6.0, 11.0, 2),
-            self._sent("Third sentence.", 11.0, 13.0, 3),
+            self._sent("A long uninterrupted narration that runs well past the soft pacing target.", 0.0, 26.0, 1),
+            self._sent("Then the next part begins.", 26.0, 30.0, 2),
         ]
         scenes = vp.split_sentences_into_scenes(sentences)
-        # The third sentence should start a new scene because current_duration >= 10s
         assert len(scenes) >= 2
-        # Check that second scene's break_reason is long_scene_guard
         reasons = [s["break_reason"] for s in scenes]
         assert "long_scene_guard" in reasons
 
