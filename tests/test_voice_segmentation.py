@@ -52,8 +52,10 @@ class TestBackwardCompatibility:
         assert split_text_for_text_to_voice("Hi there.", 10000) == ["Hi there."]
 
     def test_existing_splitter_floor_still_1000(self):
-        # truyền max_chars nhỏ vẫn bị nâng lên >=1000 như cũ
+        # truyền max_chars nhỏ (200) vẫn bị nâng lên sàn 1000 như cũ:
+        # nếu sàn thực sự là 200 thì 1200 ký tự sẽ ra ~6 đoạn nhỏ <=200;
+        # với sàn 1000 chỉ ra 1-2 đoạn và có đoạn lớn hơn 200.
         text = "A. " * 400  # 1200 ký tự
         chunks = split_text_for_text_to_voice(text, 200)
-        assert all(len(c) <= 1000 for c in chunks)
-        assert len(chunks) >= 1
+        assert max(len(c) for c in chunks) > 200  # 200 đã bị ghi đè lên sàn 1000
+        assert len(chunks) <= 2
