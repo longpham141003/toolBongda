@@ -547,6 +547,7 @@ function App() {
           if (job.name === "B2 Phan tich canh") goStep("step2b")
           if (job.name === "B2+B3 Chia canh va tim media") goStep("step3b")
           if (job.name === "B3 Tim anh") goStep("step3b")
+          if (job.name === "B3 Tao keyword va tim anh") goStep("step3b")
           if (job.name === "B2 Phan tich nhan vat") loadPromptAnalysis().catch(() => {})
           if (job.name === "B2 Tao prompt") loadState(true).catch(() => {})
           setBusyAction("")
@@ -2217,6 +2218,11 @@ function PromptScreen({ assets, project, startJob, isBusy, busyAction, goStep, s
               <Button disabled={isBusy || !project?.has_scenes} title={!project?.has_scenes ? "Hãy phân cảnh trước (Bước 3A) trước khi tạo prompt từng câu" : undefined} onClick={() => startJob("/api/generate-prompts", undefined, "generate-prompts")}>
                 {generatingRealPrompts ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {generatingRealPrompts ? "Đang tạo prompt..." : "Tạo prompt cho từng câu"}
               </Button>
+              {assets.some((a) => (a.prompt || "").trim()) && (
+                <Button disabled={isBusy} onClick={() => startJob("/api/prompt-search", undefined, "prompt-search")}>
+                  <Image className="h-4 w-4" /> Tạo keyword & tìm ảnh
+                </Button>
+              )}
               {!project?.has_scenes && <p className="hint-text">Hãy phân cảnh trước (Bước 3A) để tạo prompt theo từng cảnh.</p>}
             </>
           )}
