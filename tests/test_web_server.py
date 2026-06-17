@@ -891,3 +891,21 @@ class TestSPAFallback:
         # The body must NOT be the SPA HTML entry point
         assert "<div id=\"root\"" not in body, "Asset response looks like SPA HTML (contains <div id=\"root\")"
         assert not body.lstrip().lower().startswith("<!doctype"), "Asset response looks like SPA HTML (starts with <!doctype)"
+
+
+# ===========================================================================
+# /api/voice endpoint tests
+# ===========================================================================
+
+class TestVoiceEndpoint:
+    def test_voice_requires_subtitle(self, client, tmp_path):
+        """POST /api/voice returns 400 with 'phụ đề' in detail when no subtitle.json exists."""
+        # Set up a valid project directory with script_final.txt but NO subtitle.json
+        project = tmp_path / "proj"
+        (project / "scripts").mkdir(parents=True)
+        (project / "scripts" / "script_final.txt").write_text("Câu một.", encoding="utf-8")
+        ws.runtime.current_project = project
+        resp = client.post("/api/voice", json={"script": "Câu một."})
+        assert resp.status_code == 400
+        detail = (resp.json().get("detail") or "").lower()
+        assert "phụ đề" in detail

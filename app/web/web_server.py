@@ -1479,6 +1479,8 @@ def run_workflow(request: WorkflowRequest) -> dict[str, Any]:
 def create_voice(request: ScriptRequest) -> dict[str, Any]:
     project = runtime.require_project()
     _sync_script(project, request.script)
+    if not load_subtitle(project):
+        raise HTTPException(status_code=400, detail="Chưa có phụ đề. Hãy tạo & lưu phụ đề ở Bước 1 trước khi tạo giọng đọc.")
     settings = load_settings()
 
     def task(job: Job) -> dict[str, Any]:
