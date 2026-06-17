@@ -239,6 +239,7 @@ def download_google_images(
     excluded_urls: set[str] | None = None,
     excluded_dhashes: set[int] | None = None,
     skip_results: int = 0,
+    tbs: str = "",
 ) -> dict:
     output.mkdir(parents=True, exist_ok=True)
     downloaded = []
@@ -270,9 +271,14 @@ def download_google_images(
             )
             context = browser.new_context(**context_options)
         page = context.pages[0] if context.pages else context.new_page()
+        search_url = f"https://www.google.com/search?tbm=isch&hl=en&q={quote_plus(query)}"
+        if str(tbs or "").strip():
+            # Date-bounded image search (e.g. cdr:1,cd_min:01/01/2026) so a
+            # recency-anchored query doesn't pull older-edition photos.
+            search_url += f"&tbs={quote_plus(str(tbs).strip())}"
         try:
             page.goto(
-                f"https://www.google.com/search?tbm=isch&hl=en&q={quote_plus(query)}",
+                search_url,
                 wait_until="domcontentloaded",
                 timeout=18000,
             )
@@ -401,6 +407,7 @@ def main() -> int:
     parser.add_argument("--exclude-url", action="append", default=[])
     parser.add_argument("--exclude-dhash", action="append", default=[])
     parser.add_argument("--skip-results", type=int, default=0)
+    parser.add_argument("--tbs", default="")
     parser.add_argument("--request-json", type=Path, default=None)
     args = parser.parse_args()
     if args.request_json:
@@ -413,6 +420,7 @@ def main() -> int:
         args.exclude_url = list(request.get("exclude_urls") or [])
         args.exclude_dhash = [str(value) for value in request.get("exclude_dhashes") or []]
         args.skip_results = int(request.get("skip_results") or 0)
+        args.tbs = str(request.get("tbs") or "")
     if not args.query or not args.output:
         parser.error("--query and --output are required unless --request-json is used")
 
@@ -425,6 +433,7 @@ def main() -> int:
         excluded_urls=set(args.exclude_url),
         excluded_dhashes={int(value) for value in args.exclude_dhash},
         skip_results=args.skip_results,
+        tbs=args.tbs,
     )
     print(json.dumps(result, ensure_ascii=False))
     if result.get("captcha"):

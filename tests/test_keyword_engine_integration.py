@@ -97,6 +97,28 @@ class TestNonFootballEndToEnd:
         assert "abberline" in joined
 
 
+class TestRecencyWC2026:
+    SCRIPT = (
+        "France vs Brazil will meet in the 2026 World Cup final, "
+        "a huge football match decided by a single goal."
+    )
+
+    def test_match_moment_anchors_date_min_to_competition_year(self):
+        item = {
+            "sentence_text": "France and Brazil fight for the ball in midfield.",
+            "main_subject": "France and Brazil",
+            "match_teams": ["France", "Brazil"],
+            "action_context": "players competing match action",
+            "keyword": "France Brazil match action",
+            "google_queries": ["France Brazil match action"],
+        }
+        ctx = {"video_domain": "football", "match_teams": ["France", "Brazil"]}
+        out = vp._apply_script_visual_context([item], self.SCRIPT, ctx)[0]
+        assert out.get("search_date_min") == "2026-01-01"
+        # And it converts to a Google Images date filter (no older editions).
+        assert vp._google_tbs(out["search_date_min"]) == "cdr:1,cd_min:01/01/2026"
+
+
 class TestResolveActionWired:
     def test_scene_action_hint_uses_pack(self):
         football_pack = dp.resolve_domain_pack("", {"video_domain": "football"})

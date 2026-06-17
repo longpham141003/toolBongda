@@ -1820,6 +1820,13 @@ def _apply_script_visual_context(items: list[dict], script: str, video_context: 
             # (_is_match_photography_item) is unchanged for football; route_source
             # only DECIDES whether sportsdb_queries get populated vs left empty.
             item["visual_source_type"] = "match_photography"
+            # Recency: bind the web search to the pack's anchor year (e.g. the
+            # competition year for football) so WC2026 queries don't pull 2018/
+            # 2022 photos. Stored on the item; the download path converts it to a
+            # Google Images date filter.
+            date_min = str(route.filters.get("date_min") or "").strip()
+            if date_min:
+                item["search_date_min"] = date_min
             if route.source == "thesportsdb":
                 item["sportsdb_queries"] = [value for value in sanitized[:4] if value]
             else:
@@ -3653,6 +3660,21 @@ def _fetch_wikimedia_images(folder: Path, queries: list[str], count: int = 10) -
     return downloaded
 
 
+def _google_tbs(date_min: str) -> str:
+    """Convert a 'YYYY-MM-DD' or 'YYYY' anchor into a Google Images date filter
+    (tbs=cdr:1,cd_min:MM/DD/YYYY). Returns '' when no usable year is present."""
+    value = str(date_min or "").strip()
+    if not value:
+        return ""
+    match = re.match(r"^(\d{4})(?:-(\d{1,2})-(\d{1,2}))?$", value)
+    if not match:
+        return ""
+    year = match.group(1)
+    month = match.group(2) or "1"
+    day = match.group(3) or "1"
+    return f"cdr:1,cd_min:{int(month):02d}/{int(day):02d}/{year}"
+
+
 def _fetch_google_images(
     project: Path,
     folder: Path,
@@ -3662,6 +3684,7 @@ def _fetch_google_images(
     excluded_dhashes: set[int] | None = None,
     skip_results: int = 0,
     settings: dict | None = None,
+    tbs: str = "",
 ) -> int:
     worker_path = Path(__file__).with_name("google_images_worker.py")
     downloaded = 0
@@ -3694,6 +3717,7 @@ def _fetch_google_images(
                     "exclude_urls": sorted(excluded_urls or set()),
                     "exclude_dhashes": sorted(excluded_dhashes or set()),
                     "skip_results": skip_results + worker_attempt,
+                    "tbs": str(tbs or ""),
                 },
             )
             try:
@@ -3797,6 +3821,8 @@ def crawl_image_candidates(
     match_photography = _is_match_photography_item(item)
     sportsdb_queries = _source_queries(item, "sportsdb_queries", [])
     google_queries = _source_queries(item, "google_queries", [])
+    # Recency anchor (e.g. competition year for football) -> Google date filter.
+    image_tbs = _google_tbs(str(item.get("search_date_min") or ""))
     if match_photography:
         google_queries = [
             _match_photo_query(query, item)
@@ -3838,6 +3864,7 @@ def crawl_image_candidates(
                     excluded_dhashes=excluded_dhashes,
                     skip_results=0,
                     settings=settings,
+                    tbs=image_tbs,
                 ),
             ),
         ]
@@ -3858,6 +3885,7 @@ def crawl_image_candidates(
                     excluded_dhashes=excluded_dhashes,
                     skip_results=0,
                     settings=settings,
+                    tbs=image_tbs,
                 ),
             ),
         ]

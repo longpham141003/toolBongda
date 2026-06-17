@@ -942,6 +942,26 @@ class TestImageFilterSettings:
 
 
 # ===========================================================================
+# _google_tbs (recency date filter)
+# ===========================================================================
+class TestGoogleTbs:
+    def test_full_date(self):
+        assert vp._google_tbs("2026-01-01") == "cdr:1,cd_min:01/01/2026"
+
+    def test_year_only(self):
+        assert vp._google_tbs("2026") == "cdr:1,cd_min:01/01/2026"
+
+    def test_month_day_padded(self):
+        assert vp._google_tbs("2022-3-5") == "cdr:1,cd_min:03/05/2022"
+
+    def test_empty(self):
+        assert vp._google_tbs("") == ""
+
+    def test_garbage_returns_empty(self):
+        assert vp._google_tbs("not a date") == ""
+
+
+# ===========================================================================
 # 18. _is_target_aspect
 # ===========================================================================
 class TestIsTargetAspect:
