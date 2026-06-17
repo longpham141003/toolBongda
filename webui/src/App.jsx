@@ -906,6 +906,8 @@ function App() {
       text_to_voice_delivery: "natural",
       text_to_voice_speed: 1,
       voice_clone_enabled: false,
+      voice_clone_reference_path: "",
+      voice_clone_reference_name: "",
       voice_clone_preview_url: "",
     }
     const data = await api("/api/settings", { method: "POST", body: JSON.stringify({ settings: nextSettings }) })
@@ -1024,7 +1026,9 @@ function App() {
   async function selectSavedCloneVoice(profile, makeDefault = false) {
     if (!profile) return
     const profiles = Array.isArray(settings.voice_clone_profiles) ? settings.voice_clone_profiles : []
+    const profileLanguage = normalizeVoiceLanguage(profile.language || settings.text_to_voice_language || "vi")
     const payload = {
+      text_to_voice_language: profileLanguage,
       voice_clone_enabled: true,
       voice_clone_engine: "magicvoice",
       voice_clone_reference_path: profile.path || "",
@@ -1074,12 +1078,13 @@ function App() {
       }
       setVoicePreviewUrl("")
       const voiceLanguage = normalizeVoiceLanguage(settings.text_to_voice_language || "en")
+      const hasCloneReference = Boolean(settings.voice_clone_reference_path)
       const voiceSettings = {
         text_to_voice_language: voiceLanguage,
         text_to_voice_voice: settings.text_to_voice_voice || "af_heart",
         text_to_voice_delivery: settings.text_to_voice_delivery || "natural",
         text_to_voice_speed: Number(settings.text_to_voice_speed || 1),
-        voice_clone_enabled: Boolean(settings.voice_clone_enabled && settings.voice_clone_reference_path),
+        voice_clone_enabled: hasCloneReference,
         voice_clone_engine: settings.voice_clone_engine || "magicvoice",
         voice_clone_reference_path: settings.voice_clone_reference_path || "",
         voice_clone_reference_name: settings.voice_clone_reference_name || "",
@@ -1162,8 +1167,8 @@ function App() {
     { id: "step3a", title: "Hình ảnh", desc: "Phân cảnh và duyệt media", icon: Image },
     { id: "step4", title: "Xuất CapCut", desc: "Kiểm tra và mở project", icon: Rocket },
   ]
-  const missingGeminiApiKey = !String(settings.gemini_api_key || "").trim()
-  const showApiKeyNotice = missingGeminiApiKey && !apiKeyNoticeDismissed && !settingsOpen
+  const missingAiApiKey = ![settings.kiro_api_key, settings.claude_api_key, settings.gemini_api_key, settings.openai_api_key].some((value) => String(value || "").trim())
+  const showApiKeyNotice = missingAiApiKey && !apiKeyNoticeDismissed && !settingsOpen
   const preflightChecks = preflight?.checks || []
   const readyChecks = preflightChecks.filter((item) => item.ok).length
   const allReady = preflightChecks.length > 0 && readyChecks === preflightChecks.length
@@ -1284,7 +1289,7 @@ function App() {
           <div className="api-key-dialog-head">
             <div className="api-key-dialog-icon"><KeyRound className="h-7 w-7" /></div>
             <div>
-              <DialogTitle>Thiếu Gemini API key</DialogTitle>
+              <DialogTitle>Thiếu API key AI</DialogTitle>
               <DialogDescription>
                 Tool vẫn mở được, nhưng các phần AI như tạo kịch bản, chia cảnh, tạo keyword và kiểm ảnh sẽ không chạy đúng nếu chưa nhập key.
               </DialogDescription>
@@ -1299,7 +1304,7 @@ function App() {
             <Button onClick={() => {
               setApiKeyNoticeDismissed(true)
               setSettingsOpen(true)
-              setToast("Vào tab AI, dán Gemini API key rồi bấm Lưu cài đặt.")
+              setToast("Vào tab AI, dán Kiro, Claude, Gemini hoặc OpenAI API key rồi bấm Lưu cài đặt.")
             }}>
               <Settings className="mr-2 h-4 w-4" /> Nhập API key ngay
             </Button>
@@ -1740,6 +1745,14 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
     setVoiceMode("normal")
     setSettings({ ...settings, voice_clone_enabled:false, voice_clone_reference_path:"", voice_clone_reference_name:"", voice_clone_preview_url:"" })
   }
+  const chooseCloneMode = async () => {
+    setVoiceMode("clone")
+    const profile = selectedClone || filteredCloneProfiles[0] || cloneProfiles[0]
+    if (profile) {
+      setCloneLanguage(profile.language || "vi")
+      await selectSavedCloneVoice(profile, false)
+    }
+  }
   const chooseCloneProfile = async (profile) => {
     if (!profile) return
     setVoiceMode("clone")
@@ -1768,7 +1781,7 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
       <div className="glass-panel screen-panel flex flex-col">
         <div className="voice-choice-buttons">
           <button className={cn(voiceMode==="normal" && "active")} onClick={chooseNormalMode}><FileAudio className="h-4 w-4" /><span>Giọng có sẵn</span></button>
-          <button className={cn(voiceMode==="clone" && "active")} onClick={()=>setVoiceMode("clone")}><Mic className="h-4 w-4" /><span>Giọng đã clone</span></button>
+          <button className={cn(voiceMode==="clone" && "active")} onClick={chooseCloneMode}><Mic className="h-4 w-4" /><span>Giọng đã clone</span></button>
         </div>
         {voiceMode === "normal" ? <>
           <div className="panel-title"><h2>Giọng có sẵn</h2><Button variant="ghost" size="sm" onClick={() => refreshVoices(settings.text_to_voice_language || "en")}><RefreshCw className="h-4 w-4" /> Tải lại</Button></div>
@@ -1776,7 +1789,7 @@ function VoiceScreen({ script, project, settings, setSettings, voiceOptions, ref
           <Field label="Chọn giọng">
             <Select
               value={settings.text_to_voice_voice || voiceOptions[0]?.value || "af_heart"}
-              onValueChange={(value) => setSettings({...settings, text_to_voice_voice:value, voice_clone_enabled:false, voice_clone_preview_url:""})}
+              onValueChange={(value) => setSettings({...settings, text_to_voice_voice:value, voice_clone_enabled:false, voice_clone_reference_path:"", voice_clone_reference_name:"", voice_clone_preview_url:""})}
               options={voiceOptions.map((voice) => ({ value: voice.value, label: voice.label }))}
             />
           </Field>
@@ -2004,13 +2017,53 @@ function SettingsModal({ open, onOpenChange, settings, setSettings, saveSettings
           <div className="setting-note">Khuyến nghị: bật cả hai mục trên để ảnh ít sai hơn và đủ nét khi xuất CapCut.</div>
         </SettingSection>
       </div></TabsContent>
-      <TabsContent value="ai"><SettingSection title="AI dùng để hiểu nội dung và kiểm ảnh" icon={Bot}><Field label="Nhà cung cấp"><Select value={settings.keyword_ai_provider||"auto"} onValueChange={v=>setSettings({...settings,keyword_ai_provider:v})} options={[{value:"auto",label:"Tự động"},{value:"gemini",label:"Gemini"},{value:"openai",label:"OpenAI"}]}/></Field><Field label="Gemini API key"><div className="relative"><Input type={showKey?"text":"password"} className="pr-11" value={settings.gemini_api_key||""} onChange={e=>setSettings({...settings,gemini_api_key:e.target.value})}/><button type="button" onClick={()=>setShowKey(v=>!v)} aria-label={showKey?"Ẩn key":"Hiện key"} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-zinc-500 hover:bg-white/10 hover:text-white">{showKey?<EyeOff className="h-4 w-4"/>:<Eye className="h-4 w-4"/>}</button></div></Field><div className="setting-note">Nếu không biết chọn gì, để Tự động và chỉ nhập Gemini API key.</div></SettingSection></TabsContent>
+      <TabsContent value="ai">
+        <SettingSection title="AI dùng để hiểu nội dung và kiểm ảnh" icon={Bot}>
+          <Field label="Nhà cung cấp">
+            <Select
+              value={settings.keyword_ai_provider||"auto"}
+              onValueChange={v=>setSettings({...settings,keyword_ai_provider:v})}
+              options={[
+                {value:"auto",label:"Tự động"},
+                {value:"kiro",label:"Kiro / Claude proxy"},
+                {value:"claude",label:"Claude"},
+                {value:"gemini",label:"Gemini"},
+                {value:"openai",label:"OpenAI"},
+              ]}
+            />
+          </Field>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <Field label="Kiro API key">
+              <div className="relative"><Input type={showKey?"text":"password"} className="pr-11" value={settings.kiro_api_key||""} onChange={e=>setSettings({...settings,kiro_api_key:e.target.value})}/><button type="button" onClick={()=>setShowKey(v=>!v)} aria-label={showKey?"Ẩn key":"Hiện key"} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-zinc-500 hover:bg-white/10 hover:text-white">{showKey?<EyeOff className="h-4 w-4"/>:<Eye className="h-4 w-4"/>}</button></div>
+            </Field>
+            <Field label="Model Kiro">
+              <Input value={settings.kiro_keyword_model||"kr/claude-opus-4.8"} onChange={e=>setSettings({...settings,kiro_keyword_model:e.target.value})}/>
+            </Field>
+            <Field label="Kiro endpoint">
+              <Input value={settings.kiro_api_base||"https://xapi.labpinky.com/v1"} onChange={e=>setSettings({...settings,kiro_api_base:e.target.value})}/>
+            </Field>
+            <Field label="Claude API key">
+              <div className="relative"><Input type={showKey?"text":"password"} className="pr-11" value={settings.claude_api_key||""} onChange={e=>setSettings({...settings,claude_api_key:e.target.value})}/><button type="button" onClick={()=>setShowKey(v=>!v)} aria-label={showKey?"Ẩn key":"Hiện key"} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-zinc-500 hover:bg-white/10 hover:text-white">{showKey?<EyeOff className="h-4 w-4"/>:<Eye className="h-4 w-4"/>}</button></div>
+            </Field>
+            <Field label="Model Claude">
+              <Input value={settings.claude_keyword_model||"claude-sonnet-4-20250514"} onChange={e=>setSettings({...settings,claude_keyword_model:e.target.value})}/>
+            </Field>
+            <Field label="Gemini API key">
+              <div className="relative"><Input type={showKey?"text":"password"} className="pr-11" value={settings.gemini_api_key||""} onChange={e=>setSettings({...settings,gemini_api_key:e.target.value})}/><button type="button" onClick={()=>setShowKey(v=>!v)} aria-label={showKey?"Ẩn key":"Hiện key"} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-zinc-500 hover:bg-white/10 hover:text-white">{showKey?<EyeOff className="h-4 w-4"/>:<Eye className="h-4 w-4"/>}</button></div>
+            </Field>
+            <Field label="Model Gemini">
+              <Input value={settings.gemini_keyword_model||"gemini-2.5-flash"} onChange={e=>setSettings({...settings,gemini_keyword_model:e.target.value})}/>
+            </Field>
+          </div>
+          <div className="setting-note">Khuyên dùng: Kiro/Claude cho hiểu ngữ cảnh và tạo keyword, Gemini cho kiểm ảnh. Với key Kiro hiện tại, base URL là https://xapi.labpinky.com/v1 và model có dạng kr/claude-... Nếu để Tự động, tool sẽ ưu tiên Kiro khi có key, rồi OpenAI, Claude, Gemini.</div>
+        </SettingSection>
+      </TabsContent>
       <TabsContent value="advanced"><div className="settings-grid">
         <SettingSection title="Clone giọng (MagicVoice)" icon={Mic}>
           <Field label="Thiết bị xử lý"><Select value={settings.magicvoice_device||"auto"} onValueChange={v=>setSettings({...settings,magicvoice_device:v})} options={[{value:"auto",label:"Tự động (ưu tiên CUDA)"},{value:"cuda",label:"CUDA (GPU)"},{value:"cpu",label:"CPU"}]}/></Field>
           <div className="setting-note">Chọn CPU nếu gặp lỗi CUDA hoặc cuDNN. CPU chậm hơn nhưng ổn định hơn.</div>
         </SettingSection>
-        <SettingSection title="Cảnh và chất lượng hình ảnh" icon={Aperture}><Switch checked={!!settings.whisper_timing_enabled} onCheckedChange={v=>setSettings({...settings,whisper_timing_enabled:v})} label="Căn lời đọc chính xác theo thời gian"/><Switch checked={!!settings.scene_ai_enabled} onCheckedChange={v=>setSettings({...settings,scene_ai_enabled:v})} label="Tự gom các câu cùng ý thành một cảnh"/><div className="grid grid-cols-2 gap-4"><Field label="Cảnh ngắn nhất (giây)"><Input type="number" min={1} step={1} value={settings.scene_min_seconds??3} onChange={e=>setNum("scene_min_seconds",e.target.value,3)}/></Field><Field label="Thời lượng cảnh mong muốn (giây)"><Input type="number" min={1} step={1} value={settings.scene_target_max_seconds??10} onChange={e=>setNum("scene_target_max_seconds",e.target.value,10)}/></Field><Field label="Chiều rộng video"><Input type="number" min={16} step={2} value={settings.image_target_width??1920} onChange={e=>setNum("image_target_width",e.target.value,1920)}/></Field><Field label="Chiều cao video"><Input type="number" min={16} step={2} value={settings.image_target_height??1080} onChange={e=>setNum("image_target_height",e.target.value,1080)}/></Field></div><div className="setting-note">Khuyến nghị giữ 1920 × 1080 cho video ngang. Chỉ thay đổi khi bạn cần kích thước xuất khác.</div></SettingSection>
+        <SettingSection title="Cảnh và chất lượng hình ảnh" icon={Aperture}><Switch checked={!!settings.whisper_timing_enabled} onCheckedChange={v=>setSettings({...settings,whisper_timing_enabled:v})} label="Căn lời đọc chính xác theo thời gian"/><Switch checked={!!settings.scene_ai_enabled} onCheckedChange={v=>setSettings({...settings,scene_ai_enabled:v})} label="Tự gom các câu cùng ý thành một cảnh"/><div className="grid grid-cols-2 gap-4"><Field label="Cảnh ngắn nhất gợi ý (giây)"><Input type="number" min={1} step={1} value={settings.scene_min_seconds??4} onChange={e=>setNum("scene_min_seconds",e.target.value,4)}/></Field><Field label="Cảnh dài nhất gợi ý (giây)"><Input type="number" min={1} step={1} value={settings.scene_target_max_seconds??25} onChange={e=>setNum("scene_target_max_seconds",e.target.value,25)}/></Field><Field label="Chiều rộng video"><Input type="number" min={16} step={2} value={settings.image_target_width??1920} onChange={e=>setNum("image_target_width",e.target.value,1920)}/></Field><Field label="Chiều cao video"><Input type="number" min={16} step={2} value={settings.image_target_height??1080} onChange={e=>setNum("image_target_height",e.target.value,1080)}/></Field></div><div className="setting-note">AI vẫn ưu tiên chia theo ý/cảnh visual. Thời lượng chỉ là gợi ý mềm để tránh cảnh quá vụn hoặc quá dài.</div></SettingSection>
       </div></TabsContent>
       <TabsContent value="validate"><SettingSection title="Kiểm tra cấu hình máy" icon={CheckCircle2}><Button onClick={runPreflight} disabled={preflightBusy}>{preflightBusy?<LoaderCircle className="h-4 w-4 animate-spin"/>:<RefreshCw className="h-4 w-4"/>}{preflightBusy?"Đang kiểm tra...":"Chạy kiểm tra"}</Button><div className="grid grid-cols-2 gap-3">{(preflight?.checks||[]).map(x=><CheckRow key={x.id} ok={x.ok} label={x.label}/>)}</div></SettingSection></TabsContent>
     </Tabs><div className="mt-5 flex justify-end gap-2"><Button variant="ghost" onClick={()=>onOpenChange(false)}>Hủy</Button><Button onClick={()=>saveSettings(true)}>Lưu cài đặt</Button></div></DialogContent></Dialog>

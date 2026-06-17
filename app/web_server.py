@@ -634,6 +634,11 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
         "openai_api_key",
         "keyword_ai_model",
         "keyword_ai_provider",
+        "kiro_api_key",
+        "kiro_api_base",
+        "kiro_keyword_model",
+        "claude_api_key",
+        "claude_keyword_model",
         "gemini_api_key",
         "gemini_keyword_model",
         "gemini_vision_model",
@@ -660,6 +665,7 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
         "magicvoice_steps",
         "magicvoice_dtype",
         "magicvoice_device",
+        "magicvoice_batch_size",
         "whisper_python",
         "whisper_timing_enabled",
         "whisper_timing_model",
@@ -692,6 +698,20 @@ def _save_partial_settings(values: dict[str, Any]) -> dict[str, Any]:
             settings["magicvoice_steps"] = max(8, min(16, int(values["magicvoice_steps"])))
         except (TypeError, ValueError):
             settings["magicvoice_steps"] = 16
+    if "magicvoice_batch_size" in values:
+        try:
+            settings["magicvoice_batch_size"] = 1
+        except (TypeError, ValueError):
+            settings["magicvoice_batch_size"] = 1
+    if "voice_clone_max_chars" in values:
+        try:
+            clone_chars = int(values["voice_clone_max_chars"])
+            settings["voice_clone_max_chars"] = 480 if clone_chars >= 900 else max(280, min(clone_chars, 720))
+        except (TypeError, ValueError):
+            settings["voice_clone_max_chars"] = 480
+    if "magicvoice_dtype" in values:
+        dtype = str(values.get("magicvoice_dtype") or "auto").strip().lower()
+        settings["magicvoice_dtype"] = "auto" if dtype in {"", "float16", "fp16"} else dtype
     for key, lo, hi, default, cast in (
         ("scene_min_seconds", 1.0, 60.0, 3.0, float),
         ("scene_target_max_seconds", 1.0, 120.0, 10.0, float),
@@ -764,7 +784,17 @@ def _preflight_payload() -> dict[str, Any]:
             "detail": str(python_path) if python_path.is_file() else f"Chưa có .venv, sẽ tự cài lần đầu bằng {setup_path}",
         }
     )
-    checks.append({"id": "gemini", "label": "Gemini API key", "ok": bool(str(settings.get("gemini_api_key") or "").strip()), "detail": "Dùng để viết script, tạo keyword và kiểm ảnh."})
+    checks.append(
+        {
+            "id": "ai_api",
+            "label": "API key AI",
+            "ok": any(
+                bool(str(settings.get(key) or "").strip())
+                for key in ("kiro_api_key", "claude_api_key", "gemini_api_key", "openai_api_key")
+            ),
+            "detail": "Dùng để hiểu nội dung, chia cảnh và tạo keyword hình ảnh.",
+        }
+    )
     checks.append({"id": "capcut_template", "label": "Mẫu CapCut", "ok": (APP_DIR / "capcut_template" / "draft_content.json").is_file(), "detail": str(APP_DIR / "capcut_template")})
     checks.append({"id": "projects", "label": "Thư mục project", "ok": Path(str(settings.get("projects_dir") or "")).exists(), "detail": str(settings.get("projects_dir") or "")})
     return {"ok": all(item["ok"] for item in checks), "checks": checks}
@@ -1394,9 +1424,21 @@ def preview_voice(request: VoicePreviewRequest) -> dict[str, Any]:
             "magicvoice_steps",
             "magicvoice_dtype",
             "magicvoice_device",
+            "magicvoice_batch_size",
         ):
             if key in request.settings:
                 settings[key] = request.settings[key]
+        try:
+            settings["magicvoice_batch_size"] = 1
+        except (TypeError, ValueError):
+            settings["magicvoice_batch_size"] = 1
+        try:
+            clone_chars = int(settings.get("voice_clone_max_chars") or 480)
+            settings["voice_clone_max_chars"] = 480 if clone_chars >= 900 else max(280, min(clone_chars, 720))
+        except (TypeError, ValueError):
+            settings["voice_clone_max_chars"] = 480
+        dtype = str(settings.get("magicvoice_dtype") or "auto").strip().lower()
+        settings["magicvoice_dtype"] = "auto" if dtype in {"", "float16", "fp16"} else dtype
     sample = str(request.text or "").strip()
     requested_lang = str(settings.get("text_to_voice_language") or "en")
     normalized_lang, language_warning = normalize_kokoro_language(requested_lang)

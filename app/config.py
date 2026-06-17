@@ -39,7 +39,7 @@ DEFAULT_SETTINGS = {
     "voice_clone_preview_url": "",
     "voice_clone_profiles": [],
     "voice_clone_default_id": "",
-    "voice_clone_max_chars": 900,
+    "voice_clone_max_chars": 480,
     "voice_clone_timeout": 3600,
     "voice_clone_setup_timeout": 3600,
     "magicvoice_root": str(APP_DIR / "magic_voice"),
@@ -48,17 +48,17 @@ DEFAULT_SETTINGS = {
     "magicvoice_clause_pause": 0.12,
     "magicvoice_paragraph_pause": 0.43,
     "magicvoice_clarity_speed": 0.96,
-    "magicvoice_batch_size": 3,
-    "magicvoice_dtype": "float16",
+    "magicvoice_batch_size": 1,
+    "magicvoice_dtype": "auto",
     "magicvoice_device": "auto",
     "whisper_python": sys.executable,
     "whisper_timing_enabled": True,
     "whisper_timing_model": "base",
     "whisper_timing_beam_size": 5,
     "scene_ai_enabled": True,
-    "scene_min_seconds": 3.0,
-    "scene_target_max_seconds": 10.0,
-    "scene_hard_max_seconds": 15.0,
+    "scene_min_seconds": 4.0,
+    "scene_target_max_seconds": 25.0,
+    "scene_hard_max_seconds": 45.0,
     "capcut_exe_path": "",
     "google_images_profile": str(APP_DIR / "chrome_google_images_profile"),
     "getty_images_profile": str(APP_DIR / "chrome_getty_images_profile"),
@@ -66,6 +66,11 @@ DEFAULT_SETTINGS = {
     "openai_api_key": "",
     "keyword_ai_model": "gpt-4.1-mini",
     "keyword_ai_provider": "auto",
+    "kiro_api_key": "",
+    "kiro_api_base": "https://xapi.labpinky.com/v1",
+    "kiro_keyword_model": "kr/claude-opus-4.8",
+    "claude_api_key": "",
+    "claude_keyword_model": "claude-sonnet-4-20250514",
     "gemini_api_key": "",
     "gemini_keyword_model": "gemini-2.5-flash",
     "gemini_vision_model": "gemini-2.5-flash",
@@ -159,6 +164,22 @@ def load_settings() -> dict:
         pass
     settings = dict(DEFAULT_SETTINGS)
     settings.update(data)
+    old_kiro_model = str(settings.get("kiro_keyword_model") or "").strip()
+    if old_kiro_model in {
+        "",
+        "kiro/claude-sonnet-4.6",
+        "Claude Sonnet 4.6 (Kiro)",
+        "Claude Sonnet 4.6",
+        "nghi/claude-sonnet-4.6",
+        "nghi/claude-opus-4.8",
+    }:
+        settings["kiro_keyword_model"] = "kr/claude-opus-4.8"
+    if str(settings.get("kiro_api_base") or "").strip().rstrip("/") in {
+        "https://q.us-east-1.amazonaws.com",
+        "https://api.nghimmo.com",
+        "https://xapi.labpinky.com",
+    }:
+        settings["kiro_api_base"] = "https://xapi.labpinky.com/v1"
     try:
         settings["text_to_voice_speed"] = max(0.5, min(2.0, float(settings.get("text_to_voice_speed") or 1.0)))
     except (TypeError, ValueError):
@@ -167,6 +188,25 @@ def load_settings() -> dict:
         settings["magicvoice_steps"] = max(8, min(16, int(settings.get("magicvoice_steps") or 16)))
     except (TypeError, ValueError):
         settings["magicvoice_steps"] = 16
+    try:
+        settings["magicvoice_batch_size"] = 1
+    except (TypeError, ValueError):
+        settings["magicvoice_batch_size"] = 1
+    try:
+        clone_chars = int(settings.get("voice_clone_max_chars") or 480)
+        settings["voice_clone_max_chars"] = 480 if clone_chars >= 900 else max(280, min(clone_chars, 720))
+    except (TypeError, ValueError):
+        settings["voice_clone_max_chars"] = 480
+    if str(settings.get("magicvoice_dtype") or "").strip().lower() in {"", "float16", "fp16"}:
+        settings["magicvoice_dtype"] = "auto"
+    try:
+        if float(settings.get("scene_target_max_seconds") or 0) <= 10.0:
+            settings["scene_target_max_seconds"] = 25.0
+        if float(settings.get("scene_hard_max_seconds") or 0) <= 15.0:
+            settings["scene_hard_max_seconds"] = 45.0
+    except (TypeError, ValueError):
+        settings["scene_target_max_seconds"] = 25.0
+        settings["scene_hard_max_seconds"] = 45.0
     for deprecated_key in (
         "text_to_voice_mode",
         "chatterbox_exaggeration",
@@ -267,6 +307,17 @@ def save_settings(settings: dict) -> None:
         data["magicvoice_steps"] = max(8, min(16, int(data.get("magicvoice_steps") or 16)))
     except (TypeError, ValueError):
         data["magicvoice_steps"] = 16
+    try:
+        data["magicvoice_batch_size"] = 1
+    except (TypeError, ValueError):
+        data["magicvoice_batch_size"] = 1
+    try:
+        clone_chars = int(data.get("voice_clone_max_chars") or 480)
+        data["voice_clone_max_chars"] = 480 if clone_chars >= 900 else max(280, min(clone_chars, 720))
+    except (TypeError, ValueError):
+        data["voice_clone_max_chars"] = 480
+    if str(data.get("magicvoice_dtype") or "").strip().lower() in {"", "float16", "fp16"}:
+        data["magicvoice_dtype"] = "auto"
     projects = _expand_config_path(data.get("projects_dir")) or default_projects_dir()
     if not projects.is_absolute():
         projects = default_projects_dir().parent / projects

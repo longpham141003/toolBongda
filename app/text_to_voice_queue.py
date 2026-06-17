@@ -664,7 +664,7 @@ class TextToVoiceRunner:
 
     def _submit_file_magicvoice(self, text: str, label: str, output_path: Path, cache_key: dict, reference_path: Path) -> str:
         root, python_cmd = bootstrap_magicvoice(self.settings, log=self.log)
-        max_chars = max(600, min(int(self.settings.get("voice_clone_max_chars") or 900), 1800))
+        max_chars = max(280, min(int(self.settings.get("voice_clone_max_chars") or 480), 900))
         chunks = split_text_for_text_to_voice(text, max_chars)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         generated_paths: list[Path] = []
@@ -695,7 +695,7 @@ class TextToVoiceRunner:
                     "--device",
                     str(self.settings.get("magicvoice_device") or "auto"),
                     "--dtype",
-                    str(self.settings.get("magicvoice_dtype") or "float16"),
+                    str(self.settings.get("magicvoice_dtype") or "auto"),
                     "--sentence-pause",
                     str(float(self.settings.get("magicvoice_sentence_pause") or 0.28)),
                     "--clause-pause",
@@ -707,7 +707,7 @@ class TextToVoiceRunner:
                     "--language",
                     str(self.settings.get("text_to_voice_language") or "vi"),
                     "--batch-size",
-                    str(int(self.settings.get("magicvoice_batch_size") or 3)),
+                    "1",
                 ]
                 with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout, stderr_path.open("w", encoding="utf-8", errors="replace") as stderr:
                     process = subprocess.Popen(
@@ -907,11 +907,15 @@ class TextToVoiceRunner:
             "voice_clone_reference_path": str(self.settings.get("voice_clone_reference_path") or ""),
             "voice_clone_engine": str(self.settings.get("voice_clone_engine") or ""),
             "magicvoice_steps": str(max(8, min(16, int(self.settings.get("magicvoice_steps") or 16)))),
+            "voice_clone_max_chars": str(max(280, min(int(self.settings.get("voice_clone_max_chars") or 480), 900))),
+            "magicvoice_batch_size": "1",
+            "magicvoice_dtype": str(self.settings.get("magicvoice_dtype") or "auto"),
+            "magicvoice_device": str(self.settings.get("magicvoice_device") or "auto"),
             "magicvoice_sentence_pause": str(float(self.settings.get("magicvoice_sentence_pause") or 0.28)),
             "magicvoice_clause_pause": str(float(self.settings.get("magicvoice_clause_pause") or 0.12)),
             "magicvoice_paragraph_pause": str(float(self.settings.get("magicvoice_paragraph_pause") or 0.43)),
             "magicvoice_clarity_speed": str(float(self.settings.get("magicvoice_clarity_speed") or 0.96)),
-            "segment_cleaner": "tts_clean_v11_magicvoice_sentence_batch",
+            "segment_cleaner": "tts_clean_v12_magicvoice_stable_single_batch",
         }
 
     @staticmethod

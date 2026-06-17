@@ -283,14 +283,14 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=16)
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--device", default="auto")
-    parser.add_argument("--dtype", default="float16")
+    parser.add_argument("--dtype", default="auto")
     parser.add_argument("--instruct", default="")
     parser.add_argument("--sentence-pause", type=float, default=0.28)
     parser.add_argument("--clause-pause", type=float, default=0.12)
     parser.add_argument("--paragraph-pause", type=float, default=0.43)
     parser.add_argument("--clarity-speed", type=float, default=0.96)
     parser.add_argument("--language", default="vi")
-    parser.add_argument("--batch-size", type=int, default=3)
+    parser.add_argument("--batch-size", type=int, default=1)
     args = parser.parse_args()
 
     text = Path(args.text_file).read_text(encoding="utf-8", errors="replace").strip()
@@ -313,7 +313,9 @@ def main() -> int:
     if device in {"", "auto"}:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype_name = args.dtype.strip().lower()
-    if device == "cpu" and dtype_name in {"float16", "bfloat16"}:
+    if dtype_name in {"", "auto"}:
+        dtype_name = "float16" if device == "cuda" else "float32"
+    if device == "cpu" and dtype_name in {"float16", "fp16", "bfloat16"}:
         dtype_name = "float32"
     dtype = {
         "float32": torch.float32,
@@ -348,7 +350,10 @@ def main() -> int:
     clone_prompt = model.create_voice_clone_prompt(str(ref), ref_text=ref_text)
     phrase_texts = [_prepare_spoken_text(phrase) for phrase, _ in phrases]
     generated_audios = []
-    batch_size = max(1, min(int(args.batch_size or 3), 8))
+    requested_batch_size = max(1, min(int(args.batch_size or 1), 2))
+    batch_size = 1 if device == "cpu" else requested_batch_size
+    if batch_size != requested_batch_size:
+        print("CPU mode detected: using batch size 1 for stable voice cloning.")
     base_speed = float(args.speed or 1.0) * max(0.85, min(1.05, float(args.clarity_speed)))
     for batch_start in range(0, len(phrase_texts), batch_size):
         batch_texts = phrase_texts[batch_start : batch_start + batch_size]
