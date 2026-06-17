@@ -25,11 +25,14 @@ from ..config import APP_DIR, load_settings, save_settings
 from ..pipeline.script_workflow import default_workflow_steps, normalize_workflow_steps, repair_mojibake, run_script_workflow
 from ..voice.text_to_voice_queue import (
     TextToVoiceRunner,
+    _estimated_segments_from_text,
+    _script_sentences_for_timing,
     kokoro_custom_voice_dir,
     kokoro_voice_choices,
     normalize_kokoro_language,
     warm_kokoro_server,
 )
+from ..voice.text_to_voice_cli import build_srt_from_segments
 from ..pipeline.visual_pipeline import (
     _concise_match_query,
     IMAGE_SUFFIXES,
@@ -114,6 +117,12 @@ class SettingsRequest(BaseModel):
 
 class ScriptRequest(BaseModel):
     script: str
+
+
+class SrtPreviewRequest(BaseModel):
+    script: str
+    language: str | None = None
+    speed: float | None = None
 
 
 class WorkflowRequest(BaseModel):
@@ -467,6 +476,12 @@ def _project_payload(project: Path | None) -> dict[str, Any] | None:
         "downloaded_count": sum(1 for item in manifest if item.get("local_path")),
         "approved_count": sum(1 for item in manifest if item.get("status") == "approved"),
         "has_capcut_export": has_capcut_export,
+        # Physical artifact presence, ignoring staleness. Lets the UI tell apart
+        # "never made" (todo) from "made but invalidated by an upstream edit"
+        # (needs redo), so a script change doesn't look like a dead end.
+        "voice_exists": voice_path.exists() and timing_path.exists(),
+        "scenes_exist": manifest_path.exists(),
+        "export_exists": bool(capcut_files),
         "assets": manifest,
     }
 
@@ -1067,6 +1082,54 @@ async def upload_voice_clone_reference(
     }
 
 
+@app.delete("/api/voice-clone/{profile_id}")
+def delete_voice_clone(profile_id: str) -> dict[str, Any]:
+    settings = load_settings()
+    profiles = settings.get("voice_clone_profiles")
+    if not isinstance(profiles, list):
+        profiles = []
+    target = next(
+        (item for item in profiles if isinstance(item, dict) and str(item.get("id") or "") == profile_id),
+        None,
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy giọng clone.")
+    # Remove the reference audio plus its cached .prepared.wav/.prepared.json siblings.
+    ref_path = Path(str(target.get("path") or ""))
+    if ref_path.name:
+        for candidate in (
+            ref_path,
+            ref_path.with_name(f"{ref_path.stem}.prepared.wav"),
+            ref_path.with_name(f"{ref_path.stem}.prepared.json"),
+        ):
+            try:
+                candidate.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+    remaining = [
+        item for item in profiles
+        if isinstance(item, dict) and str(item.get("id") or "") != profile_id
+    ]
+    updates: dict[str, Any] = {"voice_clone_profiles": remaining}
+    # If we just deleted the active clone, fall back off clone mode.
+    if str(settings.get("voice_clone_reference_path") or "") == str(target.get("path") or ""):
+        updates.update(
+            {
+                "voice_clone_enabled": False,
+                "voice_clone_reference_path": "",
+                "voice_clone_reference_name": "",
+                "voice_clone_preview_url": "",
+            }
+        )
+    if str(settings.get("voice_clone_default_id") or "") == profile_id:
+        updates["voice_clone_default_id"] = ""
+    settings.update(updates)
+    save_settings(settings)
+    return {"ok": True, "settings": _public_settings()}
+
+
 @app.post("/api/settings")
 def update_settings(request: SettingsRequest) -> dict[str, Any]:
     return {"settings": _save_partial_settings(request.settings)}
@@ -1316,6 +1379,40 @@ def save_project_script(request: ScriptRequest) -> dict[str, Any]:
     project = runtime.require_project()
     _sync_script(project, request.script)
     return {"project": _project_payload(project)}
+
+
+# Reading speed (words/second) used to ESTIMATE subtitle timing from text alone,
+# before any voice is generated. Real timing is recomputed from the TTS audio
+# later; this only powers the live SRT preview in Step 1.
+_SRT_PREVIEW_WORDS_PER_SECOND = {"vi": 2.3, "en": 2.6, "en-gb": 2.6}
+
+
+@app.post("/api/script/srt-preview")
+def srt_preview(request: SrtPreviewRequest) -> dict[str, Any]:
+    settings = load_settings()
+    language = str(request.language or settings.get("text_to_voice_language") or "vi").strip().lower()
+    try:
+        speed = float(request.speed if request.speed is not None else settings.get("text_to_voice_speed") or 1.0)
+    except (TypeError, ValueError):
+        speed = 1.0
+    speed = max(0.5, min(2.0, speed))
+    sentences = _script_sentences_for_timing(request.script)
+    if not sentences:
+        return {"segments": [], "srt": "", "duration": 0.0, "words": 0, "sentences": 0, "estimated": True}
+    words = sum(len(re.findall(r"\S+", sentence)) for sentence in sentences)
+    base_wps = _SRT_PREVIEW_WORDS_PER_SECOND.get(language, 2.4)
+    # Speaking time scaled by speed, plus a short pause between sentences so the
+    # preview cadence mirrors MagicVoice's estimated timing.
+    duration = words / max(0.1, base_wps * speed) + len(sentences) * 0.32
+    segments = _estimated_segments_from_text(request.script, duration)
+    return {
+        "segments": segments,
+        "srt": build_srt_from_segments(segments),
+        "duration": round(duration, 3),
+        "words": words,
+        "sentences": len(sentences),
+        "estimated": True,
+    }
 
 
 @app.post("/api/workflow")

@@ -992,7 +992,7 @@ def _item_in_detected_domain(item: dict) -> bool:
     return bool(domain) and domain not in ("general", "generic")
 
 
-def _scene_match_action(item: dict, teams: list[str]) -> tuple[str, str]:
+def _scene_match_action(item: dict, teams: list[str], video_context: dict | None = None) -> tuple[str, str]:
     text = f"{item.get('sentence_text') or ''} {item.get('action_context') or ''}"
     lowered = text.lower()
     phrases = _capitalized_phrases(text)
@@ -1008,6 +1008,11 @@ def _scene_match_action(item: dict, teams: list[str]) -> tuple[str, str]:
         and not any(phrase.lower() == team.lower() for team in teams)
         and not phrase.lower().endswith("stadium")
     ]
+    # Drop scraped fragments not corroborated by the AI's English entities so a
+    # non-English subject ("Nha") can never become the match subject.
+    ai_words = _ai_entity_words(video_context)
+    if ai_words:
+        candidates = [phrase for phrase in candidates if set(_ascii_words(phrase)) & ai_words]
     subject = next((phrase for phrase in candidates if len(phrase.split()) >= 2), "")
     if not subject:
         subject = next(iter(candidates), "")
@@ -1113,11 +1118,11 @@ def _strip_foreign_context_phrases(query: str, script: str, item: dict) -> str:
     return _dedupe_query_words(cleaned)
 
 
-def _contextual_match_query(item: dict, script: str, teams: list[str]) -> str:
+def _contextual_match_query(item: dict, script: str, teams: list[str], video_context: dict | None = None) -> str:
     if len(teams) != 2:
         return ""
     event_tag = _extract_year_competition(script)
-    subject, action = _scene_match_action(item, teams)
+    subject, action = _scene_match_action(item, teams, video_context)
     if not subject:
         subject = str(item.get("main_subject") or "").strip()
     if subject.lower() in {team.lower() for team in teams}:
@@ -1539,9 +1544,9 @@ def _call_video_context_ai_claude(api_key: str, model: str, script: str) -> dict
         timeout=90,
     )
     if response.status_code >= 400:
-        if response.status_code == 429:
+        if _is_quota_error(response.status_code, response.text):
             _AI_PROVIDER_PAUSE_UNTIL["claude"] = time.time() + 900
-        raise RuntimeError(f"Claude video context API lỗi {response.status_code}: {response.text[-600:]}")
+        raise _ai_provider_error("claude", response.status_code, response.text)
     data = response.json()
     parts = data.get("content") or []
     content = "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict))
@@ -1568,9 +1573,9 @@ def _call_video_context_ai_gemini(api_key: str, model: str, script: str) -> dict
         timeout=90,
     )
     if response.status_code >= 400:
-        if response.status_code == 429:
+        if _is_quota_error(response.status_code, response.text):
             _AI_PROVIDER_PAUSE_UNTIL["gemini"] = time.time() + 900
-        raise RuntimeError(f"Gemini video context API lỗi {response.status_code}: {response.text[-600:]}")
+        raise _ai_provider_error("gemini", response.status_code, response.text)
     data = response.json()
     candidates = data.get("candidates") or []
     if not candidates:
@@ -1810,13 +1815,20 @@ def _apply_script_visual_context(items: list[dict], script: str, video_context: 
         )
         if len(item_teams) == 2:
             is_match_context = True
+        # Trust an AI-confirmed two-team matchup even when the local football
+        # detector misses it (it only matches English keywords, so a Vietnamese
+        # script reads as non-football). This routes the scene through the
+        # match-query builder, which uses the AI's English team names instead of
+        # scraped fragments.
+        if _video_context_is_ai(video_context) and len(teams) == 2:
+            is_match_context = True
         if is_match_context:
             if len(local_teams) == 2:
                 item["match_teams"] = local_teams
                 base_match_query = _concise_match_query(_dedupe_query_parts(local_teams[0], local_teams[1], "match action"), item)
                 if base_match_query and base_match_query not in sanitized and (not sanitized or _is_weak_match_query(sanitized[0], local_teams)):
                     sanitized.insert(0, base_match_query)
-            contextual = _contextual_match_query(item, script, local_teams)
+            contextual = _contextual_match_query(item, script, local_teams, video_context)
             if contextual and contextual not in sanitized and (not sanitized or _is_weak_match_query(sanitized[0], local_teams)):
                 sanitized.insert(0, contextual)
             if len(local_teams) == 2 and sanitized:
@@ -1828,7 +1840,7 @@ def _apply_script_visual_context(items: list[dict], script: str, video_context: 
                     # an action) is a valid, well-tagged image search and is kept
                     # as-is so we don't shrink the result pool.
                     if _is_weak_match_query(candidate, local_teams) and not _query_is_specific_person_context(candidate, item):
-                        candidate = _contextual_match_query(item, script, local_teams) or candidate
+                        candidate = _contextual_match_query(item, script, local_teams, video_context) or candidate
                     candidate = _concise_match_query(candidate, item)
                     if candidate and candidate not in enriched:
                         enriched.append(candidate)
@@ -1870,7 +1882,7 @@ def _apply_script_visual_context(items: list[dict], script: str, video_context: 
             else:
                 item["sportsdb_queries"] = []
             if not sanitized:
-                subject, action = _scene_match_action(item, local_teams)
+                subject, action = _scene_match_action(item, local_teams, video_context)
                 # Derive the fallback generically from the scene/teams instead of
                 # hardcoding a country/player so the tool generalizes to any topic.
                 teams_subject = " ".join(local_teams[:2]) if len(local_teams) >= 2 else ""
@@ -2211,9 +2223,9 @@ def _call_scene_ai_claude(
         timeout=120,
     )
     if response.status_code >= 400:
-        if response.status_code == 429:
+        if _is_quota_error(response.status_code, response.text):
             _AI_PROVIDER_PAUSE_UNTIL["claude"] = time.time() + 900
-        raise RuntimeError(f"Claude scene API lỗi {response.status_code}: {response.text[-600:]}")
+        raise _ai_provider_error("claude", response.status_code, response.text)
     data = response.json()
     parts = data.get("content") or []
     content = "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict)).strip()
@@ -2655,7 +2667,9 @@ def _call_keyword_ai_openai(api_key: str, model: str, scenes: list[dict], script
         timeout=90,
     )
     if response.status_code >= 400:
-        raise RuntimeError(f"OpenAI keyword API lỗi {response.status_code}: {response.text[-600:]}")
+        if _is_quota_error(response.status_code, response.text):
+            _AI_PROVIDER_PAUSE_UNTIL["openai"] = time.time() + 900
+        raise _ai_provider_error("openai", response.status_code, response.text)
     data = response.json()
     content = data["choices"][0]["message"]["content"]
     return _parse_keyword_ai_json(content)
@@ -2699,9 +2713,9 @@ def _call_keyword_ai_claude(api_key: str, model: str, scenes: list[dict], script
         timeout=90,
     )
     if response.status_code >= 400:
-        if response.status_code == 429:
+        if _is_quota_error(response.status_code, response.text):
             _AI_PROVIDER_PAUSE_UNTIL["claude"] = time.time() + 900
-        raise RuntimeError(f"Claude keyword API lỗi {response.status_code}: {response.text[-600:]}")
+        raise _ai_provider_error("claude", response.status_code, response.text)
     data = response.json()
     parts = data.get("content") or []
     content = "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict))
@@ -2866,9 +2880,38 @@ def _scene_named_subject_candidates(item: dict, teams: list[str] | None = None) 
     return candidates[:5]
 
 
+def _video_context_is_ai(video_context: dict | None) -> bool:
+    """True when video_context came from an AI provider (not the local proper-
+    noun fallback). Only then can we trust its entities as reliable ENGLISH."""
+    source = str((video_context or {}).get("source") or "").strip().lower()
+    return bool(source) and source != "local_fallback"
+
+
+def _ai_entity_words(video_context: dict | None) -> set[str]:
+    """ASCII word set of the AI-inferred ENGLISH entities (match_teams,
+    main_entities, secondary_entities). Used to reject proper-noun fragments
+    scraped from a non-English script — e.g. 'Nha' from 'Bồ Đào Nha' or 'Tuy'
+    from 'Tuy nhiên' — while keeping real names the AI also recognized
+    ('Cristiano Ronaldo'). Returns empty when the context is not AI-sourced."""
+    if not _video_context_is_ai(video_context):
+        return set()
+    words: set[str] = set()
+    for key in ("match_teams", "main_entities", "secondary_entities"):
+        for value in (video_context or {}).get(key) or []:
+            words.update(word for word in _ascii_words(value) if len(word) > 1)
+    return words
+
+
 def _lock_scene_named_subject(item: dict, script: str, video_context: dict | None = None) -> str:
     teams = [str(value).strip() for value in item.get("match_teams") or (video_context or {}).get("match_teams") or _infer_match_teams(script) if str(value).strip()]
     candidates = _scene_named_subject_candidates(item, teams)
+    # On non-English scripts, proper-noun scraping pulls capitalized fragments
+    # ("Nha", "Tuy") that are not real subjects. When the AI gave us reliable
+    # English entities, keep only candidates corroborated by that set so a
+    # fragment can never become the locked subject.
+    ai_words = _ai_entity_words(video_context)
+    if ai_words:
+        candidates = [c for c in candidates if set(_ascii_words(c)) & ai_words]
     current = str(item.get("main_subject") or "").strip()
     if candidates and _is_generic_visual_subject(current, teams):
         item["main_subject"] = candidates[0]
