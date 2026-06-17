@@ -58,9 +58,11 @@ cho cả giọng thường (Kokoro) lẫn giọng clone (Magic Voice).
   - Magic Voice: 1 lần clone/dòng (tổng quát hoá vòng lặp per-chunk hiện có).
 - Đo **thời lượng audio thật** của từng dòng (từ `duration` Kokoro trả về, hoặc đo
   wav per-line bằng `_audio_duration_seconds`). Ghép các wav theo thứ tự bằng
-  `combine_wavs`, chèn một khoảng lặng giữa dòng:
-  - Kokoro: 0.25s (giữ như offset ghép hiện tại).
-  - Magic Voice: `magicvoice_sentence_pause` (mặc định 0.28s).
+  `combine_wavs`, hàm này **luôn chèn 0.25s** giữa các part (hằng số cứng trong
+  `text_to_voice_cli.py:158`). Vì vậy khoảng lặng giữa dòng = **0.25s cho cả hai
+  engine**, và timing lắp ráp phải dùng đúng 0.25s để khớp audio. (Lưu ý
+  `magicvoice_sentence_pause` là pause nội bộ trong một lần clone, KHÔNG phải pause
+  giữa các part đã ghép.)
 - Tiến độ log "đang tạo đoạn {i}/{N}" với N = số dòng phụ đề → thanh tiến độ
   `/api/voice` (regex `đoạn i/N` đã có) chạy đúng cho cả hai engine, sửa luôn lỗi
   Kokoro cũ hiện "1/1".
@@ -68,10 +70,10 @@ cho cả giọng thường (Kokoro) lẫn giọng clone (Magic Voice).
 
 ### 3. Lắp ráp segments + timing thật (hàm thuần, test được)
 
-- Tách hàm thuần `assemble_line_segments(lines, durations, pause) -> list[dict]`:
-  nhận danh sách dòng (index/text) + thời lượng thật từng dòng + pause, trả segments
-  `{index, text, start, end, timing_source: "measured"}` với start/end cộng dồn
-  (mỗi dòng + pause, trừ pause sau dòng cuối). 1 dòng = 1 segment.
+- Tách hàm thuần `assemble_line_segments(lines, durations, pause=0.25) -> list[dict]`:
+  nhận danh sách dòng (index/text/edited) + thời lượng thật từng dòng + pause (0.25),
+  trả segments `{index, text, start, end, edited, timing_source: "measured"}` với
+  start/end cộng dồn (mỗi dòng + pause, trừ pause sau dòng cuối). 1 dòng = 1 segment.
 - Đây là nguồn cho cả `voice.segments.json` và phần ghi đè subtitle.
 
 ### 4. Ghi timing thật
