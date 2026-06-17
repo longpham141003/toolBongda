@@ -1,0 +1,46 @@
+# ============================================================
+# Domain Pack: Generic (fallback tối thiểu)
+# Dùng khi không khớp pack nào VÀ AI sinh synthetic pack thất bại.
+# Engine phải luôn chạy được với pack này — không giả định domain nào.
+# ============================================================
+
+domain: generic
+language_out: en
+
+# Không giả định loại thực thể nào — engine tự rút proper noun từ cảnh.
+entity_types: []
+
+# Một loại cảnh chung: chủ thể + hành động, không ép cardinality.
+scene_types:
+  - id: general
+    requires: []
+    query_template: "{subject} {action} {year}"
+    enrich_when_weak: false
+
+# Không có lexicon hành động riêng — engine giữ mô tả hành động thô từ cảnh.
+action_lexicon: []
+
+# Mặc định mọi cảnh đi qua Google Images.
+source_routes:
+  - default:
+    source: google_images
+    filters:
+      date_min: "{video_year}"
+
+# Bối cảnh cấm mặc định, áp cho mọi domain.
+forbidden_contexts:
+  - logo
+  - wallpaper
+  - thumbnail
+  - ai generated
+  - fanart
+  - poster
+
+# Fallback an toàn chung chung nhất.
+safe_fallback:
+  - "{subject} {year}"
+  - "{topic} background"
+
+recency:
+  strict: false
+  anchor: video_year

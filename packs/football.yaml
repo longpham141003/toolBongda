@@ -1,0 +1,109 @@
+# ============================================================
+# Domain Pack: Football (soccer)
+# Engine chỉ ĐỌC file này, không hardcode domain trong code.
+# Mọi danh từ thuộc lĩnh vực bóng đá phải nằm ở đây, không nằm trong .py
+# ============================================================
+
+domain: football
+language_out: en          # mọi keyword xuất ra tiếng Anh dù script tiếng Việt
+
+# ----- Các loại thực thể có tên mà domain này quan tâm -----
+entity_types:
+  - id: team
+    cardinality: 2        # một cảnh "trận đấu" kỳ vọng đúng 2 entity loại này
+    role: subject
+  - id: player
+    role: subject
+  - id: manager
+    role: subject
+  - id: competition       # World Cup 2026, Champions League...
+    role: context
+  - id: venue
+    role: context
+
+# ----- Các loại cảnh + cách dựng query cho từng loại -----
+scene_types:
+  - id: match_moment
+    requires: [team, team]
+    query_template: "{team_a} {team_b} {competition} {year} {action}"
+    enrich_when_weak: true        # chỉ viết lại thành "2 đội" khi query yếu (giữ logic patch #4)
+  - id: portrait
+    requires: [player]            # hoặc manager
+    query_template: "{subject} {competition} {year}"
+    enrich_when_weak: false
+  - id: celebration
+    requires: [player]
+    query_template: "{subject} celebration {competition} {year}"
+    enrich_when_weak: false
+  - id: tactical
+    requires: [team]
+    query_template: "{team} {action} {competition} {year}"
+    enrich_when_weak: true
+  - id: crowd
+    requires: []
+    query_template: "{venue} {competition} fans crowd"
+    enrich_when_weak: false
+
+# ----- Lexicon hành động: thay thế hoàn toàn _scene_action_hint -----
+# match: các cụm trong TEXT (nhận cả tiếng Việt) -> visual: mô tả hình ảnh tiếng Anh
+action_lexicon:
+  - match: ["ăn mừng", "ăn mừng bàn thắng", "celebrate", "celebration", "vỡ òa"]
+    visual: "goal celebration"
+  - match: ["hlv", "huấn luyện viên", "chỉ đạo", "coach", "manager"]
+    visual: "manager on touchline"
+  - match: ["pressing", "gây áp lực", "đoạt bóng"]
+    visual: "pressing tackle"
+  - match: ["tạt cánh", "căng ngang", "cross"]
+    visual: "winger crossing the ball"
+  - match: ["khán đài", "cổ động viên", "fan", "crowd"]
+    visual: "stadium crowd cheering"
+  - match: ["sút", "dứt điểm", "ghi bàn", "shot", "goal"]
+    visual: "striker shooting on goal"
+  - match: ["thủ môn", "cản phá", "goalkeeper", "save"]
+    visual: "goalkeeper save"
+  - match: ["nâng cúp", "vô địch", "lift trophy", "champions"]
+    visual: "team lifting trophy"
+
+# ----- Định tuyến nguồn: thay nhánh sportsdb hardcode -----
+# Rule khớp từ trên xuống; rule "default" luôn cuối.
+source_routes:
+  - when: { entity_type: [team, player, manager], scene_type: [portrait, celebration] }
+    source: thesportsdb
+  - when: { scene_type: [match_moment, tactical] }
+    source: editorial_api          # Getty editorial / AP / Reuters
+    filters:
+      date_min: "{competition_year}-01-01"
+  - default:
+    source: google_images
+    filters:
+      whitelist_domains:
+        - gettyimages.com
+        - apnews.com
+        - reuters.com
+        - uefa.com
+        - fifa.com
+      date_min: "{video_year}"
+
+# ----- Bối cảnh cấm (lọc cả query lẫn ảnh trả về ở tầng re-rank) -----
+forbidden_contexts:
+  - logo
+  - crest only
+  - wallpaper
+  - fanart
+  - ai generated
+  - thumbnail
+  - jersey product
+  - video game
+  - fifa screenshot
+
+# ----- Fallback an toàn khi không tìm được ảnh đúng (acceptance gate) -----
+# Thà ảnh chung đúng bối cảnh còn hơn ảnh sai trận/sai năm.
+safe_fallback:
+  - "{venue} stadium {competition} {year}"
+  - "{competition} {year} match crowd"
+  - "{team} fans {competition}"
+
+# ----- Yêu cầu thời gian: ép edition, chống lẫn 2018/2022 -----
+recency:
+  strict: true
+  anchor: competition_year   # date_min của query web bám theo năm giải, không phải năm hiện tại
