@@ -916,6 +916,18 @@ class TestVoiceEndpoint:
 # ===========================================================================
 
 class TestPromptAnalysisEndpoint:
+    def test_analyze_story_requires_subtitle(self, client, tmp_path):
+        """POST /api/analyze-story returns 400 with 'phụ đề' in detail when no subtitle.json exists."""
+        # Set up a valid project directory with script_final.txt but NO subtitle.json
+        project = tmp_path / "proj_analyze"
+        (project / "scripts").mkdir(parents=True)
+        (project / "scripts" / "script_final.txt").write_text("Câu một.", encoding="utf-8")
+        ws.runtime.current_project = project
+        resp = client.post("/api/analyze-story")
+        assert resp.status_code == 400
+        detail = (resp.json().get("detail") or "").lower()
+        assert "phụ đề" in detail
+
     def test_save_and_get_prompt_analysis(self, tmp_path):
         project = tmp_path / "proj"
         (project / "scripts").mkdir(parents=True)
