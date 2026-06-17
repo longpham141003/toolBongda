@@ -1737,7 +1737,7 @@ function FlowCard({ icon: Icon, title, desc, accent = "violet", dashed, onClick,
   </button>
 }
 
-function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categoryLocked = false, categories = [], settings, flows = [], activeFlowId, setActiveFlowId, setFlowsOpen, busyAction, activeJob, staleWarning = false }) {
+function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputRef, uploadTxtFile, saveScriptStep, isBusy, workflowInput, setWorkflowInput, startJob, projectCategory, setProjectCategory, categoryLocked = false, categories = [], settings, flows = [], activeFlowId, setActiveFlowId, setFlowsOpen, busyAction, activeJob, staleWarning = false, subtitleSegments = [], setSubtitleSegments, persistSubtitle }) {
   const [contentMode, setContentMode] = useState("existing")
   // Live, estimated SRT preview generated from the script text as it is typed.
   // Real timing is recomputed from the TTS audio in Step 2; this only previews
@@ -1768,6 +1768,16 @@ function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputR
     }, 400)
     return () => { cancelled = true; clearTimeout(timer) }
   }, [script, srtLang, srtSpeed])
+  // Khi chưa có phụ đề canonical, preview tự động trở thành bản nháp canonical
+  // để người dùng chỉnh; sau khi đã chỉnh/lưu thì canonical là nguồn chính.
+  useEffect(() => {
+    if (!subtitleSegments.length && srt.segments.length) {
+      setSubtitleSegments?.(srt.segments.map((s, i) => ({
+        index: i + 1, start: s.start, end: s.end, text: s.text, edited: false,
+      })))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [srt.segments])
   const activeFlow = flows.find(f => f.id === activeFlowId) || flows[0] || null
   const workflowRunning = isBusy && busyAction === "workflow"
   const workflowPercent = Math.max(0, Math.min(100, Math.round(Number(activeJob?.progress || 0))))
@@ -1776,6 +1786,25 @@ function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputR
     steps: activeFlow?.steps || [],
     settings: { script_workflow_input: workflowInput },
   }, "workflow")
+
+  const rows = subtitleSegments.length ? subtitleSegments : srt.segments.map((s, i) => ({ index: i + 1, start: s.start, end: s.end, text: s.text, edited: false }))
+
+  const updateRow = (i, patch) => {
+    const next = rows.map((row, idx) => idx === i ? { ...row, ...patch, edited: true } : row)
+    setSubtitleSegments?.(next)
+  }
+  const deleteRow = (i) => setSubtitleSegments?.(rows.filter((_, idx) => idx !== i).map((row, idx) => ({ ...row, index: idx + 1 })))
+  const addRowBelow = (i) => {
+    const prev = rows[i]
+    const inserted = { index: i + 2, start: prev?.end ?? 0, end: (prev?.end ?? 0) + 1, text: "", edited: true }
+    const next = [...rows.slice(0, i + 1), inserted, ...rows.slice(i + 1)].map((row, idx) => ({ ...row, index: idx + 1 }))
+    setSubtitleSegments?.(next)
+  }
+  // "Tách lại" ghi đè canonical bằng preview hiện tại (mất chỉnh tay).
+  const resplitFromScript = () => {
+    if (!window.confirm("Tách lại từ kịch bản sẽ ghi đè các chỉnh sửa phụ đề thủ công. Tiếp tục?")) return
+    setSubtitleSegments?.(srt.segments.map((s, i) => ({ index: i + 1, start: s.start, end: s.end, text: s.text, edited: false })))
+  }
 
   const categoryHidden = categoryLocked && !projectCategory
   return <div className="step-screen step1-screen">
@@ -1827,18 +1856,35 @@ function ScriptStepScreen({ title, setTitle, script, setScript, scriptFileInputR
             <div className="srt-preview-meta"><span>{srt.sentences} câu phụ đề</span><span>~{formatTime(srt.duration)} (ước lượng)</span></div>
           )}
           <div className="srt-preview-list">
-            {srt.segments.length === 0
+            {rows.length === 0
               ? <EmptyState text={script.trim() ? "Đang tạo phụ đề..." : "Nhập kịch bản bên trái để xem phụ đề SRT tự động."} />
-              : srt.segments.map((seg, i) => (
-                <div className="srt-preview-row" key={i}>
+              : rows.map((seg, i) => (
+                <div className="srt-edit-row" key={i}>
                   <span className="srt-preview-idx">{i + 1}</span>
-                  <div className="srt-preview-body">
-                    <b className="srt-preview-time">{formatTime(seg.start)} → {formatTime(seg.end)}</b>
-                    <p>{seg.text}</p>
+                  <div className="srt-edit-body">
+                    <div className="srt-edit-time">
+                      <input type="number" step="0.1" min="0" value={seg.start}
+                        onChange={(e) => updateRow(i, { start: Number(e.target.value) })} />
+                      <span>→</span>
+                      <input type="number" step="0.1" min="0" value={seg.end}
+                        onChange={(e) => updateRow(i, { end: Number(e.target.value) })} />
+                      <small>{formatTime(seg.start)} → {formatTime(seg.end)}</small>
+                    </div>
+                    <Textarea className="srt-edit-text" value={seg.text}
+                      onChange={(e) => updateRow(i, { text: e.target.value })} />
+                  </div>
+                  <div className="srt-edit-actions">
+                    <button title="Thêm dòng dưới" onClick={() => addRowBelow(i)}><Plus className="h-3.5 w-3.5" /></button>
+                    <button title="Xoá dòng" onClick={() => deleteRow(i)}><Trash2 className="h-3.5 w-3.5" /></button>
                   </div>
                 </div>
               ))}
           </div>
+          {rows.length > 0 && (
+            <div className="srt-edit-footer">
+              <Button variant="secondary" onClick={resplitFromScript}><RefreshCw className="h-4 w-4" /> Tách lại (ghi đè)</Button>
+            </div>
+          )}
         </div>
       </div> : <div className="script-mode-content workflow-create">
         <div className="workflow-create-head">

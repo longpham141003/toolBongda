@@ -3602,3 +3602,14 @@ textarea {
   padding: 0 0 16px;
   max-width: 400px;
 }
+
+.srt-edit-row { display:flex; gap:10px; align-items:flex-start; padding:8px 0 12px 12px; border-left:2px solid rgba(208,188,255,.25); }
+.srt-edit-body { flex:1 1 auto; min-width:0; }
+.srt-edit-time { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
+.srt-edit-time input { width:74px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); border-radius:6px; color:#fff; padding:3px 6px; font-size:12px; }
+.srt-edit-time small { color:#94a3b8; font-size:11px; }
+.srt-edit-text { width:100%; min-height:44px; font-size:13px; }
+.srt-edit-actions { display:flex; flex-direction:column; gap:6px; }
+.srt-edit-actions button { background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); border-radius:6px; color:#cbd5e1; padding:4px; cursor:pointer; }
+.srt-edit-actions button:hover { color:#fff; background:rgba(255,255,255,.12); }
+.srt-edit-footer { padding:8px 0 0 12px; }
