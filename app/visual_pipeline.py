@@ -660,11 +660,32 @@ def split_sentences_into_scenes(sentences: list[dict]) -> list[dict]:
 
 
 def keyword_for_text(text: str) -> str:
-    words = [word for word in _ascii_words(text) if len(word) > 2 and word not in STOP_WORDS and not word.isdigit()]
+    # Build a natural noun phrase: lead with capitalized proper-noun phrases,
+    # then append a few salient remaining content words. Google Images favours
+    # natural noun phrases over a flat bag-of-words.
     ranked: list[str] = []
-    for word in words:
-        if word not in ranked:
-            ranked.append(word)
+    seen: set[str] = set()
+
+    def _add(token: str) -> None:
+        key = token.lower()
+        if key and key not in seen:
+            ranked.append(token)
+            seen.add(key)
+
+    for phrase in _capitalized_phrases(text):
+        for word in phrase.split():
+            if len(ranked) >= 8:
+                break
+            stripped = re.sub(r"[^A-Za-z0-9]", "", word)
+            if len(stripped) > 2 and stripped.lower() not in STOP_WORDS and not stripped.isdigit():
+                _add(stripped)
+
+    for word in _ascii_words(text):
+        if len(ranked) >= 8:
+            break
+        if len(word) > 2 and word not in STOP_WORDS and not word.isdigit():
+            _add(word)
+
     return " ".join(ranked[:8]) or "cinematic documentary scene"
 
 
@@ -722,10 +743,18 @@ def _dedupe_query_parts(*values: str) -> str:
 
 def _is_generic_keyword(value: str, scene_text: str = "") -> bool:
     words = [word for word in _ascii_words(value) if word not in STOP_WORDS]
-    if len(words) < 3:
+    if len(words) < 2:
         return True
     specific = [word for word in words if word not in GENERIC_IMAGE_TERMS and len(word) > 2]
     scene_specific = set(_ascii_words(scene_text)) - STOP_WORDS - GENERIC_IMAGE_TERMS
+    # A strong scene-specific proper noun rescues short-but-meaningful queries
+    # (e.g. "Messi celebration", "Maracana Stadium"): if there are >=2 non-stop
+    # words and at least one specific word that also appears in the scene text,
+    # the query is NOT generic.
+    if len(words) >= 2 and (set(specific) & scene_specific):
+        return False
+    if len(words) < 3:
+        return True
     if len(specific) < 2 and not (set(specific) & scene_specific):
         return True
     return False
@@ -852,6 +881,57 @@ def _infer_match_teams(script: str) -> list[str]:
     return []
 
 
+def _extract_year_competition(script: str) -> str:
+    """Scan the script for a 4-digit year and a known competition/round phrase.
+
+    Returns a concise descriptor like "2022 World Cup final" or "" if nothing
+    is found. Dependency-free, used to enrich image-search queries.
+    """
+    text = str(script or "")
+    lowered = text.lower()
+    parts: list[str] = []
+
+    year_match = re.search(r"\b(?:19|20)\d{2}\b", text)
+    if year_match:
+        parts.append(year_match.group(0))
+
+    competitions = (
+        ("world cup", "World Cup"),
+        ("champions league", "Champions League"),
+        ("europa league", "Europa League"),
+        ("premier league", "Premier League"),
+        ("la liga", "La Liga"),
+        ("serie a", "Serie A"),
+        ("bundesliga", "Bundesliga"),
+        ("ligue 1", "Ligue 1"),
+        ("copa america", "Copa America"),
+        ("copa del rey", "Copa del Rey"),
+        ("nations league", "Nations League"),
+        ("fa cup", "FA Cup"),
+        ("euros", "Euros"),
+        ("european championship", "European Championship"),
+        ("euro", "Euros"),
+        ("friendly", "friendly"),
+    )
+    for needle, canonical in competitions:
+        if needle in lowered:
+            parts.append(canonical)
+            break
+
+    for round_needle, round_label in (
+        ("semi-final", "semi-final"),
+        ("semifinal", "semi-final"),
+        ("quarter-final", "quarter-final"),
+        ("quarterfinal", "quarter-final"),
+        ("final", "final"),
+    ):
+        if round_needle in lowered:
+            parts.append(round_label)
+            break
+
+    return " ".join(parts).strip()
+
+
 def _is_football_script(script: str) -> bool:
     lowered = str(script or "").lower()
     terms = (
@@ -911,27 +991,13 @@ def _apply_match_search_context(items: list[dict], script: str) -> list[dict]:
     if len(teams) != 2:
         return items
     matchup = f"{teams[0]} {teams[1]}"
-    score_words = {
-        "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
-        "six": "6", "seven": "7", "eight": "8", "nine": "9",
-    }
-    score = ""
-    score_match = re.search(
-        r"\b(one|two|three|four|five|six|seven|eight|nine)[ -](one|two|three|four|five|six|seven|eight|nine)\b",
-        script,
-        flags=re.I,
-    )
-    if score_match:
-        score = f"{score_words[score_match.group(1).lower()]}-{score_words[score_match.group(2).lower()]}"
-    numeric_score = re.search(r"\b(\d+)\s*[-–]\s*(\d+)\b", script)
-    if numeric_score:
-        score = f"{numeric_score.group(1)}-{numeric_score.group(2)}"
+    event_tag = _extract_year_competition(script)
     stadium_match = re.search(
         r"\b([A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,3}\s+Stadium)\b",
         script,
     )
     stadium = stadium_match.group(1).strip() if stadium_match else ""
-    event_context = " ".join(value for value in (score, stadium) if value)
+    event_context = " ".join(value for value in (event_tag, stadium) if value)
     for item in items:
         subject, action = _scene_match_action(item, teams)
         action_short = ""
@@ -941,27 +1007,27 @@ def _apply_match_search_context(items: list[dict], script: str) -> list[dict]:
             action_short = "touchline"
         elif "players competing" in action:
             action_short = "action"
-        query = _clean_search_keyword(_dedupe_query_parts(subject, matchup, score, action_short))
+        query = _clean_search_keyword(_dedupe_query_parts(subject, matchup, event_tag, action_short))
         if not query:
-            query = f"{matchup} {score} match".strip()
+            query = f"{matchup} {event_tag} match".strip()
         existing = item.get("google_queries") if isinstance(item.get("google_queries"), list) else []
         existing = [_clean_search_keyword(str(value)) for value in existing if _clean_search_keyword(str(value))]
         if "coach touchline" in action:
             event_variants = [
-                _dedupe_query_parts(subject or "coach", matchup, score, "touchline"),
+                _dedupe_query_parts(subject or "coach", matchup, event_tag, "touchline"),
                 _dedupe_query_parts(subject or "coach", matchup, stadium),
-                _dedupe_query_parts(matchup, score, "coach bench"),
+                _dedupe_query_parts(matchup, event_tag, "coach bench"),
             ]
         elif "goal celebration" in action:
             event_variants = [
-                _dedupe_query_parts(subject, matchup, score, "celebration"),
-                _dedupe_query_parts(matchup, score, "goal celebration"),
-                _dedupe_query_parts(matchup, score, "players celebrating"),
+                _dedupe_query_parts(subject, matchup, event_tag, "celebration"),
+                _dedupe_query_parts(matchup, event_tag, "goal celebration"),
+                _dedupe_query_parts(matchup, event_tag, "players celebrating"),
             ]
         else:
             event_variants = [
-                _dedupe_query_parts(subject, matchup, score, "action"),
-                _dedupe_query_parts(matchup, score, "match action"),
+                _dedupe_query_parts(subject, matchup, event_tag, "action"),
+                _dedupe_query_parts(matchup, event_tag, "match action"),
                 _dedupe_query_parts(matchup, stadium, "match"),
             ]
         normalized = []
@@ -997,6 +1063,11 @@ def _strip_foreign_context_phrases(query: str, script: str, item: dict) -> str:
     if not value:
         return ""
     context = _script_context_text(script, item).lower()
+    # A name-like word that the AI placed in this item's own main_subject is a
+    # deliberate, more-specific entity (e.g. a stadium/competition spelled
+    # slightly differently than the script). Keep such words even when they are
+    # absent from the script/context so we don't strip a correct, narrower entity.
+    subject_words = set(_ascii_words(str(item.get("main_subject") or "")))
     keep_action_words = {
         "action", "match", "goal", "celebration", "touchline", "tackle", "score",
         "scored", "players", "team", "stadium", "victory", "defeat", "final",
@@ -1006,8 +1077,10 @@ def _strip_foreign_context_phrases(query: str, script: str, item: dict) -> str:
         normalized = re.sub(r"[^A-Za-z0-9-]", "", word).lower()
         if not normalized or normalized in STOP_WORDS:
             continue
+        ascii_normalized = "".join(_ascii_words(word))
+        in_subject = ascii_normalized in subject_words
         is_name_like = bool(re.match(r"^[A-Z][A-Za-z'-]+$", word))
-        if is_name_like and normalized not in context and normalized not in keep_action_words:
+        if is_name_like and normalized not in context and normalized not in keep_action_words and not in_subject:
             continue
         kept_words.append(word)
     cleaned = " ".join(kept_words)
@@ -1017,28 +1090,14 @@ def _strip_foreign_context_phrases(query: str, script: str, item: dict) -> str:
 def _contextual_match_query(item: dict, script: str, teams: list[str]) -> str:
     if len(teams) != 2:
         return ""
-    score = ""
-    score_words = {
-        "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
-        "six": "6", "seven": "7", "eight": "8", "nine": "9",
-    }
-    score_match = re.search(
-        r"\b(one|two|three|four|five|six|seven|eight|nine)[ -](one|two|three|four|five|six|seven|eight|nine)\b",
-        script,
-        flags=re.I,
-    )
-    if score_match:
-        score = f"{score_words[score_match.group(1).lower()]}-{score_words[score_match.group(2).lower()]}"
-    numeric_score = re.search(r"\b(\d+)\s*[-–]\s*(\d+)\b", script)
-    if numeric_score:
-        score = f"{numeric_score.group(1)}-{numeric_score.group(2)}"
+    event_tag = _extract_year_competition(script)
     subject, action = _scene_match_action(item, teams)
     if not subject:
         subject = str(item.get("main_subject") or "").strip()
     if subject.lower() in {team.lower() for team in teams}:
         subject = ""
     action_short = "touchline" if "coach touchline" in action else "celebration" if "goal celebration" in action else "match action"
-    return _concise_match_query(_dedupe_query_parts(subject, teams[0], teams[1], score, action_short), item)
+    return _concise_match_query(_dedupe_query_parts(subject, teams[0], teams[1], event_tag, action_short), item)
 
 
 def _video_context_cache_path(project: Path) -> Path:
@@ -1128,7 +1187,8 @@ def _video_context_prompt(script: str) -> str:
         "- If match teams are known, include exactly those teams.\n"
         "- Do not invent people, countries, clubs, places, competitions, or storylines not present in the script.\n"
         "- visual_boundaries must tell downstream keyword generation what is allowed.\n"
-        "- forbidden_contexts must list what image directions should be blocked.\n\n"
+        "- forbidden_contexts must list what image directions should be blocked.\n"
+        "- Write video_topic, entities, and all output values in English (use international English spellings), even if the script is in another language.\n\n"
         f"FULL SCRIPT:\n{script}"
     )
 
@@ -1522,6 +1582,67 @@ def _query_is_specific_person_context(query: str, item: dict) -> bool:
     return any(term in lowered for term in ("coach", "touchline", "goalkeeper", "captain"))
 
 
+def _diversify_scene_keywords(items: list[dict]) -> list[dict]:
+    """Cross-scene diversity pass run after all per-scene keywords are decided.
+
+    Enrichment can push many weak scenes toward the same generic matchup query
+    (e.g. "Argentina Brazil match action"), causing the tool to fetch identical
+    images for many scenes and the final video to repeat footage. This pass
+    walks the items in order and, when a scene's primary keyword duplicates one
+    already used, promotes the first unused alternative from its own
+    google_queries / fallback_keywords to be the new primary.
+    """
+
+    def _norm(value) -> str:
+        return " ".join(_ascii_words(str(value or "")))
+
+    used_primary: set[str] = set()
+    for item in items:
+        primary = str(item.get("keyword") or "").strip()
+        norm_primary = _norm(primary)
+        # Skip items with no usable keyword; nothing to diversify.
+        if not norm_primary:
+            continue
+        if norm_primary not in used_primary:
+            used_primary.add(norm_primary)
+            continue
+        # Duplicate primary: look for an unused alternative from this item's own
+        # google_queries[1:] then fallback_keywords.
+        google_queries = item.get("google_queries")
+        google_queries = google_queries if isinstance(google_queries, list) else []
+        fallback_keywords = item.get("fallback_keywords")
+        fallback_keywords = fallback_keywords if isinstance(fallback_keywords, list) else []
+        alternatives = [str(v) for v in google_queries[1:]] + [str(v) for v in fallback_keywords]
+        chosen = ""
+        chosen_norm = ""
+        for alt in alternatives:
+            alt = alt.strip()
+            norm_alt = _norm(alt)
+            if norm_alt and norm_alt not in used_primary:
+                chosen = alt
+                chosen_norm = norm_alt
+                break
+        if chosen:
+            item["keyword"] = chosen
+            item["ai_search_keyword"] = chosen
+            # Reorder google_queries so the chosen one is first, others after, deduped.
+            reordered = [chosen]
+            seen = {_norm(chosen)}
+            for query in google_queries:
+                norm_query = _norm(query)
+                if norm_query and norm_query not in seen:
+                    reordered.append(str(query))
+                    seen.add(norm_query)
+            item["google_queries"] = reordered
+            used_primary.add(chosen_norm)
+        else:
+            # Degraded case: no unused alternative exists. Leave the item as-is
+            # (it remains a known duplicate, which is acceptable). The normalized
+            # primary is already in used_primary, so no further action is needed.
+            used_primary.add(norm_primary)
+    return items
+
+
 def _apply_script_visual_context(items: list[dict], script: str, video_context: dict | None = None) -> list[dict]:
     script = str(script or "")
     video_context = video_context or _build_local_video_context(script)
@@ -1571,7 +1692,11 @@ def _apply_script_visual_context(items: list[dict], script: str, video_context: 
                 enriched = []
                 for query in sanitized:
                     candidate = query
-                    if not _query_mentions_both_teams(candidate, local_teams) and not _query_is_specific_person_context(candidate, item):
+                    # Only rewrite genuinely weak queries into the both-teams
+                    # form. A strong single-subject query (one player/team plus
+                    # an action) is a valid, well-tagged image search and is kept
+                    # as-is so we don't shrink the result pool.
+                    if _is_weak_match_query(candidate, local_teams) and not _query_is_specific_person_context(candidate, item):
                         candidate = _contextual_match_query(item, script, local_teams) or candidate
                     candidate = _concise_match_query(candidate, item)
                     if candidate and candidate not in enriched:
@@ -1585,9 +1710,25 @@ def _apply_script_visual_context(items: list[dict], script: str, video_context: 
             item["sportsdb_queries"] = []
             if not sanitized:
                 subject, action = _scene_match_action(item, local_teams)
-                fallback_subject = subject or str(item.get("main_subject") or "").strip() or "Argentina Messi"
+                # Derive the fallback generically from the scene/teams instead of
+                # hardcoding a country/player so the tool generalizes to any topic.
+                teams_subject = " ".join(local_teams[:2]) if len(local_teams) >= 2 else ""
+                fallback_subject = (
+                    subject
+                    or str(item.get("main_subject") or "").strip()
+                    or teams_subject
+                    or str(video_context.get("video_topic") or "").strip()
+                    or "football match"
+                )
                 fallback_action = "celebration" if "celebration" in action else "match action"
-                sanitized.append(_clean_search_keyword(f"{fallback_subject} Argentina football {fallback_action}"))
+                parts = [fallback_subject, fallback_action]
+                # Append a single team name only when the subject doesn't already
+                # reference a team, to keep the query specific without duplication.
+                if local_teams:
+                    subject_lower = fallback_subject.lower()
+                    if not any(team.lower() in subject_lower for team in local_teams):
+                        parts.insert(1, local_teams[0])
+                sanitized.append(_clean_search_keyword(" ".join(part for part in parts if part)))
         if not sanitized:
             sanitized.extend(_fallback_scene_keywords(item, script, video_context))
         if sanitized:
@@ -1596,6 +1737,7 @@ def _apply_script_visual_context(items: list[dict], script: str, video_context: 
             item["google_queries"] = sanitized[:4]
             item["fallback_keywords"] = [value for value in sanitized[1:6] if value != sanitized[0]]
         item["script_context_checked"] = True
+    items = _diversify_scene_keywords(items)
     return items
 
 
@@ -1741,6 +1883,7 @@ def _scene_prompt(
         "- Return 3-5 specific fallback_keywords.\n"
         "- sportsdb_queries contain only exact player/team/stadium/event names.\n"
         "- google_queries contain person + both teams + score/action. Do not add filler such as editorial photo, players competing, visible context.\n"
+        "- All search_keyword, google_queries, fallback_keywords, and sportsdb_queries MUST be written in ENGLISH, even if the script is in another language. Use the internationally-recognized English spelling of names, teams, places, and competitions.\n"
         "Return strict JSON only with key scenes. Each scene must contain: sentence_start, sentence_end, "
         "break_reason, main_subject, action_context, visual_intent, visual_source_type, search_keyword, fallback_keywords, "
         "sportsdb_queries, google_queries.\n"
@@ -2248,7 +2391,7 @@ def _keyword_prompt(scenes: list[dict], script: str = "") -> str:
         "- Do not use pronouns or vague words from the sentence as entities. Replace They/He/This with the real subject from the full script.\n"
         "- Do not borrow a named entity from another scene unless it is also the correct subject of this scene.\n"
         "- If the script is about a specific sports match, queries must stay inside that match and include both opponents when known.\n"
-        "- If match_teams are provided for a scene, every google query should include both teams unless the query is a specific named player/coach from that same match.\n"
+        "- If match_teams are provided, prefer including both teams for wide match shots, but a query built around one named player/coach/team from that same match is equally valid. Do not force both team names onto a strong single-subject query.\n"
         "- For football scripts, every query must stay around the football topic, the named national teams, named players, match preparation, match action, celebration, coaching, or tournament context.\n"
         "- For football scripts, do not use SportsDB logo/badge/flag-style visuals as scene assets; prefer Google match/team/player photography.\n"
         "- If the script is not sports, do not invent sports terms or sports sources.\n"
@@ -2262,6 +2405,7 @@ def _keyword_prompt(scenes: list[dict], script: str = "") -> str:
         "- If a real public figure/team/event is mentioned, keep the name.\n"
         "- sportsdb_queries: only for sports entities; otherwise return an empty list.\n"
         "- google_queries: exact subject/context/action, no invented entities and no filler. Put the most specific named-person query first.\n"
+        "- Write search_keyword, google_queries, fallback_keywords, and sportsdb_queries in ENGLISH (use the internationally-recognized English spelling of names, teams, places, and competitions), even if the script is in another language.\n"
         "- Include 3-5 fallback_keywords, all specific enough for image search.\n"
         "- For each item return: asset_id, visual_intent, main_subject, action_context, search_keyword, fallback_keywords, sportsdb_queries, google_queries.\n"
         "- Output only valid JSON with key items.\n\n"
@@ -3180,13 +3324,16 @@ def _concise_match_query(value: str, item: dict) -> str:
     )
     for phrase in removable_phrases:
         query = re.sub(rf"\b{re.escape(phrase)}\b", " ", query, flags=re.I)
+    # Strip standalone numeric match scores (e.g. "3-0", "2-1"); image databases
+    # are not indexed by scores.
+    query = re.sub(r"\b\d+[-–]\d+\b", " ", query)
     banned_words = (
-        "thumbnail", "poster", "wallpaper", "graphic", "logo", "badge", "training",
-        "portrait", "preview", "highlights", "reaction", "photo", "editorial", "ed",
+        "thumbnail", "poster", "wallpaper", "graphic", "logo", "badge", "preview",
+        "photo",
     )
     query = " ".join(
         word for word in query.split()
-        if word.lower() not in banned_words and not word.lower().startswith("editori")
+        if word.lower() not in banned_words
     )
     query = _dedupe_query_words(re.sub(r"\s+", " ", query).strip())
     words = query.split()

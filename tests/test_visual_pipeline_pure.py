@@ -5,6 +5,7 @@ No external I/O (PIL, requests, Whisper, subprocess) is used.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -158,7 +159,9 @@ class TestSrtTime:
 # ===========================================================================
 class TestKeywordForText:
     def test_basic(self):
-        result = vp.keyword_for_text("Lionel Messi scores a beautiful goal")
+        # New phrasing leads with capitalized proper-noun phrases, so casing is
+        # preserved ("Messi"); assert case-insensitively.
+        result = vp.keyword_for_text("Lionel Messi scores a beautiful goal").lower()
         assert "messi" in result
         assert "scores" in result
 
@@ -267,9 +270,16 @@ class TestIsGenericKeyword:
         assert vp._is_generic_keyword("football player ball sport") is True
 
     def test_scene_context_helps(self):
-        # keyword alone might be borderline, but scene context with specific words helps
+        # New early-acceptance rule: a 2-word query is NOT generic when it has a
+        # specific word (len>2, not a generic image term) that also appears in the
+        # scene text. Here "goal" is specific and present in the scene, so the
+        # query is rescued -> not generic.
         result = vp._is_generic_keyword("goal celebration", "Messi scored a beautiful goal against Real Madrid")
-        # Only 2 non-stop words in value -> still generic
+        assert result is False
+
+    def test_two_words_no_scene_overlap_is_generic(self):
+        # Two non-stop words but no specific word shared with the scene -> generic.
+        result = vp._is_generic_keyword("stadium crowd", "Messi scored a beautiful goal against Real Madrid")
         assert result is True
 
     def test_empty_string(self):
@@ -288,14 +298,30 @@ class TestConciseMatchQuery:
         return {"sentence_text": "", **kw}
 
     def test_removes_banned_phrases(self):
-        result = vp._concise_match_query("France Brazil players competing match action", self._item())
+        result = vp._concise_match_query("France Brazil players competing game action", self._item())
         assert "players competing" not in result
-        assert "match action" not in result
+        assert "game action" not in result
 
     def test_removes_banned_words(self):
+        # "photo" is still a harmful pollutant and must be removed, but
+        # "editorial" is now a legitimate Getty filter and must be KEPT.
         result = vp._concise_match_query("France Brazil editorial photo", self._item())
-        assert "editorial" not in result
         assert "photo" not in result
+        assert "editorial" in result.lower()
+
+    def test_strips_numeric_scores(self):
+        # Match scores like "3-0" are not indexable by image databases.
+        result = vp._concise_match_query("France Brazil 3-0 victory", self._item())
+        assert "3-0" not in result
+
+    def test_keeps_useful_descriptors(self):
+        # training, portrait, reaction, highlights are legitimate descriptors.
+        result = vp._concise_match_query("Messi training portrait reaction highlights", self._item())
+        lowered = result.lower()
+        assert "training" in lowered
+        assert "portrait" in lowered
+        assert "reaction" in lowered
+        assert "highlights" in lowered
 
     def test_max_9_words(self):
         query = " ".join(f"word{i}" for i in range(12))
@@ -318,9 +344,13 @@ class TestConciseMatchQuery:
         result = vp._concise_match_query("France Brazil thumbnail match", self._item())
         assert "thumbnail" not in result
 
-    def test_removes_editorial_prefix(self):
-        result = vp._concise_match_query("France Brazil editoria match", self._item())
-        assert "editoria" not in result
+    def test_removes_harmful_word(self):
+        # editorial-family words are now KEPT; instead a genuinely harmful
+        # pollutant like "wallpaper" / "logo" must still be stripped.
+        result = vp._concise_match_query("France Brazil wallpaper logo match", self._item())
+        lowered = result.lower()
+        assert "wallpaper" not in lowered
+        assert "logo" not in lowered
 
 
 # ===========================================================================
@@ -367,6 +397,105 @@ class TestInferMatchTeams:
     def test_vs_dot_pattern(self):
         result = vp._infer_match_teams("France vs. Brazil on Tuesday.")
         assert result == ["France", "Brazil"]
+
+
+# ===========================================================================
+# 8b. _extract_year_competition
+# ===========================================================================
+class TestExtractYearCompetition:
+    def test_year_and_competition(self):
+        result = vp._extract_year_competition(
+            "It was the 2022 World Cup final in Qatar that sealed his legacy."
+        )
+        assert "2022" in result
+        assert "World Cup" in result
+
+    def test_appends_round(self):
+        result = vp._extract_year_competition("The 2014 World Cup final ended in heartbreak.")
+        assert "final" in result.lower()
+
+    def test_no_year_or_competition(self):
+        assert vp._extract_year_competition("He trained hard every single day.") == ""
+
+    def test_empty_string(self):
+        assert vp._extract_year_competition("") == ""
+
+    def test_competition_only(self):
+        # No year, but a competition is still returned.
+        result = vp._extract_year_competition("They won the Champions League that season.")
+        assert "Champions League" in result
+
+
+# ===========================================================================
+# 8c. _apply_match_search_context / _contextual_match_query (year+competition)
+# ===========================================================================
+_SCORE_TOKEN = re.compile(r"\b\d+[-–]\d+\b")
+
+
+class TestApplyMatchSearchContext:
+    SCRIPT = (
+        "Argentina vs Brazil at the 2022 World Cup final was unforgettable. "
+        "Argentina won three nil thanks to a brilliant team effort."
+    )
+
+    def test_year_competition_injected_not_score(self):
+        item = {
+            "sentence_text": "Argentina vs Brazil clashed at the 2022 World Cup final.",
+        }
+        result = vp._apply_match_search_context([item], self.SCRIPT)
+        queries = result[0].get("google_queries") or []
+        assert queries, "expected google_queries to be populated"
+        joined = " ".join(queries)
+        # Year and/or competition should appear in the enriched queries.
+        assert "2022" in joined or "World Cup" in joined
+        # No bare score token like "3-0" should leak into any query.
+        for query in queries:
+            assert not _SCORE_TOKEN.search(query), f"score token leaked: {query!r}"
+
+    def test_no_numeric_score_token_anywhere(self):
+        item = {"sentence_text": "Argentina scored the winning goal against Brazil."}
+        result = vp._apply_match_search_context([item], self.SCRIPT)
+        for query in result[0].get("google_queries") or []:
+            assert "3-0" not in query and "3-1" not in query
+
+
+class TestContextualMatchQueryEvent:
+    def test_includes_year_competition_not_score(self):
+        script = (
+            "Argentina vs Brazil met in the 2022 World Cup final. "
+            "Argentina won three nil in a famous victory."
+        )
+        item = {"sentence_text": "Lionel Messi celebrated the goal against Brazil."}
+        teams = vp._infer_match_teams(script)
+        assert len(teams) == 2
+        query = vp._contextual_match_query(item, script, teams)
+        assert query
+        assert "2022" in query or "World Cup" in query
+        assert not _SCORE_TOKEN.search(query), f"score token leaked: {query!r}"
+
+
+# ===========================================================================
+# 8d. FIX #4 — strong single-subject queries survive enrichment
+# ===========================================================================
+class TestApplyScriptVisualContextStrongSubject:
+    def test_strong_single_subject_query_survives(self):
+        script = (
+            "Argentina vs Brazil met in the 2022 World Cup final. "
+            "Lionel Messi was the star of the night for Argentina."
+        )
+        item = {
+            "sentence_text": "Lionel Messi celebrated after the final whistle.",
+            "main_subject": "Lionel Messi",
+            "match_teams": ["Argentina", "Brazil"],
+            "keyword": "Lionel Messi celebration",
+            "google_queries": ["Lionel Messi celebration"],
+        }
+        result = vp._apply_script_visual_context([item], script)
+        queries = result[0].get("google_queries") or []
+        joined = " ".join(queries).lower()
+        # The strong single-subject query must not be overwritten into a generic
+        # both-teams matchup; Messi must still be present.
+        assert "messi" in joined
 
 
 # ===========================================================================
@@ -844,3 +973,171 @@ class TestIsTargetAspect:
     def test_within_tolerance(self):
         # 1918/1080 is slightly off 16/9 but within tolerance
         assert vp._is_target_aspect(1918, 1080, {}) is True
+
+
+class TestDiversifySceneKeywords:
+    def test_duplicate_primary_promotes_alternative(self):
+        items = [
+            {
+                "keyword": "Argentina Brazil match action",
+                "ai_search_keyword": "Argentina Brazil match action",
+                "google_queries": ["Argentina Brazil match action"],
+                "fallback_keywords": [],
+            },
+            {
+                "keyword": "Argentina Brazil match action",
+                "ai_search_keyword": "Argentina Brazil match action",
+                "google_queries": [
+                    "Argentina Brazil match action",
+                    "Messi celebration World Cup",
+                ],
+                "fallback_keywords": ["Neymar dribble Brazil"],
+            },
+        ]
+        result = vp._diversify_scene_keywords(items)
+        first, second = result[0], result[1]
+        # The two primaries must now differ.
+        assert first["keyword"] != second["keyword"]
+        # First item keeps its original primary (it was unique when seen).
+        assert first["keyword"] == "Argentina Brazil match action"
+        # Second item's new primary is one of its own alternatives.
+        assert second["keyword"] in (
+            "Messi celebration World Cup",
+            "Neymar dribble Brazil",
+        )
+        assert second["keyword"] == "Messi celebration World Cup"
+        # ai_search_keyword tracks the promoted primary.
+        assert second["ai_search_keyword"] == second["keyword"]
+        # google_queries is reordered so the chosen primary is first.
+        assert second["google_queries"][0] == second["keyword"]
+        # The original primary is preserved further down (deduped).
+        assert "Argentina Brazil match action" in second["google_queries"]
+
+    def test_fallback_used_when_google_queries_exhausted(self):
+        items = [
+            {
+                "keyword": "Argentina Brazil match action",
+                "google_queries": ["Argentina Brazil match action"],
+                "fallback_keywords": [],
+            },
+            {
+                "keyword": "Argentina Brazil match action",
+                # Only a single google query (the duplicate); the distinct
+                # option lives in fallback_keywords.
+                "google_queries": ["Argentina Brazil match action"],
+                "fallback_keywords": ["Brazil defense pressing"],
+            },
+        ]
+        result = vp._diversify_scene_keywords(items)
+        assert result[1]["keyword"] == "Brazil defense pressing"
+        assert result[0]["keyword"] != result[1]["keyword"]
+
+    def test_all_alternatives_are_duplicates_stays_as_is(self):
+        # First two scenes lock "A B match" and "C D match". The third scene's
+        # only alternatives duplicate already-used primaries, so it must stay
+        # as-is without crashing (degraded case).
+        items = [
+            {
+                "keyword": "A B match",
+                "google_queries": ["A B match"],
+                "fallback_keywords": [],
+            },
+            {
+                "keyword": "C D match",
+                "google_queries": ["C D match"],
+                "fallback_keywords": [],
+            },
+            {
+                "keyword": "A B match",
+                "google_queries": ["A B match", "C D match"],
+                "fallback_keywords": ["a b match", "C   D match"],
+            },
+        ]
+        result = vp._diversify_scene_keywords(items)
+        # No unused alternative -> third item stays as its original primary.
+        assert result[2]["keyword"] == "A B match"
+        assert result[2]["google_queries"] == ["A B match", "C D match"]
+
+    def test_missing_keys_no_crash(self):
+        items = [
+            {"keyword": "Argentina Brazil match action"},
+            # Duplicate primary but no google_queries / fallback_keywords keys.
+            {"keyword": "Argentina Brazil match action"},
+            # No keyword at all.
+            {},
+        ]
+        result = vp._diversify_scene_keywords(items)
+        assert len(result) == 3
+        # Second item has no alternatives -> stays as-is.
+        assert result[1]["keyword"] == "Argentina Brazil match action"
+
+    def test_all_unique_primaries_unchanged(self):
+        items = [
+            {
+                "keyword": "Messi free kick",
+                "ai_search_keyword": "Messi free kick",
+                "google_queries": ["Messi free kick", "Argentina celebration"],
+                "fallback_keywords": ["Argentina squad"],
+            },
+            {
+                "keyword": "Neymar dribble",
+                "ai_search_keyword": "Neymar dribble",
+                "google_queries": ["Neymar dribble", "Brazil attack"],
+                "fallback_keywords": ["Brazil squad"],
+            },
+        ]
+        import copy
+
+        before = copy.deepcopy(items)
+        result = vp._diversify_scene_keywords(items)
+        assert result == before
+
+    def test_normalization_ignores_case_and_punctuation(self):
+        items = [
+            {
+                "keyword": "Argentina Brazil Match Action",
+                "google_queries": ["Argentina Brazil Match Action"],
+                "fallback_keywords": [],
+            },
+            {
+                # Differs only by case/punctuation -> treated as duplicate.
+                "keyword": "argentina, brazil match-action!",
+                "google_queries": [
+                    "argentina, brazil match-action!",
+                    "Di Maria assist",
+                ],
+                "fallback_keywords": [],
+            },
+        ]
+        result = vp._diversify_scene_keywords(items)
+        assert result[1]["keyword"] == "Di Maria assist"
+
+
+class TestStripForeignContextPhrases:
+    def test_name_in_main_subject_is_kept(self):
+        # "Maracana" is name-like and absent from the script/context, but it is
+        # present in the item's own main_subject, so it must be kept.
+        item = {"main_subject": "Maracana stadium"}
+        result = vp._strip_foreign_context_phrases(
+            "Maracana stadium match action", "a football match", item
+        )
+        assert "Maracana" in result
+
+    def test_random_foreign_name_is_dropped(self):
+        # A name-like word absent from script, context, and main_subject is dropped.
+        item = {"main_subject": "stadium crowd"}
+        result = vp._strip_foreign_context_phrases(
+            "Zzyzxland stadium crowd", "a football match", item
+        )
+        assert "Zzyzxland" not in result
+        assert "stadium" in result
+
+
+class TestScenePromptEnglishRule:
+    def test_scene_prompt_requires_english(self):
+        prompt = vp._scene_prompt("script", [], 4.0, 25.0)
+        assert "ENGLISH" in prompt
+
+    def test_video_context_prompt_requires_english(self):
+        prompt = vp._video_context_prompt("script")
+        assert "English" in prompt
