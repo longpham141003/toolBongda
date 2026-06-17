@@ -909,3 +909,66 @@ class TestVoiceEndpoint:
         assert resp.status_code == 400
         detail = (resp.json().get("detail") or "").lower()
         assert "phụ đề" in detail
+
+
+# ===========================================================================
+# /api/prompt-analysis endpoint tests (SP3 Task 5)
+# ===========================================================================
+
+class TestPromptAnalysisEndpoint:
+    def test_save_and_get_prompt_analysis(self, tmp_path):
+        project = tmp_path / "proj"
+        (project / "scripts").mkdir(parents=True)
+        (project / "scripts" / "script_final.txt").write_text("x", encoding="utf-8")
+        ws.runtime.current_project = project
+        client = TestClient(ws.app)
+        analysis = {"characters": [{"name": "A", "role": "r", "description": "d"}], "sceneMap": []}
+        r1 = client.post("/api/prompt-analysis", json={"analysis": analysis})
+        assert r1.status_code == 200
+        r2 = client.get("/api/prompt-analysis")
+        assert r2.status_code == 200
+        assert r2.json()["analysis"]["characters"][0]["name"] == "A"
+
+    def test_get_prompt_analysis_returns_empty_when_missing(self, tmp_path):
+        project = tmp_path / "proj2"
+        (project / "scripts").mkdir(parents=True)
+        (project / "scripts" / "script_final.txt").write_text("x", encoding="utf-8")
+        ws.runtime.current_project = project
+        client = TestClient(ws.app)
+        r = client.get("/api/prompt-analysis")
+        assert r.status_code == 200
+        assert r.json()["analysis"] == {}
+
+    def test_edit_asset_prompt_404_for_unknown_asset(self, tmp_path):
+        project = tmp_path / "proj3"
+        (project / "scripts").mkdir(parents=True)
+        (project / "scripts" / "script_final.txt").write_text("x", encoding="utf-8")
+        ws.runtime.current_project = project
+        client = TestClient(ws.app)
+        with patch("app.web.web_server.load_manifest", return_value=[]):
+            r = client.post("/api/assets/nonexistent/prompt", json={"prompt": "hello"})
+        assert r.status_code == 404
+
+    def test_edit_asset_prompt_updates_and_saves(self, tmp_path):
+        project = tmp_path / "proj4"
+        (project / "scripts").mkdir(parents=True)
+        (project / "scripts" / "script_final.txt").write_text("x", encoding="utf-8")
+        ws.runtime.current_project = project
+        client = TestClient(ws.app)
+        manifest = [{"asset_id": "a1", "prompt": "old prompt"}]
+        with patch("app.web.web_server.load_manifest", return_value=manifest), \
+             patch("app.web.web_server.save_manifest") as mock_save, \
+             patch("app.web.web_server._project_payload", return_value={"path": str(project)}):
+            r = client.post("/api/assets/a1/prompt", json={"prompt": "new prompt"})
+        assert r.status_code == 200
+        saved = mock_save.call_args[0][1]
+        item = next(i for i in saved if i["asset_id"] == "a1")
+        assert item["prompt"] == "new prompt"
+
+    def test_get_prompt_analysis_requires_project(self, client):
+        r = client.get("/api/prompt-analysis")
+        assert r.status_code == 400
+
+    def test_save_prompt_analysis_requires_project(self, client):
+        r = client.post("/api/prompt-analysis", json={"analysis": {}})
+        assert r.status_code == 400

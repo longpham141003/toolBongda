@@ -33,6 +33,7 @@ from ..voice.text_to_voice_queue import (
     warm_kokoro_server,
 )
 from ..voice.text_to_voice_cli import build_srt_from_segments
+from ..pipeline.prompt_studio import analyze_story, generate_line_prompts, load_prompt_analysis, save_prompt_analysis
 from ..pipeline.subtitle_store import load_subtitle, save_subtitle
 from ..pipeline.visual_pipeline import (
     _concise_match_query,
@@ -148,6 +149,13 @@ class ExportRequest(BaseModel):
 class KeywordRequest(BaseModel):
     keyword: str
 
+
+class PromptAnalysisRequest(BaseModel):
+    analysis: dict[str, Any] = {}
+
+
+class PromptEditRequest(BaseModel):
+    prompt: str = ""
 
 
 
@@ -1622,6 +1630,61 @@ def analyze() -> dict[str, Any]:
         return {"items": items, "project": _project_payload(project)}
 
     return {"job": runtime.start_job("B2 Phan tich canh", task).payload()}
+
+
+@app.post("/api/analyze-story")
+def analyze_story_endpoint() -> dict[str, Any]:
+    project = runtime.require_project()
+    if not load_subtitle(project):
+        raise HTTPException(status_code=400, detail="Chưa có phụ đề. Hãy tạo & lưu phụ đề ở Bước 1 trước.")
+    settings = load_settings()
+
+    def task(job: Job) -> dict[str, Any]:
+        analysis = analyze_story(project, settings, log=job.log)
+        return {"analysis": analysis, "project": _project_payload(project)}
+
+    return {"job": runtime.start_job("B2 Phan tich nhan vat", task).payload()}
+
+
+@app.get("/api/prompt-analysis")
+def get_prompt_analysis() -> dict[str, Any]:
+    project = runtime.require_project()
+    return {"analysis": load_prompt_analysis(project)}
+
+
+@app.post("/api/prompt-analysis")
+def save_prompt_analysis_endpoint(request: PromptAnalysisRequest) -> dict[str, Any]:
+    project = runtime.require_project()
+    saved = save_prompt_analysis(project, request.analysis)
+    return {"analysis": saved}
+
+
+@app.post("/api/generate-prompts")
+def generate_prompts_endpoint() -> dict[str, Any]:
+    project = runtime.require_project()
+    settings = load_settings()
+
+    def task(job: Job) -> dict[str, Any]:
+        generate_line_prompts(project, settings, log=job.log)
+        return {"project": _project_payload(project)}
+
+    return {"job": runtime.start_job("B2 Tao prompt", task).payload()}
+
+
+@app.post("/api/assets/{asset_id}/prompt")
+def edit_asset_prompt(asset_id: str, request: PromptEditRequest) -> dict[str, Any]:
+    project = runtime.require_project()
+    items = load_manifest(project)
+    found = False
+    for item in items:
+        if item.get("asset_id") == asset_id:
+            item["prompt"] = request.prompt
+            found = True
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail="Không tìm thấy asset.")
+    save_manifest(project, items)
+    return {"project": _project_payload(project)}
 
 
 @app.post("/api/analyze-search")
