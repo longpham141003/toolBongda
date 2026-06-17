@@ -61,6 +61,38 @@ DEFAULT_IMAGE_TARGET_HEIGHT = 1080
 _VISION_QUOTA_PAUSE_UNTIL = 0.0
 _AI_PROVIDER_PAUSE_UNTIL: dict[str, float] = {"gemini": 0.0, "claude": 0.0, "kiro": 0.0}
 
+_AI_PROVIDER_LABELS = {"kiro": "Kiro", "openai": "OpenAI", "claude": "Claude", "gemini": "Gemini"}
+
+# Tokens that mark a provider error as a quota/billing problem rather than a
+# transient or request bug. Such errors mean the user must top up credit or
+# switch provider, so we surface a clear message and pause the provider.
+_AI_QUOTA_ERROR_TOKENS = (
+    "billing", "insufficient", "quota", "out of credit", "no credit",
+    "payment", "exceeded", "balance",
+)
+
+
+def _is_quota_error(status: int, body: str) -> bool:
+    if status in (402, 429):
+        return True
+    lowered = str(body or "").lower()
+    return any(token in lowered for token in _AI_QUOTA_ERROR_TOKENS)
+
+
+def _ai_provider_error(provider: str, status: int, body: str) -> RuntimeError:
+    """Build a clear, actionable error for a failed AI HTTP call. Quota/billing
+    failures get a localized hint to top up or switch provider instead of the
+    raw server blob, which the UI surfaces verbatim to the user."""
+    label = _AI_PROVIDER_LABELS.get(provider, provider or "AI")
+    detail = str(body or "")[-300:]
+    if _is_quota_error(status, body):
+        return RuntimeError(
+            f"{label} từ chối vì hết quota hoặc lỗi thanh toán (HTTP {status}). "
+            f"Hãy nạp thêm credit cho tài khoản {label} hoặc thêm key AI khác trong Cài đặt. "
+            f"Chi tiết: {detail}"
+        )
+    return RuntimeError(f"{label} API lỗi {status}: {str(body or '')[-600:]}")
+
 
 def _uuid() -> str:
     return str(uuid.uuid4()).upper()
@@ -791,12 +823,17 @@ def build_asset_manifest(
     log: Callable[[str], None] | None = None,
 ) -> list[dict]:
     settings = settings or {}
+    # The SRT/timing is already produced when the voice is created
+    # (voices/voice.segments.json), so use it directly instead of re-running the
+    # heavy Whisper alignment. Each SRT sentence becomes one scene; its keyword
+    # is generated per sentence and grounded in the project context downstream.
     timing = load_timing(project)
-    try:
-        timing = refine_timing_with_whisper(project, settings, log=log)
-    except Exception as exc:
-        if callable(log):
-            log(f"Whisper timing lỗi, dùng timing voice hiện tại: {exc}")
+    if bool(settings.get("whisper_timing_enabled", False)):
+        try:
+            timing = refine_timing_with_whisper(project, settings, log=log)
+        except Exception as exc:
+            if callable(log):
+                log(f"Whisper timing lỗi, dùng timing voice hiện tại: {exc}")
     segments = normalize_voice_segments(timing)
     audio_path = project / "voices" / "voice.wav"
     audio_duration = probe_duration(audio_path) if audio_path.exists() else 0.0
@@ -809,18 +846,14 @@ def build_asset_manifest(
     if not segments:
         raise RuntimeError("Timing không có câu thoại.")
     sentences = merge_segments_into_sentences(segments)
-    split_mode = "semantic_srt_scenes"
-    try:
-        assets = group_scenes_with_ai(project, sentences, settings, log=log)
-        split_mode = "gemini_semantic_srt_scenes"
-    except Exception as exc:
-        if callable(log):
-            log(f"Gemini chia cảnh lỗi, dùng bộ chia local: {exc}")
-        scenes = split_sentences_into_scenes(sentences)
-        assets = [
-            _manifest_item(index, scene["sentences"], scene["break_reason"])
-            for index, scene in enumerate(scenes, start=1)
-        ]
+    # One scene per SRT sentence (no separate scene-grouping AI round).
+    split_mode = "srt_sentence_scenes"
+    assets = [
+        _manifest_item(index, [sentence], "opening" if index == 1 else "sentence")
+        for index, sentence in enumerate(sentences, start=1)
+    ]
+    if callable(log):
+        log(f"Đã lấy {len(assets)} câu từ SRT giọng đọc để tạo keyword theo từng câu.")
     script_path = project / "scripts" / "script_final.txt"
     script = script_path.read_text(encoding="utf-8", errors="replace").strip()
     video_context = _load_or_build_video_context(project, script, settings, log=log) if script else _build_local_video_context("")
@@ -1301,9 +1334,9 @@ def _gemini_raw_text(api_key: str, model: str, prompt: str) -> str:
         timeout=90,
     )
     if response.status_code >= 400:
-        if response.status_code == 429:
+        if _is_quota_error(response.status_code, response.text):
             _AI_PROVIDER_PAUSE_UNTIL["gemini"] = time.time() + 900
-        raise RuntimeError(f"Gemini API lỗi {response.status_code}: {response.text[-600:]}")
+        raise _ai_provider_error("gemini", response.status_code, response.text)
     data = response.json()
     candidates = data.get("candidates") or []
     if not candidates:
@@ -1381,9 +1414,9 @@ def _call_openai_compatible_json(
         timeout=timeout,
     )
     if response.status_code >= 400:
-        if response.status_code == 429:
+        if _is_quota_error(response.status_code, response.text):
             _AI_PROVIDER_PAUSE_UNTIL[provider] = time.time() + 900
-        raise RuntimeError(f"{provider} API lỗi {response.status_code}: {response.text[-600:]}")
+        raise _ai_provider_error(provider, response.status_code, response.text)
     data = response.json()
     choices = data.get("choices") or []
     if not choices:
@@ -1429,9 +1462,9 @@ def _call_anthropic_compatible_json(
         timeout=timeout,
     )
     if response.status_code >= 400:
-        if response.status_code == 429:
+        if _is_quota_error(response.status_code, response.text):
             _AI_PROVIDER_PAUSE_UNTIL[provider] = time.time() + 900
-        raise RuntimeError(f"{provider} API lỗi {response.status_code}: {response.text[-600:]}")
+        raise _ai_provider_error(provider, response.status_code, response.text)
     data = response.json()
     parts = data.get("content") or []
     if isinstance(parts, str):
@@ -1458,7 +1491,9 @@ def _call_video_context_ai_openai(api_key: str, model: str, script: str) -> dict
         timeout=90,
     )
     if response.status_code >= 400:
-        raise RuntimeError(f"OpenAI video context API lỗi {response.status_code}: {response.text[-600:]}")
+        if _is_quota_error(response.status_code, response.text):
+            _AI_PROVIDER_PAUSE_UNTIL["openai"] = time.time() + 900
+        raise _ai_provider_error("openai", response.status_code, response.text)
     data = response.json()
     content = data["choices"][0]["message"]["content"]
     return _parse_video_context_json(content)
@@ -2443,8 +2478,7 @@ def optimize_asset_keywords_with_ai(
         item.setdefault("keyword_local", item.get("keyword") or "")
     global_context = _global_visual_context(script)
 
-    for start in range(0, len(items), chunk_size):
-        chunk = items[start : start + chunk_size]
+    def _build_payload(start: int, chunk: list[dict]) -> list[dict]:
         payload = []
         for offset, item in enumerate(chunk):
             absolute_index = start + offset
@@ -2471,23 +2505,61 @@ def optimize_asset_keywords_with_ai(
                     "match_teams": item.get("match_teams") if isinstance(item.get("match_teams"), list) else [],
                 }
             )
-        if callable(log):
-            log(f"AI keyword: tối ưu {start + 1}-{start + len(chunk)}/{len(items)}")
-        try:
-            if provider == "gemini":
-                result = _call_keyword_ai_gemini(api_key, model, payload, script)
-            elif provider == "kiro":
-                result = _call_keyword_ai_kiro(api_key, _kiro_api_base(settings), model, payload, script)
-            elif provider == "claude":
-                result = _call_keyword_ai_claude(api_key, model, payload, script)
-            else:
-                if not api_key.startswith("sk-"):
-                    raise RuntimeError("OpenAI key phải bắt đầu bằng sk-. Nếu dùng key AQ..., hãy chọn provider Gemini.")
-                result = _call_keyword_ai_openai(api_key, model, payload, script)
-        except Exception as exc:
+        return payload
+
+    def _call_keyword_ai(payload: list[dict]) -> list[dict]:
+        if provider == "gemini":
+            return _call_keyword_ai_gemini(api_key, model, payload, script)
+        if provider == "kiro":
+            return _call_keyword_ai_kiro(api_key, _kiro_api_base(settings), model, payload, script)
+        if provider == "claude":
+            return _call_keyword_ai_claude(api_key, model, payload, script)
+        if not api_key.startswith("sk-"):
+            raise RuntimeError("OpenAI key phải bắt đầu bằng sk-. Nếu dùng key AQ..., hãy chọn provider Gemini.")
+        return _call_keyword_ai_openai(api_key, model, payload, script)
+
+    chunks = [(start, items[start : start + chunk_size]) for start in range(0, len(items), chunk_size)]
+    try:
+        configured_workers = int(settings.get("image_search_parallel_jobs") or 0)
+    except (TypeError, ValueError):
+        configured_workers = 0
+    max_workers = max(1, min(4, configured_workers or 4, len(chunks) or 1))
+
+    # Run the per-chunk AI calls concurrently (HTTP-bound); apply the results in
+    # the main thread so item mutation stays serialized. One chunk failing keeps
+    # that chunk's local fallback without blocking the others.
+    results_by_idx: dict[int, tuple[list[dict], list[dict]]] = {}
+    if max_workers <= 1 or len(chunks) <= 1:
+        for idx, (start, chunk) in enumerate(chunks):
             if callable(log):
-                log(f"AI keyword lỗi, giữ keyword/query fallback nội bộ: {exc}")
-            break
+                log(f"AI keyword: tối ưu {start + 1}-{start + len(chunk)}/{len(items)}")
+            try:
+                results_by_idx[idx] = (chunk, _call_keyword_ai(_build_payload(start, chunk)))
+            except Exception as exc:
+                if callable(log):
+                    log(f"AI keyword lỗi, giữ keyword/query fallback nội bộ: {exc}")
+    else:
+        import concurrent.futures as _cf
+
+        if callable(log):
+            log(f"AI keyword: tối ưu {len(items)} câu theo {len(chunks)} nhóm (song song x{max_workers})...")
+
+        def _process(job: tuple[int, int, list[dict]]):
+            idx, start, chunk = job
+            return idx, chunk, _call_keyword_ai(_build_payload(start, chunk))
+
+        jobs = [(idx, start, chunk) for idx, (start, chunk) in enumerate(chunks)]
+        with _cf.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for future in _cf.as_completed([executor.submit(_process, job) for job in jobs]):
+                try:
+                    idx, chunk, result = future.result()
+                    results_by_idx[idx] = (chunk, result)
+                except Exception as exc:
+                    if callable(log):
+                        log(f"AI keyword lỗi 1 nhóm, giữ fallback nội bộ: {exc}")
+
+    for idx in sorted(results_by_idx):
+        chunk, result = results_by_idx[idx]
         by_id = {str(row.get("asset_id") or ""): row for row in result}
         for item in chunk:
             row = by_id.get(str(item.get("asset_id") or ""))
