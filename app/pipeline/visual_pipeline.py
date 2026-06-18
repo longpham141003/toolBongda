@@ -4343,7 +4343,12 @@ def _capcut_root() -> Path:
 
 def _find_capcut_template(capcut_root: Path) -> Path:
     preferred = capcut_root / "test-export"
-    bundled = Path(__file__).resolve().parents[1] / "capcut_template"
+    # Repo root (== config.APP_DIR) is parents[2]: app/pipeline/visual_pipeline.py →
+    # toolBongda/. parents[1] is the app/ package, where capcut_template/Projects do
+    # NOT live, so the bundled template was never found and export always failed when
+    # the user had no CapCut drafts.
+    app_root = Path(__file__).resolve().parents[2]
+    bundled = app_root / "capcut_template"
     capcut_candidates = [
         path for path in capcut_root.iterdir()
         if path.is_dir() and not path.name.startswith(".")
@@ -4351,7 +4356,7 @@ def _find_capcut_template(capcut_root: Path) -> Path:
     portable_candidates = sorted(
         {
             path.parent
-            for path in (Path(__file__).resolve().parents[1] / "Projects").rglob("draft_content.json")
+            for path in (app_root / "Projects").rglob("draft_content.json")
             if (path.parent / "draft_meta_info.json").is_file()
         },
         key=lambda path: path.stat().st_mtime,
