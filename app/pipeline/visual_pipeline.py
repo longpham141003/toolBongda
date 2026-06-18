@@ -4181,22 +4181,23 @@ def search_and_download_asset(
         )
     if reject_current or not item.get("keyword_ai_scene_refreshed"):
         item = refresh_asset_keyword_with_ai(project, item, settings, log)
-    script_path = project / "scripts" / "script_final.txt"
-    if script_path.exists():
-        script_text = script_path.read_text(encoding="utf-8", errors="replace").strip()
-        if script_text:
-            item = _apply_script_visual_context([item], script_text)[0]
-    if _is_match_photography_item(item):
-        concise_keyword = _concise_match_query(str(item.get("keyword") or ""), item)
-        if concise_keyword:
-            item["keyword"] = concise_keyword
-            item["ai_search_keyword"] = concise_keyword
-        existing_queries = item.get("google_queries") if isinstance(item.get("google_queries"), list) else []
-        concise_queries = [
-            _concise_match_query(str(value), item)
-            for value in [concise_keyword, *existing_queries]
-        ]
-        item["google_queries"] = list(dict.fromkeys(value for value in concise_queries if value))[:4]
+    if not item.get("prompt_keyword_locked"):
+        script_path = project / "scripts" / "script_final.txt"
+        if script_path.exists():
+            script_text = script_path.read_text(encoding="utf-8", errors="replace").strip()
+            if script_text:
+                item = _apply_script_visual_context([item], script_text)[0]
+        if _is_match_photography_item(item):
+            concise_keyword = _concise_match_query(str(item.get("keyword") or ""), item)
+            if concise_keyword:
+                item["keyword"] = concise_keyword
+                item["ai_search_keyword"] = concise_keyword
+            existing_queries = item.get("google_queries") if isinstance(item.get("google_queries"), list) else []
+            concise_queries = [
+                _concise_match_query(str(value), item)
+                for value in [concise_keyword, *existing_queries]
+            ]
+            item["google_queries"] = list(dict.fromkeys(value for value in concise_queries if value))[:4]
     attempt = int(item.get("search_attempt") or 0) + 1
     try:
         candidate, candidate_count, matched_query, candidate_metadata = crawl_image_candidates(

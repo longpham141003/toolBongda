@@ -318,6 +318,7 @@ def apply_prompt_keywords(project: Path, settings: dict, log=None) -> list[dict]
         item["ai_search_keyword"] = kw["search_keyword"]
         item["google_queries"] = kw["google_queries"]
         item["keyword_ai_scene_refreshed"] = True   # prompt keyword is authoritative; skip sentence-based re-refresh in search
+        item["prompt_keyword_locked"] = True         # I2: guard against script-context override in search_and_download_asset
         if callable(log):
             log(f"Keyword {index}/{len(manifest)}: {kw['search_keyword']}")
     _save_manifest(project, manifest)

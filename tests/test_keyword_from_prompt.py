@@ -44,3 +44,6 @@ def test_apply_prompt_keywords_writes_fields(tmp_path, monkeypatch):
     assert out[1]["keyword"] == "kw:A dog runs."
     assert out[1]["keyword_ai_scene_refreshed"] is True
     assert saved["items"][0]["keyword"] == "kw:A woman at a desk"
+    # I2: prompt_keyword_locked must be set so script-context override is skipped
+    assert out[0]["prompt_keyword_locked"] is True
+    assert out[1]["prompt_keyword_locked"] is True
