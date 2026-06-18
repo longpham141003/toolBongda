@@ -235,6 +235,14 @@ def generate_voice(project: Path, settings: dict, log: Callable[[str], None], st
         measured_segments = measured.get("segments") if isinstance(measured, dict) else None
         if isinstance(measured_segments, list) and measured_segments:
             save_subtitle(project, measured_segments)
+        # save_subtitle vừa ghi lại subtitle.json; rename ở trên giữ mtime cũ của file
+        # tạm nên voice.wav có thể CŨ HƠN subtitle.json. Bump mtime voice về "now" để
+        # voice luôn mới hơn subtitle — nếu không _project_payload coi voice là stale
+        # (has_voice=False) và không sang được bước Prompt.
+        now = time.time()
+        for path in (output_path, output_path.with_suffix(".segments.json"), output_path.with_suffix(".srt")):
+            if path.exists():
+                os.utime(path, (now, now))
         # A new voice means the old scene/timing-to-asset mapping is no longer
         # trustworthy. Force the next analyze-search run to rebuild scenes.
         (project / "assets" / "asset_manifest.json").unlink(missing_ok=True)

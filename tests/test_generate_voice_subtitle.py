@@ -77,6 +77,24 @@ def test_generate_voice_reads_subtitle_and_overwrites_timing(tmp_path, monkeypat
     assert (rows[1]["start"], rows[1]["end"]) == (1.75, 4.0)
 
 
+def test_generate_voice_keeps_voice_newer_than_subtitle(tmp_path, monkeypatch):
+    # Regression: generate_voice rewrites subtitle.json AFTER finalizing voice, and the
+    # rename preserves the temp file's older mtime. It must bump the voice files' mtime
+    # so voice >= subtitle; otherwise _project_payload flags the fresh voice as stale
+    # (has_voice=False) and the Prompt step is unreachable.
+    import os
+    monkeypatch.setattr(vp, "TextToVoiceRunner", _FakeRunner)
+    project = _project_with_subtitle(tmp_path)
+
+    vp.generate_voice(project, {}, log=lambda _m: None)
+
+    voice_mtime = os.path.getmtime(project / "voices" / "voice.wav")
+    seg_mtime = os.path.getmtime(project / "voices" / "voice.segments.json")
+    sub_mtime = os.path.getmtime(project / "scripts" / "subtitle.json")
+    assert voice_mtime >= sub_mtime
+    assert seg_mtime >= sub_mtime
+
+
 def test_generate_voice_requires_subtitle(tmp_path, monkeypatch):
     monkeypatch.setattr(vp, "TextToVoiceRunner", _FakeRunner)
     project = tmp_path / "proj"

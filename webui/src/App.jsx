@@ -554,6 +554,7 @@ function App() {
           } else {
             setToast(`${job.name} đã hoàn thành`)
           }
+          if (job.name === "B1 Kokoro Voice") goStep("step2b")
           if (job.name === "B2 Phan tich canh") goStep("step2b")
           if (job.name === "B2+B3 Chia canh va tim media") goStep("step3b")
           if (job.name === "B3 Tim anh") goStep("step3b")
