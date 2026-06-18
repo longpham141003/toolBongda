@@ -517,6 +517,16 @@ function App() {
     setToast("Không tìm thấy dự án")
   }, [stateLoaded, route, series, activeSeries?.path, navigate])
 
+  // Defined before the effect below because that effect lists it in its dependency
+  // array, which React evaluates DURING render — referencing it later would hit the
+  // const temporal-dead-zone and crash <App> (blank screen).
+  const loadPromptAnalysis = useCallback(async () => {
+    try {
+      const data = await api("/api/prompt-analysis")
+      setPromptAnalysis(data.analysis && Object.keys(data.analysis).length ? data.analysis : null)
+    } catch { /* ignore */ }
+  }, [])
+
   // Load prompt analysis whenever the user enters the prompt screen.
   useEffect(() => {
     if (activeScreen === "step2b" && project?.path) loadPromptAnalysis().catch(() => {})
@@ -1048,13 +1058,6 @@ function App() {
       setError(err.message)
     }
   }
-
-  const loadPromptAnalysis = useCallback(async () => {
-    try {
-      const data = await api("/api/prompt-analysis")
-      setPromptAnalysis(data.analysis && Object.keys(data.analysis).length ? data.analysis : null)
-    } catch { /* ignore */ }
-  }, [])
 
   async function savePromptAnalysis(next) {
     const data = await api("/api/prompt-analysis", { method: "POST", body: JSON.stringify({ analysis: next }) })
