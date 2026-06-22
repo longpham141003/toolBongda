@@ -25,6 +25,9 @@ from .text_to_voice_cli import (
 from app.pipeline.subtitle_store import assemble_line_segments
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 KOKORO_LANGUAGE_CODES = {
     "en": "a",
     "en-gb": "b",
@@ -132,9 +135,11 @@ def text_to_voice_root(settings: dict) -> Path:
     if raw:
         path = Path(raw)
         if not path.is_absolute():
-            path = Path(__file__).resolve().parents[1] / path
-        return path
-    return Path(__file__).resolve().parents[1] / "kokoro-tts-local"
+            path = REPO_ROOT / path
+        if (path / "app.py").is_file():
+            return path
+    bundled = REPO_ROOT / "kokoro-tts-local"
+    return bundled if (bundled / "app.py").is_file() else path if raw else bundled
 
 
 def text_to_voice_python(settings: dict, root: Path | None = None) -> Path:
@@ -142,7 +147,7 @@ def text_to_voice_python(settings: dict, root: Path | None = None) -> Path:
     if raw:
         path = Path(raw)
         if not path.is_absolute():
-            path = Path(__file__).resolve().parents[1] / path
+            path = REPO_ROOT / path
         return path
     root = root or text_to_voice_root(settings)
     if os.name == "nt":
@@ -155,9 +160,13 @@ def magicvoice_root(settings: dict) -> Path:
     if raw:
         path = Path(raw)
         if not path.is_absolute():
-            path = Path(__file__).resolve().parents[1] / path
-        return path
-    return Path(__file__).resolve().parents[1] / "magic_voice"
+            path = REPO_ROOT / path
+        if (path / "setup_visual_capcut.ps1").is_file() or (path / "setup.sh").is_file():
+            return path
+    bundled = REPO_ROOT / "magic_voice"
+    if (bundled / "setup_visual_capcut.ps1").is_file() or (bundled / "setup.sh").is_file():
+        return bundled
+    return path if raw else bundled
 
 
 def magicvoice_python(settings: dict, root: Path | None = None) -> Path:
@@ -166,7 +175,7 @@ def magicvoice_python(settings: dict, root: Path | None = None) -> Path:
     if raw:
         path = Path(raw)
         if not path.is_absolute():
-            path = Path(__file__).resolve().parents[1] / path
+            path = REPO_ROOT / path
         return path
     candidates: list[Path] = []
     if os.name == "nt":
@@ -316,7 +325,7 @@ def _clone_reference_path(settings: dict) -> Path | None:
         return None
     path = Path(raw)
     if not path.is_absolute():
-        path = Path(__file__).resolve().parents[1] / path
+        path = REPO_ROOT / path
     return path if path.is_file() else None
 
 
@@ -789,7 +798,7 @@ class TextToVoiceRunner:
         with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout, stderr_path.open("w", encoding="utf-8", errors="replace") as stderr:
             process = subprocess.Popen(
                 command,
-                cwd=str(Path(__file__).resolve().parents[1]),
+                cwd=str(REPO_ROOT),
                 stdout=stdout,
                 stderr=stderr,
                 text=True,

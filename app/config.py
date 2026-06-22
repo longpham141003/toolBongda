@@ -267,6 +267,15 @@ def load_settings() -> dict:
         configured_voice_python = APP_DIR / configured_voice_python
     if configured_voice_python and not configured_voice_python.is_file():
         settings["text_to_voice_python"] = ""
+    configured_magic_root = _expand_config_path(settings.get("magicvoice_root"))
+    if configured_magic_root and not configured_magic_root.is_absolute():
+        configured_magic_root = APP_DIR / configured_magic_root
+    if not (
+        (configured_magic_root / "setup_visual_capcut.ps1").is_file()
+        or (configured_magic_root / "setup.sh").is_file()
+    ):
+        settings["magicvoice_root"] = str(APP_DIR / "magic_voice")
+        settings["magicvoice_python"] = ""
     if str(settings.get("text_to_voice_voice") or "").strip() not in {
         "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore",
         "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "am_adam",
