@@ -795,27 +795,43 @@ class TextToVoiceRunner:
             "--language", str(self.settings.get("text_to_voice_language") or "vi"),
             "--batch-size", "1",
         ]
-        with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout, stderr_path.open("w", encoding="utf-8", errors="replace") as stderr:
-            process = subprocess.Popen(
-                command,
-                cwd=str(REPO_ROOT),
-                stdout=stdout,
-                stderr=stderr,
-                text=True,
-                **_win_hidden_kwargs(),
-            )
-            deadline = time.time() + timeout_seconds
-            while process.poll() is None:
-                if self.stop_check():
-                    _terminate_process_tree(process, timeout=5)
-                    part_path.unlink(missing_ok=True)
-                    raise RuntimeError("Stopped.")
-                if time.time() >= deadline:
-                    _terminate_process_tree(process, timeout=5)
-                    raise TimeoutError(f"MagicVoice quá thời gian ở đoạn {index}/{total}.")
-                time.sleep(0.25)
-            returncode = int(process.returncode or 0)
-        part_duration = _audio_duration_seconds(part_path) if part_path.exists() else 0.0
+        # Force UTF-8 on the child's stdio: on Windows the subprocess stdout defaults to
+        # cp1252, so the CLI's `print(f"Saved: {out}")` crashes with UnicodeEncodeError
+        # when the path has Vietnamese chars (e.g. a project under "Bóng đá").
+        child_env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
+        def _attempt() -> tuple[int, float]:
+            part_path.unlink(missing_ok=True)
+            with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout, stderr_path.open("w", encoding="utf-8", errors="replace") as stderr:
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(REPO_ROOT),
+                    stdout=stdout,
+                    stderr=stderr,
+                    text=True,
+                    env=child_env,
+                    **_win_hidden_kwargs(),
+                )
+                deadline = time.time() + timeout_seconds
+                while process.poll() is None:
+                    if self.stop_check():
+                        _terminate_process_tree(process, timeout=5)
+                        part_path.unlink(missing_ok=True)
+                        raise RuntimeError("Stopped.")
+                    if time.time() >= deadline:
+                        _terminate_process_tree(process, timeout=5)
+                        raise TimeoutError(f"MagicVoice quá thời gian ở đoạn {index}/{total}.")
+                    time.sleep(0.25)
+                rc = int(process.returncode or 0)
+            dur = _audio_duration_seconds(part_path) if part_path.exists() else 0.0
+            return rc, dur
+
+        # One retry: per-line clone reloads the model each call, so a transient GPU/load
+        # failure can drop a single line and otherwise abort the whole job.
+        returncode, part_duration = _attempt()
+        if part_duration <= 0 and not self.stop_check():
+            self.log(f"Text to Voice {label}: đoạn {index}/{total} chưa ra audio, thử lại lần 2...")
+            returncode, part_duration = _attempt()
         if part_duration <= 0:
             detail_lines: list[str] = []
             for path in (stderr_path, stdout_path):
@@ -837,8 +853,14 @@ class TextToVoiceRunner:
                     ):
                         continue
                     detail_lines.append(line)
-            detail = " ".join(detail_lines[-8:]) or f"MagicVoice không tạo được file WAV hợp lệ (mã thoát {returncode})."
-            raise RuntimeError(f"MagicVoice clone thất bại ở đoạn {index}/{total}. {detail}")
+            detail = " ".join(detail_lines[-6:]) or f"không tạo được WAV (mã thoát {returncode})."
+            snippet = (text[:60] + "…") if len(text) > 60 else (text or "(rỗng)")
+            raise RuntimeError(
+                f"MagicVoice clone thất bại ở đoạn {index}/{total} (đã thử lại). "
+                f"Câu: \"{snippet}\". Chi tiết: {detail} "
+                "Nếu lỗi lặp ở nhiều đoạn, thường do GPU/VRAM khi nạp model nhiều lần — "
+                "thử đóng các app đang dùng GPU, hoặc đặt magicvoice_device=cpu trong Cài đặt."
+            )
         if returncode != 0:
             self.log(
                 f"Text to Voice {label}: đoạn {index}/{total} đã có audio hợp lệ; "

@@ -4,7 +4,17 @@ import argparse
 import json
 import os
 import re
+import sys
 from pathlib import Path
+
+# Windows consoles/pipes default to cp1252, so printing a path/text with Vietnamese
+# characters (e.g. an output under "Bóng đá") raises UnicodeEncodeError and aborts the
+# CLI. Force UTF-8 on stdio regardless of how the process was launched.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 def _warmup_torch_cudnn(device_arg: str) -> None:
